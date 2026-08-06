@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ner-lab"
+version = "0.1.0"
+description = "End-to-end library for clinical NER: corpus conversion, entity-stratified splitting, hyperparameter search, training, inference and evaluation."
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyarrow>=24.0.0",
+    "torch==2.10.0",
+    "transformers",
+    "datasets>=5.0.0",
+    "pytorch-crf>=0.7.2",
+    "accelerate>=1.14.0",  # required by transformers Trainer
+    "ray[tune]>=2.56.1",
+    "optuna>=4.9.0",  # required by ray.tune.search.optuna
+    "pysbd>=0.3.4",
+    "nervaluate>=0.2.0",
+    "pyyaml>=6.0",
+    "codecarbon>=3.2.9",
+    "pynvml>=13.0.1",
+]
+
+[project.scripts]
+ner-lab = "ner_lab.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ner_lab"]
