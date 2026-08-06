@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Sequence
 
 import yaml
 
 from ner_lab import __version__
+from ner_lab.tasks import TASKS, resolve_task
 
-TASKS: dict[str, Callable[..., Any]] = {}
-
-OVERRIDES = ("seed", "output_dir")
+OVERRIDES = ("random_state", "output_dir")
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
@@ -20,32 +19,28 @@ def load_config(path: str | Path) -> dict[str, Any]:
         config = yaml.safe_load(file)
 
     if not isinstance(config, dict):
-        raise ValueError(f"{path}: expected a mapping at the top level, got {type(config).__name__}.")
+        raise ValueError(
+            f"{path}: expected a mapping at the top level, got {type(config).__name__}."
+        )
 
     return config
 
 
-def resolve_task(name: str | None) -> Callable[..., Any]:
-    if name is None:
-        raise ValueError(f"Config has no 'task' key. Available tasks: {', '.join(sorted(TASKS)) or 'none'}.")
-
-    if name not in TASKS:
-        raise ValueError(f"Unknown task {name!r}. Available tasks: {', '.join(sorted(TASKS)) or 'none'}.")
-
-    return TASKS[name]
-
-
 def run(args: argparse.Namespace) -> None:
     config = load_config(args.config)
-    task = resolve_task(config.get("task"))
+    name = config.get("task")
 
+    if name is None:
+        raise ValueError(f"Config has no 'task' key. Available tasks: {', '.join(sorted(TASKS))}.")
+
+    task = resolve_task(name)
     parameters = {key: value for key, value in config.items() if key != "task"}
 
-    for name in OVERRIDES:
-        value = getattr(args, name)
+    for override in OVERRIDES:
+        value = getattr(args, override)
 
         if value is not None:
-            parameters[name] = value
+            parameters[override] = value
 
     task(**parameters)
 
@@ -61,7 +56,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run", help="Run the task described by a YAML config.")
     run_parser.add_argument("config", help="Path to the YAML config.")
-    run_parser.add_argument("--seed", type=int, default=None, help="Override the config's seed.")
+    run_parser.add_argument(
+        "--random-state",
+        "--seed",
+        dest="random_state",
+        type=int,
+        default=None,
+        help="Override the config's random_state.",
+    )
     run_parser.add_argument("--output-dir", default=None, help="Override the config's output_dir.")
     run_parser.set_defaults(handler=run)
 
@@ -78,7 +80,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         args.handler(args)
-    except (ValueError, FileNotFoundError) as error:
+    except (ValueError, FileNotFoundError, TypeError) as error:
         parser.exit(2, f"ner-lab: {error}\n")
 
     return 0
