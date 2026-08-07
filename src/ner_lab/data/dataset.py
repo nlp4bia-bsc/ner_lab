@@ -96,7 +96,7 @@ def prepare_dataset(
     annotations: pd.DataFrame | str | Path | None = None,
     source_parquet: str | Path | None = None,
     dataset_name: str | None = None,
-    normalize_labels: bool = True,
+    normalize_labels: bool = False,
     split: bool = True,
     validation_size: float = 0.2,
     kfolds: int | None = None,

@@ -25,7 +25,13 @@ from ner_lab.data.dataset import (
     split_descriptor,
 )
 from ner_lab.data.io import read_corpus, write_corpus
-from ner_lab.data.labels import CANONICAL_LABELS, normalize_entity_labels, normalize_label
+from ner_lab.data.labels import (
+    CANONICAL_LABELS,
+    LABEL_ALIASES,
+    normalize_annotation_labels,
+    normalize_entity_labels,
+    normalize_label,
+)
 from ner_lab.data.split import (
     SplitResult,
     build_balance_report,
@@ -39,6 +45,7 @@ from ner_lab.data.stratification import parse_document_label_counts
 __all__ = [
     "CANONICAL_LABELS",
     "DOCUMENT_COLUMNS",
+    "LABEL_ALIASES",
     "PreparedDataset",
     "SplitResult",
     "assert_partition_integrity",
@@ -51,6 +58,7 @@ __all__ = [
     "manifest_holdout_index",
     "manifest_partition_names",
     "manifest_ratios",
+    "normalize_annotation_labels",
     "normalize_entity_labels",
     "normalize_label",
     "parse_document_label_counts",

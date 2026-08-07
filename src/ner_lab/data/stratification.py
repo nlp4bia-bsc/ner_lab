@@ -128,7 +128,7 @@ def _assign_once(
     # Deviations are scaled by the geometric mean of a shared global scale and each
     # partition's own target. A shared scale alone biases assignment toward the larger
     # partition under unequal ratios; each partition's own target alone overcorrects into
-    # the smaller one. See docs/PLAN.md for the measurements behind this.
+    # the smaller one.
     shared_label_scale = np.maximum(total_label_counts / n_partitions, 1.0)
     shared_entity_scale = max(total_entities / n_partitions, 1.0)
     shared_document_scale = max(n_documents / n_partitions, 1.0)

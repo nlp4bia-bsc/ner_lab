@@ -25,13 +25,20 @@ you can leave out by composing the pieces yourself.
 
 ## Status
 
-| Stage | Function | State |
-|---|---|---|
-| Prepare dataset | `prepare_dataset` | available |
-| Hyperparameter search | — | not migrated yet |
-| Training | — | not migrated yet |
-| Inference | — | not migrated yet |
-| Evaluation | — | not migrated yet |
+| Stage | Entry point | CLI task | State |
+|---|---|---|---|
+| Prepare dataset | `ner_lab.data.prepare_dataset` | `prepare_dataset` | available |
+| Encode a corpus | `ner_lab.encoding.Encoder` | — | available (library only) |
+| Build a model | `ner_lab.models.build_model` | — | available (library only) |
+| Train | `ner_lab.training.train` | — | available (library only) |
+| Evaluate | `ner_lab.evaluation.build_compute_metrics` | — | available (library only) |
+| Training orchestrator | — | — | next |
+| Hyperparameter search | — | — | not migrated yet |
+| Inference | — | — | not migrated yet |
+
+"Library only" means the piece works and is documented below, but has no YAML task yet: it
+takes DataFrames and objects rather than paths, so there is no single artifact for a config
+file to point at. The training orchestrator is the stage that will join them.
 
 ## Install
 
@@ -111,7 +118,7 @@ prepare_dataset(
 | `annotations` | `None` | A DataFrame, a `.tsv` file, a single `.ann` file, or a directory of `.ann` files. Only valid with `documents`. |
 | `source_parquet` | `None` | An existing canonical parquet, skipping conversion. Mutually exclusive with `documents`. |
 | `dataset_name` | derived | Overrides the derived name (from a sibling `metadata.json`, else the documents directory, else the parquet stem). |
-| `normalize_labels` | `True` | Map label aliases onto `DISEASE`/`PROCEDURE`/`SYMPTOM`/`MEDICATION`, ignoring case and accents. Set `False` to keep source labels verbatim. |
+| `normalize_labels` | `False` | Labels are stored exactly as the source annotations write them. Set `True` to map them through `ner_lab.data.LABEL_ALIASES` onto `DISEASE`/`PROCEDURE`/`SYMPTOM`/`MEDICATION`, ignoring case and accents. |
 | `split` | `True` | Set `False` to write only the canonical corpus. |
 | `validation_size` | `0.2` | Validation fraction for a plain train/validation split. Ignored when `kfolds` is set. |
 | `kfolds` | `None` | Number of fixed-holdout cross-validation folds. Minimum 2. |
@@ -149,6 +156,23 @@ during model selection.
 An existing split is reused rather than regenerated, so reruns stay reproducible even if the
 seed changes. Every document is fingerprinted and checked against the manifest first — the
 run fails if any document was added, removed or edited since the split was made.
+
+**Label normalization** is off by default: a corpus keeps the labels its annotations declare.
+With `normalize_labels=True`, labels are canonicalized (accents stripped, uppercased, `-` and
+spaces to `_`) and then looked up in `ner_lab.data.LABEL_ALIASES`, which folds the Spanish and
+plural spellings onto `DISEASE`/`PROCEDURE`/`SYMPTOM`/`MEDICATION`. Labels absent from the
+table are canonicalized but never renamed. For a corpus with its own vocabulary, normalize the
+annotations yourself and pass the result to `build_corpus`:
+
+```python
+from ner_lab.data import build_corpus, read_annotations, normalize_annotation_labels
+
+annotations = normalize_annotation_labels(
+    read_annotations("corpora/genes/ann"),
+    aliases={"GEN": "GENE", "GENES": "GENE"},
+)
+corpus = build_corpus("corpora/genes/txt", annotations)
+```
 
 ```yaml
 task: prepare_dataset
@@ -203,4 +227,20 @@ ner-lab run prepare.yaml
 
 ## Development notes
 
-Design decisions, open questions and the migration log live in [`docs/PLAN.md`](docs/PLAN.md).
+Working documents live in [`docs/`](docs/):
+
+| File | Contents |
+|---|---|
+| [`docs/DESIGN.md`](docs/DESIGN.md) | Governing principle, hard rules, layering, how we work |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | Numbered decisions and their rationale |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Migration status, open questions, known baggage |
+| [`docs/PROGRESS.md`](docs/PROGRESS.md) | What landed, and the evidence for it |
+
+Behavioural checks live in [`verification/`](verification/) — outside `src/`, so they are
+never packaged. They are plain scripts, not a test suite:
+
+```bash
+.venv-verify/bin/python verification/run_all.py
+```
+
+See [`verification/README.md`](verification/README.md) for the environment.

@@ -37,14 +37,14 @@ def resolve_documents(
 
 def read_annotations(
     annotations: pd.DataFrame | str | Path,
-    normalize_labels: bool = True,
+    normalize_labels: bool = False,
 ) -> pd.DataFrame:
     """
     Read annotations into the canonical schema, from a DataFrame, a TSV file, a
     single .ann file, or a directory of .ann files.
 
-    Set `normalize_labels=False` to keep the source label strings verbatim, for
-    corpora whose vocabulary is not the clinical one this library defaults to.
+    Labels are read verbatim. Set `normalize_labels=True` to map them through
+    `LABEL_ALIASES` onto this library's clinical vocabulary.
     """
     if isinstance(annotations, pd.DataFrame):
         return _canonicalize_annotations(annotations, normalize_labels)
@@ -66,7 +66,7 @@ def read_annotations(
     )
 
 
-def read_annotation_tsv(path: str | Path, normalize_labels: bool = True) -> pd.DataFrame:
+def read_annotation_tsv(path: str | Path, normalize_labels: bool = False) -> pd.DataFrame:
     """Read a TSV holding the canonical annotation columns."""
     annotations = pd.read_csv(path, sep="\t", dtype=str).fillna("")
     _require_columns(annotations, ANNOTATION_COLUMNS, f"annotations TSV {path}")
@@ -77,7 +77,7 @@ def read_annotation_tsv(path: str | Path, normalize_labels: bool = True) -> pd.D
 def read_ann(
     path: str | Path,
     pattern: str = "*.ann",
-    normalize_labels: bool = True,
+    normalize_labels: bool = False,
 ) -> pd.DataFrame:
     """Read a single BRAT .ann file or a directory of them."""
     ann_path = Path(path)
@@ -185,7 +185,7 @@ def _split_discontinuous_text(
 
 def _canonicalize_annotations(
     annotations: pd.DataFrame,
-    normalize_labels: bool = True,
+    normalize_labels: bool = False,
 ) -> pd.DataFrame:
     _require_columns(annotations, ANNOTATION_COLUMNS, "annotations")
 

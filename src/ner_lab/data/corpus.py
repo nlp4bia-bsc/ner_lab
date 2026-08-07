@@ -23,7 +23,7 @@ DOCUMENT_DTYPES = {
 def build_corpus(
     documents: dict[str, str] | str | Path,
     annotations: pd.DataFrame | str | Path,
-    normalize_labels: bool = True,
+    normalize_labels: bool = False,
     validate: bool = True,
 ) -> pd.DataFrame:
     """
@@ -35,7 +35,8 @@ def build_corpus(
     Overlapping entities are preserved as annotated; resolving them is a
     modelling choice made at encoding time.
 
-    Set `normalize_labels=False` to keep source label strings verbatim, and
+    Source label strings are kept verbatim. Set `normalize_labels=True` to map
+    them through `LABEL_ALIASES` onto this library's clinical vocabulary, and
     `validate=False` to skip the whole-corpus check on a corpus you trust.
     """
     documents_dict = resolve_documents(documents)
