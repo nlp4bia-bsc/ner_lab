@@ -7,6 +7,8 @@ from typing import Any, Callable
 
 TASKS: dict[str, tuple[str, str]] = {
     "prepare_dataset": ("ner_lab.data.dataset", "prepare_dataset"),
+    "train_model": ("ner_lab.training.assessment", "train_model"),
+    "search_hyperparameters": ("ner_lab.hpo.search", "search_hyperparameters"),
 }
 
 

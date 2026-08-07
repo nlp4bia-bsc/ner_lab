@@ -5,17 +5,18 @@ installed. They are plain scripts, not a test suite — run them directly, read 
 
 ```bash
 uv venv .venv-verify --python 3.12
-uv pip install --python .venv-verify pandas pyarrow pyyaml pysbd transformers datasets accelerate pytorch-crf nervaluate
+uv pip install --python .venv-verify pandas pyarrow pyyaml pysbd transformers datasets accelerate pytorch-crf nervaluate "ray[tune]" optuna
 uv pip install --python .venv-verify torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
 uv pip install --python .venv-verify --no-deps -e .
 
 .venv-verify/bin/python verification/run_all.py
 ```
 
-`torch` is the CPU build. `data/` and `encoding/` never touch it, but `models/` and
-`training/` do, and a CPU wheel is enough: the end-to-end training checks run against a
-randomly initialized miniature BERT written to a temporary directory, so nothing is
-downloaded and a full run stays in the seconds.
+`torch` is the CPU build. `data/` and `encoding/` never touch it, but `models/`,
+`training/` and `hpo/` do, and a CPU wheel is enough: the end-to-end training checks run
+against a randomly initialized miniature BERT written to a temporary directory, so nothing
+is downloaded. Everything but `verify_hpo.py` runs in seconds; that one starts a local Ray
+instance for its mini-sweep and adds a minute or two.
 
 | Script | Covers |
 |---|---|
@@ -25,6 +26,8 @@ downloaded and a full run stays in the seconds.
 | `verify_models.py` | BIO constraint masks, the architecture registry, custom factories |
 | `verify_training.py` | row conversion, `training_arguments`, and linear + CRF training end to end |
 | `verify_evaluation.py` | span reconstruction, nervaluate scoring, token metrics, official scorer |
+| `verify_assessment.py` | `train_model`: fold rotation, both split modes, manifests, aggregation |
+| `verify_hpo.py` | search-space forms, variants, trial scoring, OOM handling, a real two-trial Ray sweep, the winner block re-run through `train_model` |
 
 Everything runs on synthetic fixtures built by `fixtures.py`, so the scripts pass on a
 machine with no corpora at all. Two groups of checks additionally use real data and skip

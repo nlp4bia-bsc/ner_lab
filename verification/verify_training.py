@@ -186,7 +186,7 @@ def verify_end_to_end(checks: Checks) -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         checks.raises(
-            "early stopping without load_best_model_at_end raises",
+            "saving with early stopping but without load_best_model_at_end raises",
             ValueError,
             train,
             model=model,
@@ -198,6 +198,7 @@ def verify_end_to_end(checks: Checks) -> None:
             ),
             compute_metrics=compute_metrics,
             early_stopping_patience=2,
+            save_model=True,
             match="load_best_model_at_end",
         )
 

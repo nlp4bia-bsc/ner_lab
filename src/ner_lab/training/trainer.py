@@ -123,6 +123,17 @@ def train(
 
     _check_best_metric(training_arguments, compute_metrics)
 
+    if (
+        save_model
+        and early_stopping_patience is not None
+        and not training_arguments.load_best_model_at_end
+    ):
+        raise ValueError(
+            "save_model=True with early stopping requires load_best_model_at_end=True on "
+            "the training arguments — otherwise the saved weights are the last epoch's, "
+            "not the best epoch's. Enable it, or pass early_stopping_patience=None."
+        )
+
     output_dir = Path(training_arguments.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -319,12 +330,6 @@ def _build_trainer(
         trainer = trainer_class(tokenizer=tokenizer, **arguments)
 
     if early_stopping_patience is not None:
-        if not training_arguments.load_best_model_at_end:
-            raise ValueError(
-                "early_stopping_patience requires load_best_model_at_end=True on the "
-                "training arguments. Pass early_stopping_patience=None to disable it."
-            )
-
         trainer.add_callback(
             EarlyStoppingCallback(early_stopping_patience=early_stopping_patience)
         )

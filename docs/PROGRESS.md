@@ -3,7 +3,7 @@
 What has actually landed, and the evidence for it. One entry per subsystem, not per session.
 Decisions live in [DECISIONS.md](DECISIONS.md); this file records outcomes.
 
-**Verification suite: 348 checks, all passing.** See [`verification/`](../verification/).
+**Verification suite: 501 checks, all passing.** See [`verification/`](../verification/).
 
 | Subsystem | Checks | Equivalence with NER-API |
 |---|---|---|
@@ -13,6 +13,8 @@ Decisions live in [DECISIONS.md](DECISIONS.md); this file records outcomes.
 | `models/` | 33 | — |
 | `training/` | 35 | — |
 | `evaluation/` | 59 | exact, every metric family |
+| `training/assessment.py` | 65 | — |
+| `hpo/` | 88 | — |
 
 ---
 
@@ -170,3 +172,78 @@ and a confusion matrix on every trial.
 D41 discharged: `training_arguments()` now defaults to `span_strict_f1`, and `train()` raises
 immediately if a span metric is requested with no `compute_metrics`, naming
 `build_compute_metrics` in the message.
+
+---
+
+## Training orchestrator — 2026-08-07
+
+`training/assessment.py`. Task `train_model`, the first new task since `prepare_dataset`.
+
+`02_train_assessment.py` was 347 lines, of which roughly half was argparse and config
+plumbing for `best_config.json`. That half is gone: `TrainingArguments` is the config, and
+the YAML supplies it as a mapping of overrides (D49). What survives is the part that was
+actually load-bearing — read the split's `data_manifest.json`, pick the run shape from its
+mode, write a manifest before training so a crash is debuggable, train, aggregate.
+
+Everything the script kept private is now a public function: `fold_rotations`,
+`run_directory_name`, `resolve_training_arguments`, `encode_partition`, `best_epoch_metrics`,
+`aggregate_metrics`. D26 applied to a second orchestrator.
+
+Three behaviour changes from NER-API, each with a number: the summary files are renamed and
+written in both split modes (D51), the return value carries metric tables rather than live
+`Trainer`s (D50), and no git commit is recorded (D52).
+
+Two things the script did not do:
+
+- **Encoded rows are cached per fold parquet, not just loaded.** NER-API cached the loaded
+  DataFrames, so a 5-fold rotation tokenized every fold four times. Encoding is the expensive
+  half; loading a parquet is not.
+- **Each fold builds a fresh model and releases the previous one.** The script rebuilt per
+  fold too, but nothing dropped the old one — with the results held in a list, five
+  BERT-base folds accumulate on the GPU while the next one trains.
+
+Verified on synthetic fixtures with the miniature BERT: both split modes, fold rotation
+including the `folds=` narrowing, the fixed holdout never entering a run, manifest contents,
+artifact layout, checkpoint cleanup, and `save_model` writing weights. The pure helpers —
+rotation selection, best-epoch lookup with `greater_is_better` in both directions, mean/std
+aggregation — are checked directly rather than through a training run.
+
+---
+
+## `hpo/` — 2026-08-07
+
+`space.py`, `variants.py`, `trial.py`, `search.py`. Task `search_hyperparameters`.
+
+The stage D29 flagged for top-down migration: 13 of `01_HPO_ner.py`'s functions lived in the
+script, and lifting its 691-line shape would have made Ray-script structure the public API.
+Instead the signature was agreed first (D54–D57), and the script's functions landed as public
+pieces behind it: `build_search_space`/`describe_search_space` (the declarative YAML form and
+its inverse), `build_variants`/`encode_variants` (the variant dimension, windowed once per
+sweep), `resolve_batch_sizes`, `top_k_epoch_mean`, `run_trial` (the whole trial body,
+callable and verifiable without Ray), `winner_configuration`.
+
+What survived intact from NER-API, deliberately: the noise-control scoring (mean over seeds
+of each seed's mean-of-top-k epochs, with the measured jitter rationale), OOM-as-outcome
+(caught, scored worst) versus everything-else-halts-the-sweep (`fail_fast`), the pre-flight
+smoke test, checkpoint-free trials, the variant dimension being one dimension rather than
+four, and Optuna resumability via `study_name`/`storage`.
+
+What changed, each with a number: trials call `train()` with pre-encoded rows rather than any
+orchestrator (D54), the search space is user-supplied with the old hardcoded ranges demoted
+to `DEFAULT_SEARCH_SPACE` (D55), input is a `split_dir` with one validation rotation (D56),
+and the winner comes out as a ready-to-run `train_model` YAML block instead of a
+`best_config.json` anything reads back (D57). `train()`'s early-stopping guard was relaxed to
+fire only when weights are kept (D58) — verified against transformers 5.14.1, where the
+callback works without checkpointing and HF itself only warns.
+
+Trial objectives honor `greater_is_better` end to end (Optuna mode, top-k direction, OOM
+worst score), where NER-API assumed maximization throughout. Trial evaluation skips token
+metrics and the confusion matrix via `build_compute_metrics(include_tokens=False,
+include_by_entity=False)` — the split `evaluation/` made for exactly this.
+
+Verified: 88 checks, including a real two-trial Ray Tune + Optuna sweep on the miniature
+BERT (smoke test, manifest, trials table, summary), an OOM trial reported rather than
+raised, a non-OOM error propagating, and the emitted winner block executed through
+`train_model(**block)` unchanged. The YAML path was smoke-tested separately:
+`ner-lab run sweep.yaml --seed 5` with a declarative search space, seed reaching the
+manifest.

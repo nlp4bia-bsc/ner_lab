@@ -30,15 +30,16 @@ you can leave out by composing the pieces yourself.
 | Prepare dataset | `ner_lab.data.prepare_dataset` | `prepare_dataset` | available |
 | Encode a corpus | `ner_lab.encoding.Encoder` | — | available (library only) |
 | Build a model | `ner_lab.models.build_model` | — | available (library only) |
-| Train | `ner_lab.training.train` | — | available (library only) |
+| Train one model | `ner_lab.training.train` | — | available (library only) |
 | Evaluate | `ner_lab.evaluation.build_compute_metrics` | — | available (library only) |
-| Training orchestrator | — | — | next |
-| Hyperparameter search | — | — | not migrated yet |
+| Train against a split | `ner_lab.training.train_model` | `train_model` | available |
+| Hyperparameter search | `ner_lab.hpo.search_hyperparameters` | `search_hyperparameters` | available |
 | Inference | — | — | not migrated yet |
 
 "Library only" means the piece works and is documented below, but has no YAML task yet: it
 takes DataFrames and objects rather than paths, so there is no single artifact for a config
-file to point at. The training orchestrator is the stage that will join them.
+file to point at. `train_model` is the call that joins them — it takes a split directory and
+assembles the four for you.
 
 ## Install
 
@@ -181,6 +182,208 @@ annotations: corpora/disease/ann
 output_dir: assets/splits
 kfolds: 5
 holdout_fold: 0
+```
+
+---
+
+## 2. Train a model against a split
+
+Takes a split directory produced by stage 1 and scores one configuration against it. The
+split's `data_manifest.json` decides the shape of the run: a plain train/validation split
+trains once, a fixed-holdout k-fold split trains once per rotatable fold and aggregates. The
+fixed holdout is never read.
+
+```python
+from ner_lab.training import train_model
+
+assessment = train_model(
+    split_dir="assets/splits/disease/kfold_5_holdout_0",
+    output_dir="assets/runs",
+    checkpoint="PlanTL-GOB-ES/roberta-base-biomedical-clinical-es",
+    target_label="DISEASE",
+    language="es",
+    architecture="crf",
+    training_arguments={"learning_rate": 2e-5, "num_train_epochs": 8},
+)
+
+assessment.fold_metrics                    # DataFrame, one row per fold
+assessment.aggregate["best_metric"]        # {"mean": ..., "std": ...}
+assessment.run_dir                         # where everything was written
+```
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `split_dir` | *required* | A split directory containing `data_manifest.json`. |
+| `output_dir` | *required* | Root for run directories. |
+| `checkpoint` | *required* | Pretrained encoder, by hub name or local path. |
+| `target_label` | *required* | The entity type to tag. One label, three classes (D43). |
+| `language` | *required* | Sentence-segmentation language for `pysbd`. Never guessed (D33). |
+| `architecture` | `"linear"` | `"linear"`, `"crf"`, or your own `(checkpoint, label2id, id2label, **kwargs) -> model`. |
+| `architecture_kwargs` | `None` | Extra keywords for the chosen architecture, e.g. `{"dropout": 0.2}`. |
+| `training_arguments` | `None` | A `TrainingArguments`, or a mapping of overrides applied to `ner_lab.training.DEFAULTS`. The YAML path uses the mapping. |
+| `max_length` | `256` | Token budget per window, including special tokens. |
+| `strategy` | `"greedy"` | Window strategy, or your own callable. |
+| `context_tokens` | `None` | Flanking context per window. Only valid with `strategy="context"`. |
+| `overlap_policy` | `"merge_same_label_then_keep_longest"` | How overlapping gold spans are resolved at encoding time. |
+| `min_sentence_tokens` | `4` | Sentences shorter than this are merged into their neighbour. |
+| `early_stopping_patience` | `5` | Epochs without improvement before stopping. `None` disables it. |
+| `pad_to_multiple_of` | `8` | Pad batches to a multiple of this. |
+| `metrics_scope` | `"eval"` | `"both"` also scores the training set each epoch, at the cost of a second pass. |
+| `include_confusion` | `False` | Add the token confusion matrix to each evaluation. |
+| `save_model` | `False` | Keep weights. Off because this scores a configuration; it does not build a deployment artifact. |
+| `track_resources` | `True` | Wall clock, energy, emissions and peak VRAM per run, via codecarbon. |
+| `folds` | `None` | Narrow a k-fold run to specific validation folds. Invalid without a fixed holdout. |
+| `random_state` | `None` | Overrides `TrainingArguments.seed`. |
+| `run_name` | derived | Overrides the derived `<target_label>__<architecture>__<checkpoint>__<timestamp>` directory name. |
+
+Everything after `language` configures the `Encoder`, `build_model` and `train` that this
+assembles. Build those yourself and call `ner_lab.training.train` if the assembly is in the
+way — the orchestrator applies no policy you cannot reach by composing them.
+
+**Returns** an `AssessmentResult` with `run_dir`, `mode`, `fold_metrics`, `aggregate`,
+`summaries`, `manifest` and `paths`. It deliberately does **not** return the `Trainer` or the
+model: one per fold would keep every fold's weights resident while the next one trains. Use
+`save_model=True`, or call `train` directly.
+
+**Writes:**
+
+```
+<output_dir>/<target_label>__<architecture>__<checkpoint>__<timestamp>/
+    run_manifest.json          written before training starts, so a crash is debuggable
+    fold_metrics.parquet       one row per run: selection metric, best epoch, resources
+    assessment_summary.json    mean and standard deviation across runs
+    fold_01/                   per-fold, or the run directory itself for a plain split
+        epoch_metrics.parquet
+        training_summary.json
+        best_model/            only with save_model=True
+    fold_02/
+```
+
+`metric_for_best_model` defaults to `span_strict_f1`; the `compute_metrics` that produces it
+is built for you from each run's own validation rows.
+
+```yaml
+task: train_model
+split_dir: assets/splits/disease/kfold_5_holdout_0
+output_dir: assets/runs
+checkpoint: PlanTL-GOB-ES/roberta-base-biomedical-clinical-es
+target_label: DISEASE
+language: es
+architecture: crf
+max_length: 256
+training_arguments:
+  learning_rate: 2.0e-5
+  num_train_epochs: 8
+  per_device_train_batch_size: 16
+```
+
+---
+
+## 3. Search hyperparameters
+
+Runs a Ray Tune + Optuna sweep against a prepared split and emits the winner as a
+ready-to-run `train_model` config. Trials train with no checkpointing; each one is scored as
+the mean across seeds of each seed's mean-of-top-k epochs — a single lucky epoch never wins a
+sweep. Out-of-memory trials score worst instead of failing; any other error halts the sweep
+immediately rather than burning the remaining trials on the same bug.
+
+```python
+from ner_lab.hpo import search_hyperparameters
+
+sweep = search_hyperparameters(
+    split_dir="assets/splits/disease/kfold_5_holdout_0",
+    output_dir="assets/sweeps",
+    checkpoints=[
+        "PlanTL-GOB-ES/roberta-base-biomedical-clinical-es",
+        "dccuchile/bert-base-spanish-wwm-cased",
+    ],
+    target_label="DISEASE",
+    language="es",
+    n_trials=40,
+)
+
+sweep.summary["best_metric"]     # winning score, mean over seeds
+sweep.best                       # the winner as train_model keyword arguments
+sweep.trials                     # DataFrame, one row per trial
+```
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `split_dir` | *required* | A split directory containing `data_manifest.json`. The fixed holdout is never read. |
+| `output_dir` | *required* | Root for sweep directories. |
+| `checkpoints` | *required* | One or more pretrained encoders. Part of the search: each becomes variants. |
+| `target_label` | *required* | The entity type to tag. |
+| `language` | *required* | Sentence-segmentation language. |
+| `architecture` | `"linear"` | As in `train_model`. Fixed per sweep, not searched. |
+| `architecture_kwargs` | `None` | Extra keywords for the architecture. |
+| `search_space` | `None` | Overrides applied to `ner_lab.hpo.DEFAULT_SEARCH_SPACE` — see below. |
+| `training_arguments` | `None` | A `TrainingArguments` or a mapping of overrides, as in `train_model`. Defaults add a 40-epoch cap and no checkpointing. Its `metric_for_best_model` is the sweep objective. |
+| `n_trials` | `40` | Configurations sampled by Optuna. |
+| `seeds_per_trial` | `5` | Trainings per trial; the score averages across them. |
+| `top_k_epochs` | `3` | Epochs averaged per seed. |
+| `strategies` | `("greedy",)` | Window strategies searched, as one dimension with the checkpoints. |
+| `context_tokens` | `None` | Context sizes searched. Required with, and only with, the context strategy. |
+| `max_lengths` | `(256,)` | Token budgets searched. |
+| `overlap_policy` | `"merge_same_label_then_keep_longest"` | As in `train_model`. |
+| `min_sentence_tokens` | `4` | As in `train_model`. |
+| `early_stopping_patience` | `5` | Decides actual trial length under the epoch cap. |
+| `pad_to_multiple_of` | `8` | As in `train_model`. |
+| `max_micro_batch_size` | `64` | VRAM ceiling. The searched `effective_train_batch_size` is split into micro batch × accumulation under it, so sweeps stay comparable across GPUs. |
+| `gpus_per_trial` | `1.0` | Ray resource request per trial. Fractions share a GPU; `0` runs on CPU. |
+| `validation_index` | first rotatable fold | Which k-fold rotation to search against. Meaningless for a plain split. |
+| `random_state` | `None` | Seeds Optuna and the base training seed (per-seed runs offset from it). |
+| `study_name`, `storage` | `None` | Optuna persistence, e.g. `sqlite:///study.db`, for resumable sweeps. |
+| `smoke_test` | `True` | One fixed-config, single-seed trial run to completion first — a config bug costs one run, not N parallel hours. |
+| `track_resources` | `True` | Energy, emissions and peak VRAM per trial. |
+| `run_name` | derived | Overrides the derived sweep directory name. |
+
+**The search space.** Each dimension is a Ray Tune domain, a declarative mapping (the YAML
+form), a scalar (pinned, not searched), or `null` (removed). Overrides merge over the
+defaults:
+
+```yaml
+search_space:
+  learning_rate: {type: loguniform, low: 1.0e-5, high: 1.0e-4}
+  weight_decay: null              # remove the dimension
+  lr_scheduler_type: linear       # pin it instead of searching it
+```
+
+The defaults search `learning_rate`, `weight_decay`, `warmup_ratio`,
+`effective_train_batch_size` and `lr_scheduler_type`. On top of them, every
+(checkpoint, strategy, context_tokens, max_length) combination becomes one `variant`
+dimension — one dimension rather than four, because the checkpoint's tokenizer decides the
+windowing. Each variant is windowed once, before any trial starts, and shared across all of
+them.
+
+**Returns** an `HPOResult` with `run_dir`, `metric`, `summary`, `best`, `trials`, `manifest`
+and `paths`.
+
+**Writes:**
+
+```
+<output_dir>/<target_label>__<architecture>__<checkpoint>__<timestamp>/
+    run_manifest.json          before the sweep starts: space, variants, provenance
+    trials_summary.parquet     one row per trial: sampled values, score, spread, resources
+    hpo_summary.json           the winner, raw and as a train_model config
+    smoke_test/, trials/       Ray's own per-trial directories
+```
+
+The `train_model` block inside `hpo_summary.json` is copy-pasteable into a YAML file and
+runnable as-is — the sweep's argmax over noisy scores is mildly optimistic, so the reportable
+number is that assessment's k-fold mean ± std, not the sweep's.
+
+```yaml
+task: search_hyperparameters
+split_dir: assets/splits/disease/kfold_5_holdout_0
+output_dir: assets/sweeps
+checkpoints:
+  - PlanTL-GOB-ES/roberta-base-biomedical-clinical-es
+target_label: DISEASE
+language: es
+n_trials: 40
+seeds_per_trial: 5
+training_arguments:
+  per_device_eval_batch_size: 32
 ```
 
 ---
