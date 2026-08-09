@@ -248,10 +248,16 @@ def verify_base_arguments(checks: Checks) -> None:
 
         checks.equal("a mapping overrides the HPO defaults", overridden.num_train_epochs, 7)
 
-        given = TrainingArguments(output_dir="/elsewhere", num_train_epochs=3)
+        given = TrainingArguments(output_dir="/elsewhere", num_train_epochs=3, learning_rate=7e-5)
         adopted = resolve_base_arguments(given, tmp)
 
-        checks.equal("an instance is used as given", adopted.num_train_epochs, 3)
+        checks.equal("an instance keeps its own fields", adopted.learning_rate, 7e-5)
+        checks.equal(
+            "but the sweep defaults are forced onto it",
+            adopted.num_train_epochs,
+            HPO_ARGUMENT_DEFAULTS["num_train_epochs"],
+        )
+        checks.check("including no checkpointing", adopted.save_strategy == "no")
         checks.equal("but its output_dir is redirected", adopted.output_dir, tmp)
         checks.equal("random_state sets the seed", resolve_base_arguments(None, tmp, 11).seed, 11)
 
@@ -274,6 +280,7 @@ def verify_winner_configuration(checks: Checks) -> None:
             architecture_kwargs={"dropout": 0.2},
             overlap_policy="merge_same_label_then_keep_longest",
             min_sentence_tokens=4,
+            min_overlap_percentage=40.0,
             early_stopping_patience=5,
             base_arguments=training_arguments(tmp, num_train_epochs=40),
             user_overrides={"fp16": False, "save_strategy": "no", "load_best_model_at_end": False},

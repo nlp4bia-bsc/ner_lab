@@ -329,12 +329,13 @@ sweep.trials                     # DataFrame, one row per trial
 | `early_stopping_patience` | `5` | Decides actual trial length under the epoch cap. |
 | `pad_to_multiple_of` | `8` | As in `train_model`. |
 | `max_micro_batch_size` | `64` | VRAM ceiling. The searched `effective_train_batch_size` is split into micro batch × accumulation under it, so sweeps stay comparable across GPUs. |
-| `gpus_per_trial` | `1.0` | Ray resource request per trial. Fractions share a GPU; `0` runs on CPU. |
+| `gpus_per_trial` | `1.0` | Ray resource request per trial. Fractions share a GPU; `0` runs on CPU. Values above 1 are rejected — `per_device_train_batch_size` is per device, so a second GPU would double the batch a trial trains at. Parallelise across trials instead. |
 | `validation_index` | first rotatable fold | Which k-fold rotation to search against. Meaningless for a plain split. |
 | `random_state` | `None` | Seeds Optuna and the base training seed (per-seed runs offset from it). |
 | `study_name`, `storage` | `None` | Optuna persistence, e.g. `sqlite:///study.db`, for resumable sweeps. |
-| `smoke_test` | `True` | One fixed-config, single-seed trial run to completion first — a config bug costs one run, not N parallel hours. |
+| `smoke_test` | `True` | A one-epoch, single-seed trial per variant, run before the sweep — a config bug or an unloadable checkpoint costs one epoch, not N parallel hours. |
 | `track_resources` | `True` | Energy, emissions and peak VRAM per trial. |
+| `report` | `True` | Prints the end-of-sweep summary. It is on `HPOResult.report` either way. |
 | `run_name` | derived | Overrides the derived sweep directory name. |
 
 **The search space.** Each dimension is a Ray Tune domain, a declarative mapping (the YAML
@@ -355,8 +356,8 @@ dimension — one dimension rather than four, because the checkpoint's tokenizer
 windowing. Each variant is windowed once, before any trial starts, and shared across all of
 them.
 
-**Returns** an `HPOResult` with `run_dir`, `metric`, `summary`, `best`, `trials`, `manifest`
-and `paths`.
+**Returns** an `HPOResult` with `run_dir`, `metric`, `summary`, `best`, `trials`, `manifest`,
+`paths` and `report`.
 
 **Writes:**
 

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from transformers import AutoTokenizer, TrainingArguments
+from transformers import AutoTokenizer, TrainingArguments, set_seed
 
 from ner_lab.data.dataset import DATA_MANIFEST_FILENAME
 from ner_lab.data.split import split_paths
@@ -61,6 +61,7 @@ def train_model(
     early_stopping_patience: int | None = 5,
     pad_to_multiple_of: int | None = 8,
     metrics_scope: str = "eval",
+    min_overlap_percentage: float = 40.0,
     include_confusion: bool = False,
     save_model: bool = False,
     track_resources: bool = True,
@@ -134,6 +135,7 @@ def train_model(
             "min_sentence_tokens": min_sentence_tokens,
             "label2id": encoder.label2id,
         },
+        "evaluation": {"min_overlap_percentage": min_overlap_percentage},
         "training_arguments": resolved_arguments.to_dict(),
         "hardware": gpu_hardware_info(),
     }
@@ -150,6 +152,8 @@ def train_model(
 
         train_rows = encode_partition(encoder, partitions["train"], encoded)
         validation_rows = encode_partition(encoder, partitions["validation"], encoded)
+
+        set_seed(resolved_arguments.seed)
 
         model = build_model(
             checkpoint=checkpoint,
@@ -171,6 +175,7 @@ def train_model(
                 rows=validation_rows,
                 tokenizer=tokenizer,
                 id2label=encoder.id2label,
+                min_overlap_percentage=min_overlap_percentage,
                 include_confusion=include_confusion,
             ),
             train_compute_metrics=(
@@ -178,6 +183,7 @@ def train_model(
                     rows=train_rows,
                     tokenizer=tokenizer,
                     id2label=encoder.id2label,
+                    min_overlap_percentage=min_overlap_percentage,
                     include_confusion=False,
                 )
                 if metrics_scope == "both"

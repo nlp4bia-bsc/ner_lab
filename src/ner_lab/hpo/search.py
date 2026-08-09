@@ -16,6 +16,7 @@ from transformers import TrainingArguments
 from ner_lab.encoding.encoder import WindowStrategy
 from ner_lab.encoding.overlaps import OverlapPolicy
 from ner_lab.data.split import split_paths
+from ner_lab.hpo.report import summarize_sweep
 from ner_lab.hpo.space import (
     DEFAULT_SEARCH_SPACE,
     build_search_space,
@@ -26,6 +27,7 @@ from ner_lab.hpo.trial import (
     RESERVED_DIMENSIONS,
     metric_greater_is_better,
     run_trial,
+    validate_search_space,
 )
 from ner_lab.hpo.variants import (
     EncodedVariant,
@@ -54,6 +56,8 @@ HPO_ARGUMENT_DEFAULTS: dict[str, Any] = {
     "load_best_model_at_end": False,
 }
 
+DERIVED_ARGUMENT_KEYS = ("output_dir", "run_name", "logging_dir")
+
 RESOURCE_COLUMNS = (
     "duration_sec",
     "energy_kwh",
@@ -77,6 +81,7 @@ class HPOResult:
     trials: pd.DataFrame
     manifest: dict[str, Any]
     paths: dict[str, Path]
+    report: str
 
 
 def search_hyperparameters(
@@ -97,6 +102,7 @@ def search_hyperparameters(
     max_lengths: Sequence[int] = (256,),
     overlap_policy: OverlapPolicy = "merge_same_label_then_keep_longest",
     min_sentence_tokens: int = 4,
+    min_overlap_percentage: float = 40.0,
     early_stopping_patience: int | None = 5,
     pad_to_multiple_of: int | None = 8,
     max_micro_batch_size: int = 64,
@@ -107,6 +113,7 @@ def search_hyperparameters(
     storage: str | None = None,
     smoke_test: bool = True,
     track_resources: bool = True,
+    report: bool = True,
     run_name: str | None = None,
 ) -> HPOResult:
     """
@@ -122,6 +129,13 @@ def search_hyperparameters(
     scoring the mean across seeds of each seed's mean-of-top-k epochs on the
     metric `training_arguments` selects. Out-of-memory trials score worst instead
     of failing; any other error halts the sweep immediately.
+
+    `smoke_test` runs one epoch per variant first, so an unloadable checkpoint or a
+    search dimension the training arguments have no field for costs one epoch rather
+    than the sweep's first parallel wave.
+
+    `report` prints the end-of-sweep summary; it is on the result either way, as
+    `HPOResult.report`.
 
     A k-fold split is searched against one rotation, `validation_index`
     (defaulting to the first rotatable fold) — searching across all folds would
@@ -163,6 +177,16 @@ def search_hyperparameters(
             "context_tokens/max_lengths."
         )
 
+    validate_search_space(space)
+
+    if gpus_per_trial > 1:
+        raise ValueError(
+            "gpus_per_trial must be at most 1. The searched effective_train_batch_size is "
+            "per trial, but per_device_train_batch_size is per device, so extra GPUs "
+            "multiply the batch a trial actually trains at and the winner stops being "
+            "reproducible on one GPU. Run more trials in parallel instead."
+        )
+
     base_arguments = resolve_base_arguments(training_arguments, run_dir, random_state)
     metric = base_arguments.metric_for_best_model
 
@@ -193,7 +217,11 @@ def search_hyperparameters(
         },
         "variants": describe_variants(variants),
         "search_space": describe_search_space(full_space),
-        "objective": {"metric": metric_key, "greater_is_better": greater_is_better},
+        "objective": {
+            "metric": metric_key,
+            "greater_is_better": greater_is_better,
+            "min_overlap_percentage": min_overlap_percentage,
+        },
         "n_trials": n_trials,
         "seeds_per_trial": seeds_per_trial,
         "top_k_epochs": top_k_epochs,
@@ -217,16 +245,17 @@ def search_hyperparameters(
     if not ray.is_initialized():
         ray.init()
 
-    def build_trainable(seeds: int) -> Any:
+    def build_trainable(seeds: int, arguments: TrainingArguments = base_arguments) -> Any:
         trainable = tune.with_parameters(
             _reported_trial,
             variants=encoded,
-            base_arguments=base_arguments,
+            base_arguments=arguments,
             architecture=architecture,
             architecture_kwargs=architecture_kwargs,
             max_micro_batch_size=max_micro_batch_size,
             seeds_per_trial=seeds,
             top_k_epochs=top_k_epochs,
+            min_overlap_percentage=min_overlap_percentage,
             early_stopping_patience=early_stopping_patience,
             pad_to_multiple_of=pad_to_multiple_of,
             track_resources=track_resources,
@@ -239,8 +268,13 @@ def search_hyperparameters(
 
     if smoke_test:
         smoke_result = tune.Tuner(
-            build_trainable(seeds=1),
-            param_space={**smoke_configuration(space), "variant": next(iter(variants))},
+            build_trainable(
+                seeds=1, arguments=dataclasses.replace(base_arguments, num_train_epochs=1)
+            ),
+            param_space={
+                **smoke_configuration(space),
+                "variant": tune.grid_search(list(variants)),
+            },
             tune_config=tune.TuneConfig(num_samples=1),
             run_config=tune.RunConfig(name="smoke_test", storage_path=str(run_dir)),
         ).fit()
@@ -311,19 +345,27 @@ def search_hyperparameters(
                     architecture_kwargs=architecture_kwargs,
                     overlap_policy=overlap_policy,
                     min_sentence_tokens=min_sentence_tokens,
+                    min_overlap_percentage=min_overlap_percentage,
                     early_stopping_patience=early_stopping_patience,
                     base_arguments=base_arguments,
-                    user_overrides=(
-                        dict(training_arguments)
-                        if isinstance(training_arguments, Mapping)
-                        else {}
-                    ),
+                    user_overrides=user_argument_overrides(training_arguments),
                 ),
             }
         )
 
     summary["total_wall_time_sec"] = time.monotonic() - sweep_start
     paths["hpo_summary"] = write_manifest(summary, run_dir / HPO_SUMMARY_FILENAME)
+
+    sweep_report = summarize_sweep(
+        trials=trials,
+        metric=metric_key,
+        greater_is_better=greater_is_better,
+        search_space=manifest["search_space"],
+        epoch_cap=int(base_arguments.num_train_epochs),
+    )
+
+    if report:
+        print(sweep_report)
 
     return HPOResult(
         run_dir=run_dir,
@@ -333,7 +375,37 @@ def search_hyperparameters(
         trials=trials,
         manifest=manifest,
         paths=paths,
+        report=sweep_report,
     )
+
+
+def user_argument_overrides(
+    arguments: TrainingArguments | Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """
+    What the caller changed from this library's defaults, for the winner block.
+
+    A mapping already says exactly that. An instance has every field populated, so
+    the caller's intent is only recoverable by diffing it against a default-built
+    one — without which the winner block would silently fall back to the defaults
+    for everything the sweep was actually run with.
+    """
+    if arguments is None:
+        return {}
+
+    if not isinstance(arguments, TrainingArguments):
+        return dict(arguments)
+
+    baseline = build_training_arguments(arguments.output_dir).to_dict()
+    current = arguments.to_dict()
+
+    return {
+        key: value
+        for key, value in current.items()
+        if not key.startswith("_")
+        and key not in DERIVED_ARGUMENT_KEYS
+        and baseline.get(key) != value
+    }
 
 
 def resolve_base_arguments(
@@ -344,14 +416,19 @@ def resolve_base_arguments(
     """
     The `TrainingArguments` every trial starts from.
 
-    A mapping is applied over the library defaults plus `HPO_ARGUMENT_DEFAULTS`
-    — a high epoch cap with no checkpointing, since the trial score is read from
-    the epoch metrics and the weights are discarded. An instance is used as given.
+    A mapping is applied over the library defaults plus `HPO_ARGUMENT_DEFAULTS` — a
+    high epoch cap with no checkpointing, since the trial score is read from the epoch
+    metrics and the weights are discarded. An instance is used as given, except for
+    those same sweep defaults, which are forced: every field of an instance is
+    populated, so a deliberate `num_train_epochs=10` cannot be told apart from the
+    library default of the same value. Pass a mapping to override them per key.
     """
     overrides: dict[str, Any] = {} if random_state is None else {"seed": random_state}
 
     if isinstance(arguments, TrainingArguments):
-        return dataclasses.replace(arguments, output_dir=str(output_dir), **overrides)
+        return dataclasses.replace(
+            arguments, output_dir=str(output_dir), **HPO_ARGUMENT_DEFAULTS, **overrides
+        )
 
     merged = {**HPO_ARGUMENT_DEFAULTS, **(dict(arguments) if arguments else {})}
 
@@ -448,6 +525,7 @@ def winner_configuration(
     architecture_kwargs: dict[str, Any] | None,
     overlap_policy: str,
     min_sentence_tokens: int,
+    min_overlap_percentage: float,
     early_stopping_patience: int | None,
     base_arguments: TrainingArguments,
     user_overrides: dict[str, Any] | None = None,
@@ -457,7 +535,8 @@ def winner_configuration(
 
     An output only — `train_model` never reads it back, so no file format enters
     the API. Sweep-only settings (no checkpointing) are dropped; everything else
-    the user overrode for the sweep is carried through.
+    the user overrode for the sweep is carried through, as reported by
+    `user_argument_overrides`.
     """
     hyperparameters = {
         key: value for key, value in sampled.items() if key not in RESERVED_DIMENSIONS
@@ -485,6 +564,7 @@ def winner_configuration(
         "context_tokens": variant["context_tokens"],
         "overlap_policy": overlap_policy,
         "min_sentence_tokens": min_sentence_tokens,
+        "min_overlap_percentage": min_overlap_percentage,
         "early_stopping_patience": early_stopping_patience,
         "training_arguments": {
             **carried,
@@ -510,6 +590,7 @@ def _reported_trial(
     max_micro_batch_size: int,
     seeds_per_trial: int,
     top_k_epochs: int,
+    min_overlap_percentage: float,
     early_stopping_patience: int | None,
     pad_to_multiple_of: int | None,
     track_resources: bool,
@@ -527,6 +608,7 @@ def _reported_trial(
             max_micro_batch_size=max_micro_batch_size,
             seeds_per_trial=seeds_per_trial,
             top_k_epochs=top_k_epochs,
+            min_overlap_percentage=min_overlap_percentage,
             early_stopping_patience=early_stopping_patience,
             pad_to_multiple_of=pad_to_multiple_of,
             track_resources=track_resources,

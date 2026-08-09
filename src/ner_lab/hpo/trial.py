@@ -5,12 +5,14 @@ from __future__ import annotations
 import dataclasses
 import gc
 import statistics
+from collections.abc import Iterable
+from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import torch
-from transformers import TrainingArguments
+from transformers import TrainingArguments, set_seed
 
 from ner_lab.evaluation.metrics import build_compute_metrics
 from ner_lab.hpo.space import resolve_batch_sizes
@@ -29,6 +31,55 @@ OOM_PATTERNS = (
     "not enough memory",
     "defaultcpuallocator",
 )
+
+
+def validate_search_space(dimensions: Iterable[str]) -> None:
+    """
+    Reject dimensions no trial can apply, before the corpus is encoded.
+
+    Every sampled dimension outside `RESERVED_DIMENSIONS` is unpacked into
+    `TrainingArguments`, so a name it does not define raises `TypeError` inside a
+    Ray worker — long after the variants have been windowed. Architecture settings
+    such as `crf_dropout` are not fields: they are fixed for the sweep and passed
+    through `architecture_kwargs`.
+    """
+    known = {field.name for field in dataclasses.fields(TrainingArguments)}
+    unknown = sorted(set(dimensions) - known - set(RESERVED_DIMENSIONS))
+
+    if not unknown:
+        return
+
+    reported = ", ".join(
+        f"{name!r} (did you mean {close[0]!r}?)"
+        if (close := get_close_matches(name, known, n=1))
+        else repr(name)
+        for name in unknown
+    )
+
+    raise ValueError(
+        f"Unknown search dimension(s): {reported}. A dimension must name a "
+        f"`TrainingArguments` field or one of {RESERVED_DIMENSIONS}."
+    )
+
+
+def require_single_device() -> None:
+    """
+    Refuse to run a trial across several visible GPUs.
+
+    `per_device_train_batch_size` is per device, so the batch HuggingFace actually
+    trains at is `micro x devices x accumulation`, while `resolve_batch_sizes`
+    guarantees only `micro x accumulation`. Each extra visible device multiplies the
+    searched batch size, misrecords it in the manifest, and leaves the winning
+    configuration unreproducible on the single GPU that final training will use.
+    """
+    visible = torch.cuda.device_count() if torch.cuda.is_available() else 0
+
+    if visible > 1:
+        raise RuntimeError(
+            f"{visible} GPUs are visible to this trial; a trial must see at most one. "
+            "Set CUDA_VISIBLE_DEVICES, or gpus_per_trial <= 1 under Ray — running more "
+            "trials in parallel beats splitting one trial across devices."
+        )
 
 
 def metric_greater_is_better(arguments: TrainingArguments) -> bool:
@@ -101,6 +152,7 @@ def run_trial(
     max_micro_batch_size: int = 64,
     seeds_per_trial: int = 5,
     top_k_epochs: int = 3,
+    min_overlap_percentage: float = 40.0,
     early_stopping_patience: int | None = 5,
     pad_to_multiple_of: int | None = 8,
     track_resources: bool = True,
@@ -114,12 +166,19 @@ def run_trial(
     spread being measured.
 
     Only out-of-memory failures are caught — a legitimate, hyperparameter-dependent
-    outcome of the sweep — and reported as the worst possible score. Everything
-    else propagates, so a bug halts the sweep instead of burning the remaining
-    trials on it.
+    outcome of the sweep. Everything else propagates, so a bug halts the sweep
+    instead of burning the remaining trials on it.
+
+    An out-of-memory trial scores the seeds that did finish, and only falls to the
+    worst possible score when none did. A configuration too large to train fails on
+    the first seed and is ranked infeasible as it should be; one that trains several
+    seeds and then hits a fragmented or contended device has shown it fits, and its
+    completed runs are evidence rather than something to discard.
     """
     if seeds_per_trial < 1:
         raise ValueError("seeds_per_trial must be at least 1.")
+
+    require_single_device()
 
     metric = base_arguments.metric_for_best_model
 
@@ -146,6 +205,7 @@ def run_trial(
         rows=variant.validation_rows,
         tokenizer=variant.tokenizer,
         id2label=variant.id2label,
+        min_overlap_percentage=min_overlap_percentage,
         include_tokens=False,
         include_by_entity=False,
     )
@@ -169,6 +229,8 @@ def run_trial(
                 gradient_accumulation_steps=accumulation_steps,
                 **hyperparameters,
             )
+
+            set_seed(seed)
 
             model = build_model(
                 checkpoint=variant.checkpoint,
@@ -216,5 +278,5 @@ def run_trial(
         "per_device_train_batch_size": micro_batch_size,
         "gradient_accumulation_steps": accumulation_steps,
         f"{metric_key}_std": statistics.stdev(scores) if len(scores) > 1 else 0.0,
-        metric_key: worst if oom else statistics.mean(scores),
+        metric_key: statistics.mean(scores) if scores else worst,
     }

@@ -10,8 +10,10 @@ from ner_lab.hpo.search import (
     search_hyperparameters,
     trial_directory_name,
     trials_table,
+    user_argument_overrides,
     winner_configuration,
 )
+from ner_lab.hpo.report import summarize_sweep
 from ner_lab.hpo.space import (
     DEFAULT_SEARCH_SPACE,
     build_domain,
@@ -25,6 +27,7 @@ from ner_lab.hpo.trial import (
     metric_greater_is_better,
     run_trial,
     top_k_epoch_mean,
+    validate_search_space,
 )
 from ner_lab.hpo.variants import (
     EncodedVariant,
@@ -53,9 +56,12 @@ __all__ = [
     "run_trial",
     "search_hyperparameters",
     "smoke_configuration",
+    "summarize_sweep",
     "top_k_epoch_mean",
     "trial_directory_name",
     "trials_table",
+    "user_argument_overrides",
+    "validate_search_space",
     "variant_key",
     "winner_configuration",
 ]
