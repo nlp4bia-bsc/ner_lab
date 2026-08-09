@@ -17,12 +17,14 @@ from ner_lab.evaluation.scoring import (
     span_metrics,
 )
 from ner_lab.evaluation.spans import (
+    SCORED_SPAN_COLUMNS,
     SPAN_COLUMNS,
     bio_to_spans,
     entity_tags,
     expand_to_word_extent,
     gold_spans,
     predicted_spans,
+    softmax,
     span_dataframe,
     strip_bio_prefix,
 )
@@ -35,6 +37,7 @@ from ner_lab.evaluation.tokens import (
 __all__ = [
     "BEST_METRIC",
     "SCENARIO_PREFIXES",
+    "SCORED_SPAN_COLUMNS",
     "SPAN_COLUMNS",
     "bio_to_spans",
     "build_compute_metrics",
@@ -48,6 +51,7 @@ __all__ = [
     "predicted_spans",
     "safe_f1",
     "score_spans",
+    "softmax",
     "span_dataframe",
     "span_metrics",
     "strip_bio_prefix",

@@ -3,7 +3,7 @@
 What has actually landed, and the evidence for it. One entry per subsystem, not per session.
 Decisions live in [DECISIONS.md](DECISIONS.md); this file records outcomes.
 
-**Verification suite: 501 checks, all passing.** See [`verification/`](../verification/).
+**Verification suite: 598 checks, all passing.** See [`verification/`](../verification/).
 
 | Subsystem | Checks | Equivalence with NER-API |
 |---|---|---|
@@ -14,7 +14,8 @@ Decisions live in [DECISIONS.md](DECISIONS.md); this file records outcomes.
 | `training/` | 35 | — |
 | `evaluation/` | 59 | exact, every metric family |
 | `training/assessment.py` | 65 | — |
-| `hpo/` | 88 | — |
+| `hpo/` | 94 | — |
+| `inference.py` | 91 | not diffed — see below |
 
 ---
 
@@ -241,9 +242,77 @@ worst score), where NER-API assumed maximization throughout. Trial evaluation sk
 metrics and the confusion matrix via `build_compute_metrics(include_tokens=False,
 include_by_entity=False)` — the split `evaluation/` made for exactly this.
 
-Verified: 88 checks, including a real two-trial Ray Tune + Optuna sweep on the miniature
+Verified: 94 checks, including a real two-trial Ray Tune + Optuna sweep on the miniature
 BERT (smoke test, manifest, trials table, summary), an OOM trial reported rather than
 raised, a non-OOM error propagating, and the emitted winner block executed through
 `train_model(**block)` unchanged. The YAML path was smoke-tested separately:
 `ner-lab run sweep.yaml --seed 5` with a declarative search space, seed reaching the
 manifest.
+
+The winner block is written to `winner.yaml` as well as into `hpo_summary.json` (D60), so the
+hand-off to `train_model` is one command rather than a hand-extracted JSON subtree retyped as
+YAML. Verified by reading the file back through the CLI's own `load_config` and comparing it
+to the block.
+
+---
+
+## `inference.py` — 2026-08-09
+
+Task `predict_entities`. The last unmigrated library stage.
+
+`03_infer_model.py` was 653 lines. Most of it was already in this library and did not need
+porting: `CRFTrainer.prediction_step` re-encodes Viterbi paths as one-hot logits, so both
+architectures reach decoding in one shape; `evaluate_predictions` replaces its four separate
+metric calls; `multiclinner` replaces its official-scoring block; `NERTrainingConfig`,
+`filter_supported_kwargs` and `get_git_commit` were already gone by D30, D38 and D52.
+
+What survived is the part that was actually load-bearing: load a checkpoint, window the input
+the way the model was trained, predict, decode spans with a confidence, score against gold if
+there is any.
+
+Four decisions, agreed before any of it was written (D29's rule, applied to the second
+script-shaped stage):
+
+- **A saved model describes itself** (D62). `train(model_encoding=...)` writes an
+  `encoding.json` beside the weights. Inference takes a `model_dir` and restates nothing — a
+  wrong `max_length` silently shifts every window boundary, which is precisely the class of
+  transcription failure `winner.yaml` had just been added to remove.
+- **`Encoder(require_target_label=False)`** (D63), because unannotated documents legitimately
+  contain no entity and the guard that catches a training typo would otherwise reject them.
+- **Score and text go into `evaluation/spans.py`** (D64), not into a second BIO walk. Both
+  additions are off by default, so the scoring path is unchanged.
+- **`predict_entities`, taking a model directory rather than a run directory** (D61), so a
+  checkpoint copied anywhere still loads.
+
+The CRF path is the one NER-API never validated on a cluster. It now runs in verification:
+`CRFForTokenClassification` is an `nn.Module`, so `Trainer.save_model` writes a bare state
+dict with no `config.json` — the wrapper is rebuilt over the backbone `encoding.json` names
+and the fine-tuned weights loaded on top.
+
+Verified: 91 checks. The span-decoding arithmetic is checked directly — mean-of-tokens scores,
+surface forms sliced from the document, the higher-scoring copy winning when two windows
+predict the same span, softmax not overflowing on a large logit. End to end on the miniature
+BERT, both architectures: training writes the sidecar, a saved model reloads and predicts,
+gold input is scored twice over (this library's metrics and the official scorer), raw text
+predicts without gold and is officially scored only when given a `reference`, and `min_score`
+filters. The YAML path was smoke-tested separately with `ner-lab run predict.yaml`.
+
+**Two bugs of my own, both found by auditing the finished stage rather than by the checks:**
+
+- A model that predicted no entity at all returned a frame with no `score` column, so
+  `min_score` and the prediction writer both raised `KeyError`. `span_dataframe` now takes the
+  caller's intent (`scored=`) instead of inferring it from spans that may not exist.
+- `device="cpu"` was honoured by `load_model` and then silently undone: a `Trainer` places the
+  model itself, so on a GPU machine it moved it straight back. `predict_logits` now sets
+  `use_cpu` on the arguments it builds, which is where the decision actually lives. NER-API
+  did this by setting `CUDA_VISIBLE_DEVICES=""`, a global environment mutation a library
+  should not perform.
+
+**The one thing this stage does not have: equivalence with NER-API.** `data/`, `encoding/` and
+`evaluation/` were each diffed element-for-element against the original on real documents
+before being allowed to differ. Inference was not, because its script cannot run: it loads a
+`best_config.json` written by a `NERTrainingConfig` that no longer exists, so there is no
+checkpoint on disk both implementations can read. The pieces it is built from are the ones
+already verified exact — span reconstruction, the metric families, the official scorer — and
+what is new here is the decoding of score and text, which is checked directly. Worth stating
+plainly rather than leaving implied by a table.

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import yaml
 from transformers import TrainingArguments
 
 from ner_lab.encoding.encoder import WindowStrategy
@@ -49,6 +50,7 @@ from ner_lab.training.tracking import gpu_hardware_info
 
 TRIALS_SUMMARY_FILENAME = "trials_summary.parquet"
 HPO_SUMMARY_FILENAME = "hpo_summary.json"
+WINNER_CONFIG_FILENAME = "winner.yaml"
 
 HPO_ARGUMENT_DEFAULTS: dict[str, Any] = {
     "num_train_epochs": 40,
@@ -337,8 +339,12 @@ def search_hyperparameters(
                     output_dir=output_dir,
                     variant=variants[best.config["variant"]],
                     sampled=best.config,
-                    micro_batch_size=best.metrics.get("per_device_train_batch_size"),
-                    accumulation_steps=best.metrics.get("gradient_accumulation_steps"),
+                    micro_batch_size=optional_int(
+                        best.metrics.get("per_device_train_batch_size")
+                    ),
+                    accumulation_steps=optional_int(
+                        best.metrics.get("gradient_accumulation_steps")
+                    ),
                     target_label=target_label,
                     language=language,
                     architecture=architecture,
@@ -355,6 +361,11 @@ def search_hyperparameters(
 
     summary["total_wall_time_sec"] = time.monotonic() - sweep_start
     paths["hpo_summary"] = write_manifest(summary, run_dir / HPO_SUMMARY_FILENAME)
+
+    if best is not None:
+        paths["winner"] = write_winner_config(
+            summary["train_model"], run_dir / WINNER_CONFIG_FILENAME
+        )
 
     sweep_report = summarize_sweep(
         trials=trials,
@@ -579,6 +590,30 @@ def winner_configuration(
         configuration["architecture_kwargs"] = architecture_kwargs
 
     return configuration
+
+
+def write_winner_config(configuration: Mapping[str, Any], path: str | Path) -> Path:
+    """
+    Write the winner block as a YAML config `ner-lab run` accepts unchanged.
+
+    The same content `hpo_summary.json` already records, in the form the CLI
+    takes, so the winning trial reaches `train_model` without being retyped.
+    Still an output only: nothing reads it back, and `output_dir` is the sweep's
+    own, so the training run lands beside the sweep unless `--output-dir` says
+    otherwise.
+    """
+    config_path = Path(path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with config_path.open("w", encoding="utf-8") as file:
+        yaml.safe_dump(dict(configuration), file, sort_keys=False, allow_unicode=True)
+
+    return config_path
+
+
+def optional_int(value: Any) -> int | None:
+    """Coerce a metric Ray reported back to a plain `int`, leaving a missing one alone."""
+    return None if value is None else int(value)
 
 
 def _reported_trial(

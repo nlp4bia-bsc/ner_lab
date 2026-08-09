@@ -38,6 +38,10 @@ class Encoder:
     `(sentence_ranges, tokens, entities, text, max_content_length)` and returning
     windows. A window carrying `core_token_start`/`core_token_end` has only that
     core labelled, with the flanks left as unlabelled context.
+
+    `require_target_label` rejects a corpus in which `target_label` never occurs,
+    which for training means a typo silently producing all-`O` rows. Inference
+    turns it off: unannotated documents legitimately carry no entity at all.
     """
 
     def __init__(
@@ -51,6 +55,7 @@ class Encoder:
         context_tokens: int | None = None,
         min_sentence_tokens: int = 4,
         documents_per_batch: int = 500,
+        require_target_label: bool = True,
     ) -> None:
         self.tokenizer = tokenizer
         self.target_label = target_label
@@ -61,6 +66,7 @@ class Encoder:
         self.context_tokens = context_tokens
         self.min_sentence_tokens = min_sentence_tokens
         self.documents_per_batch = documents_per_batch
+        self.require_target_label = require_target_label
 
         self.prefix_ids, self.suffix_ids = special_token_template(tokenizer)
         self.max_content_length = compute_max_content_length(
@@ -129,7 +135,7 @@ class Encoder:
             labels_seen.update(str(entity["label"]) for entity in entities)
             rows.extend(self.encode_document(doc_id, text, entities))
 
-        if self.target_label not in labels_seen:
+        if self.require_target_label and self.target_label not in labels_seen:
             raise ValueError(
                 f"target_label {self.target_label!r} does not occur in this corpus. "
                 f"Labels present: {sorted(labels_seen) or 'none'}."
@@ -184,3 +190,60 @@ class Encoder:
             context_tokens=self.context_tokens,
             min_sentence_tokens=self.min_sentence_tokens,
         )
+
+
+def describe_encoder(encoder: Encoder) -> dict:
+    """
+    The settings that decide how an `Encoder` windows a corpus, as plain data.
+
+    Recorded next to a saved model so inference can window its input exactly as
+    training did. A custom `strategy` is recorded by name only — a callable is
+    code, so `encoder_from_description` needs it handed back.
+    """
+    return {
+        "target_label": encoder.target_label,
+        "language": encoder.language,
+        "max_length": encoder.max_length,
+        "strategy": strategy_name(encoder.strategy),
+        "context_tokens": encoder.context_tokens,
+        "overlap_policy": encoder.overlap_policy,
+        "min_sentence_tokens": encoder.min_sentence_tokens,
+        "label2id": dict(encoder.label2id),
+    }
+
+
+def encoder_from_description(
+    description: dict,
+    tokenizer,
+    strategy: str | WindowStrategy | None = None,
+    **overrides,
+) -> Encoder:
+    """
+    Rebuild an `Encoder` from `describe_encoder`'s output.
+
+    `label2id` is dropped: the vocabulary is derived from `target_label`, and
+    rebuilding it is what proves the description and the model agree. Pass
+    `strategy` when the description names a callable this library cannot import.
+    """
+    settings = {key: value for key, value in description.items() if key != "label2id"}
+    named = settings.pop("strategy", "greedy")
+
+    if strategy is None and named not in BUILTIN_STRATEGIES:
+        raise ValueError(
+            f"strategy {named!r} is not one of {BUILTIN_STRATEGIES}, so it was a callable "
+            "when this model was trained. Pass strategy= to supply it again."
+        )
+
+    return Encoder(
+        tokenizer=tokenizer,
+        strategy=strategy if strategy is not None else named,
+        **{**settings, **overrides},
+    )
+
+
+def strategy_name(strategy: str | WindowStrategy) -> str:
+    """A recordable name for a builtin strategy or a user-supplied callable."""
+    if isinstance(strategy, str):
+        return strategy
+
+    return getattr(strategy, "__name__", type(strategy).__name__)

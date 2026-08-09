@@ -12,6 +12,7 @@ from ner_lab.hpo.search import (
     trials_table,
     user_argument_overrides,
     winner_configuration,
+    write_winner_config,
 )
 from ner_lab.hpo.report import summarize_sweep
 from ner_lab.hpo.space import (
@@ -64,4 +65,5 @@ __all__ = [
     "validate_search_space",
     "variant_key",
     "winner_configuration",
+    "write_winner_config",
 ]

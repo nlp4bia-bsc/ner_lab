@@ -15,7 +15,7 @@ from transformers import AutoTokenizer, TrainingArguments, set_seed
 
 from ner_lab.data.dataset import DATA_MANIFEST_FILENAME
 from ner_lab.data.split import split_paths
-from ner_lab.encoding.encoder import Encoder, WindowStrategy
+from ner_lab.encoding.encoder import Encoder, WindowStrategy, describe_encoder
 from ner_lab.encoding.overlaps import OverlapPolicy
 from ner_lab.evaluation.metrics import build_compute_metrics
 from ner_lab.models.registry import Architecture, build_model
@@ -87,9 +87,10 @@ def train_model(
     the way.
 
     Weights are not kept unless `save_model` is set — this scores a
-    configuration, it does not produce a deployment artifact. Each fold gets a
-    freshly built model, and the previous fold's is released before the next one
-    is built.
+    configuration, it does not produce a deployment artifact. A saved fold
+    carries an `encoding.json` beside its weights, which is what
+    `ner_lab.inference` loads. Each fold gets a freshly built model, and the
+    previous fold's is released before the next one is built.
     """
     split_dir = Path(split_dir).resolve()
     data_manifest = read_data_manifest(split_dir)
@@ -125,16 +126,7 @@ def train_model(
             "architecture": architecture_name(architecture),
             "architecture_kwargs": architecture_kwargs or {},
         },
-        "encoding": {
-            "target_label": target_label,
-            "language": language,
-            "max_length": max_length,
-            "strategy": strategy if isinstance(strategy, str) else architecture_name(strategy),
-            "context_tokens": context_tokens,
-            "overlap_policy": overlap_policy,
-            "min_sentence_tokens": min_sentence_tokens,
-            "label2id": encoder.label2id,
-        },
+        "encoding": describe_encoder(encoder),
         "evaluation": {"min_overlap_percentage": min_overlap_percentage},
         "training_arguments": resolved_arguments.to_dict(),
         "hardware": gpu_hardware_info(),
@@ -195,6 +187,12 @@ def train_model(
             save_model=save_model,
             track_resources=track_resources,
             run_metadata=split_provenance(validation_index, partitions),
+            model_encoding=model_encoding(
+                encoder=encoder,
+                checkpoint=checkpoint,
+                architecture=architecture,
+                architecture_kwargs=architecture_kwargs,
+            ),
         )
 
         summaries.append(result.summary)
@@ -312,6 +310,30 @@ def architecture_name(architecture: str | Architecture) -> str:
         return architecture
 
     return getattr(architecture, "__name__", type(architecture).__name__)
+
+
+def model_encoding(
+    encoder: Encoder,
+    checkpoint: str,
+    architecture: str | Architecture = "linear",
+    architecture_kwargs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    What a saved model needs to state about itself: how it was built, how its input was windowed.
+
+    Handed to `train(model_encoding=...)`, which writes it beside the weights as
+    `encoding.json`. Inference reads it back rather than asking the caller to
+    restate a `max_length` or a `strategy` that silently changes every window
+    boundary if it is off by one.
+    """
+    return {
+        "model": {
+            "checkpoint": checkpoint,
+            "architecture": architecture_name(architecture),
+            "architecture_kwargs": architecture_kwargs or {},
+        },
+        "encoding": describe_encoder(encoder),
+    }
 
 
 def resolve_training_arguments(

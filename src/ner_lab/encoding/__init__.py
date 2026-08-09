@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from ner_lab.encoding.encoder import BUILTIN_STRATEGIES, Encoder, WindowStrategy
+from ner_lab.encoding.encoder import (
+    BUILTIN_STRATEGIES,
+    Encoder,
+    WindowStrategy,
+    describe_encoder,
+    encoder_from_description,
+    strategy_name,
+)
 from ner_lab.encoding.overlaps import OverlapPolicy, resolve_entities
 from ner_lab.encoding.rows import (
     IGNORE_INDEX,
@@ -37,6 +44,8 @@ __all__ = [
     "build_row",
     "build_window",
     "compute_max_content_length",
+    "describe_encoder",
+    "encoder_from_description",
     "merge_ranges",
     "merge_sentences_crossing_entities",
     "merge_short_sentences",
@@ -47,5 +56,6 @@ __all__ = [
     "special_token_template",
     "split_into_sentences",
     "split_oversized_sentence",
+    "strategy_name",
     "tokenize_document",
 ]

@@ -9,6 +9,7 @@ from ner_lab.training.assessment import (
     best_epoch_metrics,
     encode_partition,
     fold_rotations,
+    model_encoding,
     read_data_manifest,
     resolve_training_arguments,
     run_directory_name,
@@ -21,9 +22,11 @@ from ner_lab.training.trainer import (
     TrainingResult,
     build_summary,
     dataset_summary,
+    read_model_encoding,
     remove_checkpoints,
     resolve_trainer_class,
     train,
+    write_model_encoding,
 )
 
 __all__ = [
@@ -43,7 +46,9 @@ __all__ = [
     "for_inference",
     "gpu_hardware_info",
     "is_encoded",
+    "model_encoding",
     "read_data_manifest",
+    "read_model_encoding",
     "remove_checkpoints",
     "resolve_trainer_class",
     "resolve_training_arguments",
@@ -53,4 +58,5 @@ __all__ = [
     "train_model",
     "training_arguments",
     "validate_rows",
+    "write_model_encoding",
 ]

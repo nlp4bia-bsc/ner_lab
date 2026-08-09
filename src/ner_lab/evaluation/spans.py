@@ -11,6 +11,7 @@ import pandas as pd
 from ner_lab.encoding.rows import IGNORE_INDEX
 
 SPAN_COLUMNS = ["filename", "label", "start_span", "end_span", "text"]
+SCORED_SPAN_COLUMNS = [*SPAN_COLUMNS, "score"]
 ROW_COLUMNS = ("doc_id", "input_ids", "labels", "token_offsets", "word_ids")
 
 
@@ -50,6 +51,8 @@ def predicted_spans(
     tokenizer,
     id2label: dict,
     ignore_index: int = IGNORE_INDEX,
+    texts: dict[str, str] | None = None,
+    include_scores: bool = False,
 ) -> pd.DataFrame:
     """
     Rebuild the spans a model predicted.
@@ -57,6 +60,11 @@ def predicted_spans(
     Only positions the encoder left unmasked are decoded, so special tokens,
     continuation subwords and the context strategy's unlabelled flanks are
     skipped — a prediction there has no gold counterpart to be scored against.
+
+    Scoring reads offsets alone, so `texts` and `include_scores` are off by
+    default and exist for inference, which reports spans rather than scores them:
+    `texts` fills each span's surface form from `{doc_id: text}`, and
+    `include_scores` adds the mean softmax probability of the tokens behind it.
     """
     _require_columns(rows)
 
@@ -69,6 +77,7 @@ def predicted_spans(
         )
 
     id2label = _normalize_id2label(id2label)
+    probabilities = softmax(predictions) if include_scores else None
     spans: list[dict[str, Any]] = []
 
     for index, row in enumerate(rows.itertuples(index=False)):
@@ -76,38 +85,58 @@ def predicted_spans(
         aligned = _aligned_offsets(row, tokenizer)
         row_predictions = predicted_ids[index][: len(labels)].tolist()
 
-        tags, offsets = [], []
+        tags, offsets, scores = [], [], []
 
         for position in range(min(len(labels), len(row_predictions))):
             if labels[position] == ignore_index or position not in aligned:
                 continue
 
-            tags.append(id2label[int(row_predictions[position])])
+            predicted_id = int(row_predictions[position])
+
+            tags.append(id2label[predicted_id])
             offsets.append(aligned[position])
 
-        spans.extend(bio_to_spans(str(row.doc_id), offsets, tags))
+            if probabilities is not None:
+                scores.append(float(probabilities[index][position][predicted_id]))
 
-    return span_dataframe(spans)
+        spans.extend(
+            bio_to_spans(
+                str(row.doc_id),
+                offsets,
+                tags,
+                scores=scores if probabilities is not None else None,
+                text=None if texts is None else texts.get(str(row.doc_id), ""),
+            )
+        )
+
+    return span_dataframe(spans, scored=include_scores)
 
 
 def bio_to_spans(
     filename: str,
     token_offsets: list[tuple[int, int]],
     bio_tags: list[str],
+    scores: list[float] | None = None,
+    text: str | None = None,
 ) -> list[dict[str, Any]]:
     """
     Merge a BIO tag sequence into span rows.
 
-    `text` is left empty: only offsets and labels are available here, and the
-    scorers match on offsets.
+    `text` is left empty unless the document's own text is passed, since only
+    offsets and labels are available here and the scorers match on offsets.
+    With `scores`, each span carries the mean of its tokens' scores.
     """
     if len(token_offsets) != len(bio_tags):
         raise ValueError("token_offsets and bio_tags must be the same length.")
 
+    if scores is not None and len(scores) != len(bio_tags):
+        raise ValueError("scores and bio_tags must be the same length.")
+
     spans: list[dict[str, Any]] = []
+    collected: list[list[float]] = []
     current: dict[str, Any] | None = None
 
-    for (start, end), tag in zip(token_offsets, bio_tags):
+    for position, ((start, end), tag) in enumerate(zip(token_offsets, bio_tags)):
         prefix, _, label = tag.partition("-")
 
         if not label or prefix not in ("B", "I"):
@@ -116,6 +145,10 @@ def bio_to_spans(
 
         if prefix == "I" and current is not None and current["label"] == label:
             current["end_span"] = int(end)
+
+            if scores is not None:
+                collected[-1].append(scores[position])
+
             continue
 
         current = {
@@ -127,19 +160,59 @@ def bio_to_spans(
         }
         spans.append(current)
 
+        if scores is not None:
+            collected.append([scores[position]])
+
+    for index, span in enumerate(spans):
+        if text is not None:
+            span["text"] = text[span["start_span"]:span["end_span"]]
+
+        if scores is not None:
+            span["score"] = float(np.mean(collected[index]))
+
     return spans
 
 
-def span_dataframe(spans: list[dict[str, Any]]) -> pd.DataFrame:
-    """Build the canonical span frame, dropping exact duplicates."""
-    if not spans:
-        return pd.DataFrame(columns=SPAN_COLUMNS)
+def span_dataframe(
+    spans: list[dict[str, Any]],
+    scored: bool | None = None,
+) -> pd.DataFrame:
+    """
+    Build the canonical span frame, dropping duplicate spans.
 
-    return (
-        pd.DataFrame(spans, columns=SPAN_COLUMNS)
-        .drop_duplicates(subset=["filename", "label", "start_span", "end_span"])
-        .reset_index(drop=True)
-    )
+    Scored spans keep the highest-scoring copy of a span two windows both
+    predicted, and come back in document order; unscored ones keep the first
+    copy and stay in the order the rows produced them.
+
+    `scored` is read off the spans themselves unless it is given. A caller that
+    decoded scores passes it, so predicting nothing still returns a frame with
+    the `score` column its next step reads.
+    """
+    scored = (bool(spans) and "score" in spans[0]) if scored is None else scored
+    columns = SCORED_SPAN_COLUMNS if scored else SPAN_COLUMNS
+
+    if not spans:
+        return pd.DataFrame(columns=columns)
+
+    frame = pd.DataFrame(spans, columns=columns)
+
+    if scored:
+        frame = frame.sort_values("score", ascending=False)
+
+    frame = frame.drop_duplicates(subset=["filename", "label", "start_span", "end_span"])
+
+    if scored:
+        frame = frame.sort_values(["filename", "start_span", "end_span"])
+
+    return frame.reset_index(drop=True)
+
+
+def softmax(logits: np.ndarray) -> np.ndarray:
+    """Softmax over the last axis, shifted by the row maximum so it cannot overflow."""
+    shifted = logits - logits.max(axis=-1, keepdims=True)
+    exponentiated = np.exp(shifted)
+
+    return exponentiated / exponentiated.sum(axis=-1, keepdims=True)
 
 
 def content_positions(input_ids: list[int], tokenizer) -> list[int]:

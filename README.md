@@ -34,7 +34,7 @@ you can leave out by composing the pieces yourself.
 | Evaluate | `ner_lab.evaluation.build_compute_metrics` | — | available (library only) |
 | Train against a split | `ner_lab.training.train_model` | `train_model` | available |
 | Hyperparameter search | `ner_lab.hpo.search_hyperparameters` | `search_hyperparameters` | available |
-| Inference | — | — | not migrated yet |
+| Predict with a model | `ner_lab.inference.predict_entities` | `predict_entities` | available |
 
 "Library only" means the piece works and is documented below, but has no YAML task yet: it
 takes DataFrames and objects rather than paths, so there is no single artifact for a config
@@ -366,12 +366,20 @@ them.
     run_manifest.json          before the sweep starts: space, variants, provenance
     trials_summary.parquet     one row per trial: sampled values, score, spread, resources
     hpo_summary.json           the winner, raw and as a train_model config
+    winner.yaml                the same winner block, runnable by `ner-lab run`
     smoke_test/, trials/       Ray's own per-trial directories
 ```
 
-The `train_model` block inside `hpo_summary.json` is copy-pasteable into a YAML file and
-runnable as-is — the sweep's argmax over noisy scores is mildly optimistic, so the reportable
-number is that assessment's k-fold mean ± std, not the sweep's.
+`winner.yaml` is the `train_model` block from `hpo_summary.json` as a config file, so the
+winning trial reaches the assessment stage without being retyped:
+
+```bash
+ner-lab run assets/sweeps/<run>/winner.yaml --output-dir assets/runs
+```
+
+Its `output_dir` is the sweep's own, which puts the training run beside the sweep unless
+`--output-dir` says otherwise. Run it — the sweep's argmax over noisy scores is mildly
+optimistic, so the reportable number is that assessment's k-fold mean ± std, not the sweep's.
 
 ```yaml
 task: search_hyperparameters
@@ -385,6 +393,59 @@ n_trials: 40
 seeds_per_trial: 5
 training_arguments:
   per_device_eval_batch_size: 32
+```
+
+---
+
+## 4. Predict with a trained model
+
+```python
+from ner_lab.inference import predict_entities
+
+result = predict_entities(
+    model_dir="assets/runs/DISEASE__crf__.../best_model",
+    documents="assets/gold/test.parquet",
+    output_dir="assets/predictions",
+)
+
+result.spans        # DataFrame: filename | label | start_span | end_span | text | score
+result.metrics      # span and token metrics, when the input carried gold
+result.official     # MultiClinNER strict + character F1, when there was gold to score against
+```
+
+Nothing about the encoding is restated here. A model saved by `train_model(save_model=True)`
+carries an `encoding.json` beside its weights holding the checkpoint, architecture and the
+whole windowing configuration, so inference windows its input exactly as training did and
+cannot silently disagree with it. That file is also what makes a CRF checkpoint loadable at
+all: `CRFForTokenClassification` is not a `PreTrainedModel`, so the Trainer saves it as a bare
+state dict with no `config.json` to rebuild it from.
+
+`documents` is a canonical corpus (frame or parquet), a directory of `.txt` files, or a
+`{doc_id: text}` mapping. Gold entities in the input are scored automatically; raw text has
+none, so pass `reference=` (a corpus parquet or an annotation TSV) to score it officially.
+
+**Writes:**
+
+```
+<output_dir>/
+    predictions.tsv            the official schema plus a score column
+    gold.tsv                   the gold set scored against, in the same schema
+    prediction_metrics.json    span + token metrics, when the input carried gold
+    multiclinner_eval.json     the official strict and character-overlap F1
+    inference_manifest.json    the model, its encoding, and what was predicted on
+```
+
+A span two overlapping windows both predict is kept once, at its higher score; `min_score`
+drops predictions below a mean token probability. A score is the mean softmax probability of
+the tokens the span was decoded from.
+
+```yaml
+task: predict_entities
+model_dir: assets/runs/DISEASE__crf__20260809_120000/best_model
+documents: assets/gold/test.parquet
+output_dir: assets/predictions
+batch_size: 32
+min_score: 0.5
 ```
 
 ---
@@ -403,6 +464,9 @@ job array can vary them without writing near-identical config files.
 |---|---|
 | `--random-state N`, `--seed N` | Override the config's `random_state`. |
 | `--output-dir PATH` | Override the config's `output_dir`. |
+
+`--random-state` reaches whichever task is named, so it fails on `predict_entities`, which has no
+seed to set — inference is deterministic.
 
 The config is a flat mapping. A `task` key names the stage; every other key is passed to that
 stage's function as a keyword argument, so **the YAML keys are exactly the parameter names

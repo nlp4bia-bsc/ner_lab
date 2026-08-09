@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -24,6 +25,7 @@ from ner_lab.training.tracking import EpochMetricsLogger, ResourceTracker, gpu_h
 EPOCH_METRICS_FILENAME = "epoch_metrics.parquet"
 SUMMARY_FILENAME = "training_summary.json"
 BEST_MODEL_DIRNAME = "best_model"
+MODEL_ENCODING_FILENAME = "encoding.json"
 
 
 @dataclass
@@ -99,6 +101,7 @@ def train(
     save_model: bool = False,
     track_resources: bool = False,
     run_metadata: dict[str, Any] | None = None,
+    model_encoding: Mapping[str, Any] | None = None,
 ) -> TrainingResult:
     """
     Train `model` on encoded rows and return everything the run produced.
@@ -117,6 +120,12 @@ def train(
     writes to select the best epoch are removed afterwards, including when
     training raises. `epoch_metrics.parquet` and `training_summary.json` are
     always written to `training_arguments.output_dir`.
+
+    `model_encoding` is written beside the saved weights as `encoding.json`, so
+    the checkpoint says how its input was windowed and how it was built. Build
+    one with `ner_lab.training.model_encoding`; without it a saved directory
+    cannot be loaded by `ner_lab.inference` — and a CRF checkpoint, which the
+    Trainer saves as a bare state dict, cannot be rebuilt at all.
     """
     validate_rows(train_rows, "train_rows")
     validate_rows(validation_rows, "validation_rows")
@@ -187,6 +196,9 @@ def train(
             trainer.save_model(str(best_model_dir))
             tokenizer.save_pretrained(best_model_dir)
             paths["best_model"] = best_model_dir
+
+            if model_encoding is not None:
+                paths["model_encoding"] = write_model_encoding(model_encoding, best_model_dir)
     finally:
         if tracker is not None:
             resources = tracker.stop()
@@ -217,6 +229,27 @@ def train(
         resources=resources,
         paths=paths,
     )
+
+
+def write_model_encoding(encoding: Mapping[str, Any], model_dir: str | Path) -> Path:
+    """Write a model's `encoding.json` into the directory holding its weights."""
+    path = Path(model_dir) / MODEL_ENCODING_FILENAME
+    path.write_text(json.dumps(dict(encoding), ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return path
+
+
+def read_model_encoding(model_dir: str | Path) -> dict[str, Any]:
+    """Read the `encoding.json` written beside a saved model."""
+    path = Path(model_dir) / MODEL_ENCODING_FILENAME
+
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No {MODEL_ENCODING_FILENAME} in {model_dir} — it is written when a model is "
+            "saved with a model_encoding, so this directory was produced without one."
+        )
+
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def build_summary(

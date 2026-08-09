@@ -304,6 +304,19 @@ def verify_winner_configuration(checks: Checks) -> None:
     checks.equal("the epoch cap is carried", arguments["num_train_epochs"], 40)
     checks.equal("architecture kwargs are carried", block["architecture_kwargs"], {"dropout": 0.2})
 
+    verify_winner_config_file(checks, block)
+
+
+def verify_winner_config_file(checks: Checks, block: dict) -> None:
+    from ner_lab.cli import load_config
+    from ner_lab.hpo import write_winner_config
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = write_winner_config(block, Path(tmp) / "winner.yaml")
+
+        checks.check("the winner config is written", path.exists())
+        checks.equal("the CLI reads it back unchanged", load_config(path), block)
+
 
 def verify_task_registration(checks: Checks) -> None:
     from ner_lab.hpo import search_hyperparameters
@@ -471,6 +484,15 @@ def verify_end_to_end(checks: Checks) -> None:
     checks.equal("the winner block is a train_model task", best["task"], "train_model")
     checks.equal("it points at the searched split", best["split_dir"], str(split_dir))
     checks.check("it carries a sampled learning rate", 1e-5 <= best["training_arguments"]["learning_rate"] <= 1e-4)
+
+    from ner_lab.cli import load_config
+
+    checks.check("the winner config is written", result.paths["winner"].exists())
+    checks.equal(
+        "the winner config holds the winner block",
+        load_config(result.paths["winner"]),
+        best,
+    )
 
     block = {key: value for key, value in best.items() if key != "task"}
     block["training_arguments"]["num_train_epochs"] = 1
