@@ -86,7 +86,7 @@ def verify_naming(checks: Checks) -> None:
         "DISEASE__crf__roberta-base-bne__20260807_120000",
     )
 
-    def my_architecture(checkpoint, label2id, id2label):
+    def my_architecture(base_model, label2id, id2label):
         return None
 
     checks.equal(
@@ -231,12 +231,12 @@ def prepare_split(root: Path, kfolds: int | None) -> Path:
 def verify_end_to_end(checks: Checks) -> None:
     from transformers import AutoTokenizer
 
-    from fixtures import tiny_checkpoint
+    from fixtures import tiny_base_model
     from ner_lab.training import train_model
 
     shared = tempfile.TemporaryDirectory()
     root = Path(shared.name)
-    checkpoint = tiny_checkpoint(root, AutoTokenizer.from_pretrained("bert-base-uncased"))
+    base_model = tiny_base_model(root, AutoTokenizer.from_pretrained("bert-base-uncased"))
 
     arguments = {"num_train_epochs": 1, "per_device_train_batch_size": 4, "fp16": False}
 
@@ -244,7 +244,7 @@ def verify_end_to_end(checks: Checks) -> None:
     kfold = train_model(
         split_dir=kfold_split,
         output_dir=root / "runs",
-        checkpoint=str(checkpoint),
+        base_model=str(base_model),
         target_label="DISEASE",
         language="es",
         training_arguments=arguments,
@@ -293,7 +293,7 @@ def verify_end_to_end(checks: Checks) -> None:
     manifest = json.loads(kfold.paths["run_manifest"].read_text(encoding="utf-8"))
 
     checks.equal("the manifest records the folds", manifest["folds"], [1, 2])
-    checks.equal("the manifest records the checkpoint", manifest["model"]["checkpoint"], str(checkpoint))
+    checks.equal("the manifest records the base_model", manifest["model"]["base_model"], str(base_model))
     checks.check("the manifest embeds the data manifest", "split" in manifest["data_manifest"])
     checks.check("the manifest records the label vocabulary", "B-DISEASE" in manifest["encoding"]["label2id"])
     checks.check(
@@ -304,7 +304,7 @@ def verify_end_to_end(checks: Checks) -> None:
     narrowed = train_model(
         split_dir=kfold_split,
         output_dir=root / "runs",
-        checkpoint=str(checkpoint),
+        base_model=str(base_model),
         target_label="DISEASE",
         language="es",
         training_arguments=arguments,
@@ -322,7 +322,7 @@ def verify_end_to_end(checks: Checks) -> None:
     plain = train_model(
         split_dir=plain_split,
         output_dir=root / "runs",
-        checkpoint=str(checkpoint),
+        base_model=str(base_model),
         target_label="DISEASE",
         language="es",
         training_arguments=arguments,
@@ -349,7 +349,7 @@ def verify_end_to_end(checks: Checks) -> None:
         train_model,
         split_dir=plain_split,
         output_dir=root / "runs",
-        checkpoint=str(checkpoint),
+        base_model=str(base_model),
         target_label="DISEASE",
         language="es",
         folds=[1],

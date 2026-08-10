@@ -101,7 +101,7 @@ def entities_of(corpus: pd.DataFrame, doc_id: str) -> list[dict]:
     return json.loads(row["entities_json"])
 
 
-def tiny_checkpoint(root: Path, tokenizer) -> Path:
+def tiny_base_model(root: Path, tokenizer) -> Path:
     """
     Write a randomly initialized miniature BERT backbone to disk and return its path.
 
@@ -110,7 +110,7 @@ def tiny_checkpoint(root: Path, tokenizer) -> Path:
     """
     from transformers import AutoModel, BertConfig
 
-    checkpoint = root / "tiny-bert"
+    base_model = root / "tiny-bert"
 
     config = BertConfig(
         vocab_size=tokenizer.vocab_size,
@@ -121,7 +121,7 @@ def tiny_checkpoint(root: Path, tokenizer) -> Path:
         max_position_embeddings=512,
     )
 
-    AutoModel.from_config(config).save_pretrained(checkpoint)
-    tokenizer.save_pretrained(checkpoint)
+    AutoModel.from_config(config).save_pretrained(base_model)
+    tokenizer.save_pretrained(base_model)
 
-    return checkpoint
+    return base_model

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 
 import pandas as pd
@@ -18,6 +19,7 @@ from ner_lab.data import (
     LABEL_ALIASES,
     assign_partitions,
     build_corpus,
+    count_labels,
     create_split,
     document_fingerprints,
     normalize_annotation_labels,
@@ -187,6 +189,51 @@ def verify_corpus(checks: Checks, workspace: Path) -> None:
 
     checks.frames_equal("parquet round-trips", read_corpus(corpus_path), corpus)
     checks.frames_equal("validate_corpus is idempotent", validate_corpus(corpus.copy()), corpus)
+
+    counted = count_labels(corpus)
+
+    checks.equal(
+        "count_labels totals every label",
+        sum(counted.values()),
+        int(corpus["n_entities"].sum()),
+    )
+    checks.equal(
+        "count_labels agrees with the raw json",
+        counted,
+        dict(
+            Counter(
+                entity["label"]
+                for value in corpus["entities_json"]
+                for entity in json.loads(value)
+            )
+        ),
+    )
+    checks.equal(
+        "a corpus with no entities counts nothing",
+        count_labels(corpus.assign(entities_json="[]", n_entities=0)),
+        {},
+    )
+
+    vocabulary = ["DISEASE", "MEDICATION", "PROCEDURE"]
+    mixed = build_corpus(
+        documents,
+        annotations.assign(
+            label=[vocabulary[index % len(vocabulary)] for index in range(len(annotations))]
+        ),
+    )
+    mixed_counts = count_labels(mixed)
+
+    checks.equal("count_labels separates a mixed vocabulary", sorted(mixed_counts), vocabulary)
+    checks.equal(
+        "and each label keeps its own total",
+        sum(mixed_counts.values()),
+        int(mixed["n_entities"].sum()),
+    )
+
+    inconsistent = corpus.copy()
+    inconsistent.loc[0, "n_entities"] = int(inconsistent.loc[0, "n_entities"]) + 1
+
+    checks.raises("a stale n_entities is caught", ValueError, count_labels, inconsistent)
 
     fingerprints = document_fingerprints(corpus)
 
@@ -401,6 +448,17 @@ def verify_prepare_dataset(checks: Checks, workspace: Path) -> None:
 
     checks.check("manifest records normalize_labels", "normalize_labels" in manifest)
     checks.equal("manifest records the default", manifest["normalize_labels"], False)
+
+    checks.equal(
+        "the manifest names the labels present",
+        manifest["n_entities_by_label"],
+        count_labels(prepared.corpus),
+    )
+    checks.equal(
+        "and their counts sum to n_entities",
+        sum(manifest["n_entities_by_label"].values()),
+        manifest["n_entities"],
+    )
 
     kfold = prepare_dataset(
         output_dir=output_dir,

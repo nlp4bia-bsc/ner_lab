@@ -122,9 +122,9 @@ def train(
     always written to `training_arguments.output_dir`.
 
     `model_encoding` is written beside the saved weights as `encoding.json`, so
-    the checkpoint says how its input was windowed and how it was built. Build
+    the saved model says how its input was windowed and how it was built. Build
     one with `ner_lab.training.model_encoding`; without it a saved directory
-    cannot be loaded by `ner_lab.inference` — and a CRF checkpoint, which the
+    cannot be loaded by `ner_lab.inference` — and a CRF model, which the
     Trainer saves as a bare state dict, cannot be rebuilt at all.
     """
     validate_rows(train_rows, "train_rows")

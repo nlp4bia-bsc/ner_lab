@@ -81,8 +81,8 @@ def verify_registry(checks: Checks) -> None:
 
     calls = []
 
-    def custom(checkpoint, label2id, id2label, **kwargs):
-        calls.append((checkpoint, tuple(sorted(label2id)), kwargs))
+    def custom(base_model, label2id, id2label, **kwargs):
+        calls.append((base_model, tuple(sorted(label2id)), kwargs))
 
         return "custom-model"
 
@@ -92,7 +92,7 @@ def verify_registry(checks: Checks) -> None:
     result = build_model("dummy", label2id, id2label, architecture=custom, dropout=0.3)
 
     checks.equal("a callable architecture is used", result, "custom-model")
-    checks.equal("the factory receives the checkpoint", calls[0][0], "dummy")
+    checks.equal("the factory receives the base_model", calls[0][0], "dummy")
     checks.equal("the factory receives the vocabulary", calls[0][1], tuple(sorted(label2id)))
     checks.equal("extra kwargs reach the factory", calls[0][2], {"dropout": 0.3})
 
@@ -107,7 +107,7 @@ def verify_registry(checks: Checks) -> None:
         match="Unknown architecture",
     )
 
-    def typed(checkpoint, label2id, id2label, **kwargs):
+    def typed(base_model, label2id, id2label, **kwargs):
         return (label2id, id2label)
 
     normalized = build_model("dummy", {"O": "0"}, {"0": "O"}, architecture=typed)

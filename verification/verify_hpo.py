@@ -47,7 +47,7 @@ def verify_space(checks: Checks) -> None:
         "uniform",
     )
 
-    checks.check("None removes a dimension", "warmup_ratio" not in build_search_space({"warmup_ratio": None}))
+    checks.check("None removes a dimension", "warmup_steps" not in build_search_space({"warmup_steps": None}))
 
     pinned = build_search_space({"lr_scheduler_type": "linear"})
 
@@ -115,14 +115,14 @@ def verify_variants(checks: Checks) -> None:
         max_lengths=[128, 256],
     )
 
-    checks.equal("(greedy + context x2) x2 max_lengths x2 checkpoints", len(variants), 12)
+    checks.equal("(greedy + context x2) x2 max_lengths x2 base_models", len(variants), 12)
     checks.check(
         "keys name the combination",
         "roberta-base|context|32|128" in variants and "beto|greedy|None|256" in variants,
     )
     checks.equal(
-        "the specification carries the full checkpoint path",
-        variants["beto|greedy|None|256"]["checkpoint"],
+        "the specification carries the full base_model path",
+        variants["beto|greedy|None|256"]["base_model"],
         "/models/beto",
     )
 
@@ -144,7 +144,7 @@ def verify_variants(checks: Checks) -> None:
         match="context",
     )
     checks.raises(
-        "two checkpoints sharing a name collide loudly",
+        "two base models sharing a name collide loudly",
         ValueError,
         build_variants,
         ["/a/model", "/b/model"],
@@ -161,7 +161,7 @@ def verify_variants(checks: Checks) -> None:
     )
     checks.equal(
         "describe_variants names callable strategies",
-        describe_variants({"k": {"checkpoint": "c", "strategy": my_windows, "context_tokens": None, "max_length": 1}})["k"]["strategy"],
+        describe_variants({"k": {"base_model": "c", "strategy": my_windows, "context_tokens": None, "max_length": 1}})["k"]["strategy"],
         "my_windows",
     )
 
@@ -270,7 +270,7 @@ def verify_winner_configuration(checks: Checks) -> None:
         block = winner_configuration(
             split_dir="/splits/disease/kfold_5_holdout_0",
             output_dir="/runs",
-            variant={"checkpoint": "/models/beto", "strategy": "greedy", "context_tokens": None, "max_length": 128},
+            variant={"base_model": "/models/beto", "strategy": "greedy", "context_tokens": None, "max_length": 128},
             sampled={"variant": "beto|greedy|None|128", "learning_rate": 3e-5, "effective_train_batch_size": 32, "weight_decay": 0.05},
             micro_batch_size=16,
             accumulation_steps=2,
@@ -287,7 +287,7 @@ def verify_winner_configuration(checks: Checks) -> None:
         )
 
     checks.equal("the block is a train_model task", block["task"], "train_model")
-    checks.equal("the winning variant decides the checkpoint", block["checkpoint"], "/models/beto")
+    checks.equal("the winning variant decides the base_model", block["base_model"], "/models/beto")
     checks.equal("the winning variant decides the windowing", block["max_length"], 128)
 
     arguments = block["training_arguments"]
@@ -331,19 +331,19 @@ def verify_task_registration(checks: Checks) -> None:
 def verify_run_trial(checks: Checks) -> None:
     from transformers import AutoTokenizer
 
-    from fixtures import tiny_checkpoint
+    from fixtures import tiny_base_model
     from ner_lab.data.split import split_paths
     from ner_lab.hpo import build_variants, encode_variants, resolve_base_arguments, run_trial
     from verify_assessment import prepare_split
 
     shared = tempfile.TemporaryDirectory()
     root = Path(shared.name)
-    checkpoint = tiny_checkpoint(root, AutoTokenizer.from_pretrained("bert-base-uncased"))
+    base_model = tiny_base_model(root, AutoTokenizer.from_pretrained("bert-base-uncased"))
 
     split_dir = prepare_split(root / "data", kfolds=None)
     partitions = split_paths(split_dir)
 
-    variants = build_variants([str(checkpoint)], max_lengths=[64])
+    variants = build_variants([str(base_model)], max_lengths=[64])
     encoded = encode_variants(partitions, variants, "DISEASE", "es")
     key = next(iter(encoded))
 
@@ -379,7 +379,7 @@ def verify_run_trial(checks: Checks) -> None:
         not list((root / "trial").rglob("best_model")),
     )
 
-    def exploding_architecture(checkpoint, label2id, id2label):
+    def exploding_architecture(base_model, label2id, id2label):
         import torch
 
         raise torch.cuda.OutOfMemoryError("CUDA out of memory. Tried to allocate everything")
@@ -398,7 +398,7 @@ def verify_run_trial(checks: Checks) -> None:
     checks.equal("an OOM trial scores worst", oom_report["span_strict_f1"], float("-inf"))
     checks.equal("no seed completed", oom_report["n_seeds"], 0)
 
-    def broken_architecture(checkpoint, label2id, id2label):
+    def broken_architecture(base_model, label2id, id2label):
         raise ValueError("a real bug")
 
     checks.raises(
@@ -419,28 +419,29 @@ def verify_run_trial(checks: Checks) -> None:
 
 
 def verify_end_to_end(checks: Checks) -> None:
+    import torch
     from transformers import AutoTokenizer
 
-    from fixtures import tiny_checkpoint
+    from fixtures import tiny_base_model
     from ner_lab.hpo import search_hyperparameters
     from ner_lab.training import train_model
     from verify_assessment import prepare_split
 
     shared = tempfile.TemporaryDirectory()
     root = Path(shared.name)
-    checkpoint = tiny_checkpoint(root, AutoTokenizer.from_pretrained("bert-base-uncased"))
+    base_model = tiny_base_model(root, AutoTokenizer.from_pretrained("bert-base-uncased"))
     split_dir = prepare_split(root / "data", kfolds=None)
 
     result = search_hyperparameters(
         split_dir=split_dir,
         output_dir=root / "sweeps",
-        checkpoints=str(checkpoint),
+        base_models=str(base_model),
         target_label="DISEASE",
         language="es",
         search_space={
             "learning_rate": {"type": "loguniform", "low": 1e-5, "high": 1e-4},
             "weight_decay": None,
-            "warmup_ratio": None,
+            "warmup_steps": None,
             "lr_scheduler_type": "linear",
             "effective_train_batch_size": {"type": "choice", "categories": [4, 8]},
         },
@@ -450,7 +451,6 @@ def verify_end_to_end(checks: Checks) -> None:
         top_k_epochs=1,
         max_lengths=[64],
         max_micro_batch_size=4,
-        gpus_per_trial=0,
         early_stopping_patience=None,
         track_resources=False,
         run_name="mini_sweep",
@@ -478,6 +478,11 @@ def verify_end_to_end(checks: Checks) -> None:
     checks.check("the variant dimension is recorded too", "variant" in manifest["search_space"])
     checks.equal("the objective is recorded", manifest["objective"]["metric"], "span_strict_f1")
     checks.check("the split provenance is embedded", "split" in manifest["data_manifest"])
+    checks.equal(
+        "the manifest records the GPUs a trial got",
+        manifest["gpus_per_trial"],
+        1 if torch.cuda.is_available() else 0,
+    )
 
     best = result.best
 

@@ -213,7 +213,7 @@ def load_model(
 
     if architecture == "linear":
         model = build_model(
-            checkpoint=str(model_dir),
+            base_model=str(model_dir),
             label2id=label2id,
             id2label=id2label,
             architecture=architecture,
@@ -221,7 +221,7 @@ def load_model(
         )
     else:
         model = build_model(
-            checkpoint=recorded["checkpoint"],
+            base_model=recorded["base_model"],
             label2id=label2id,
             id2label=id2label,
             architecture=architecture,

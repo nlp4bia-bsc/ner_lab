@@ -33,7 +33,7 @@ class CRFForTokenClassification(nn.Module):
 
     def __init__(
         self,
-        checkpoint: str,
+        base_model: str,
         label2id: dict,
         id2label: dict,
         dropout: float = 0.1,
@@ -51,12 +51,12 @@ class CRFForTokenClassification(nn.Module):
         self.constraint_value = constraint_value
 
         self.config = AutoConfig.from_pretrained(
-            checkpoint,
+            base_model,
             num_labels=self.num_labels,
             label2id=self.label2id,
             id2label=self.id2label,
         )
-        self.backbone = AutoModel.from_pretrained(checkpoint, config=self.config)
+        self.backbone = AutoModel.from_pretrained(base_model, config=self.config)
 
         self.dropout = nn.Dropout(dropout)
         self.classifier = nn.Linear(self.config.hidden_size, self.num_labels)

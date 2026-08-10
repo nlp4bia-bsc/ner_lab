@@ -77,7 +77,8 @@ def require_single_device() -> None:
     if visible > 1:
         raise RuntimeError(
             f"{visible} GPUs are visible to this trial; a trial must see at most one. "
-            "Set CUDA_VISIBLE_DEVICES, or gpus_per_trial <= 1 under Ray — running more "
+            "Under Ray each trial reserves exactly one, so this means the reservation "
+            "was bypassed; set CUDA_VISIBLE_DEVICES to a single device. Running more "
             "trials in parallel beats splitting one trial across devices."
         )
 
@@ -233,7 +234,7 @@ def run_trial(
             set_seed(seed)
 
             model = build_model(
-                checkpoint=variant.checkpoint,
+                base_model=variant.base_model,
                 label2id=variant.label2id,
                 id2label=variant.id2label,
                 architecture=architecture,

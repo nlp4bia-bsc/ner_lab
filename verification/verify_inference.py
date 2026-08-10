@@ -372,12 +372,12 @@ def train_saved_model(root: Path, architecture: str) -> Path:
     """Train the miniature BERT for one epoch with weights kept, returning best_model/."""
     from transformers import AutoTokenizer
 
-    from fixtures import synthetic_corpus, tiny_checkpoint
+    from fixtures import synthetic_corpus, tiny_base_model
     from ner_lab.data import prepare_dataset, write_corpus
     from ner_lab.training import train_model
 
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-    checkpoint = tiny_checkpoint(root, tokenizer)
+    base_model = tiny_base_model(root, tokenizer)
     source = write_corpus(synthetic_corpus(16), root / "source" / "documents.parquet")
     prepared = prepare_dataset(
         output_dir=root / "datasets", source_parquet=source, dataset_name="synthetic"
@@ -386,7 +386,7 @@ def train_saved_model(root: Path, architecture: str) -> Path:
     result = train_model(
         split_dir=prepared.split_dir,
         output_dir=root / "runs",
-        checkpoint=str(checkpoint),
+        base_model=str(base_model),
         target_label="DISEASE",
         language="es",
         architecture=architecture,
@@ -532,7 +532,7 @@ def verify_end_to_end(checks: Checks) -> None:
     crf_model, _, crf_description = load_model(crf_model_dir, device="cpu")
 
     checks.equal("its architecture is recorded", crf_description["model"]["architecture"], "crf")
-    checks.check("and the backbone it was built over", "checkpoint" in crf_description["model"])
+    checks.check("and the backbone it was built over", "base_model" in crf_description["model"])
     checks.check("a CRF model reloads and can decode", hasattr(crf_model, "decode_from_emissions"))
 
     crf = predict_entities(

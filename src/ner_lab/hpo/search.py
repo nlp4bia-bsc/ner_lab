@@ -89,7 +89,7 @@ class HPOResult:
 def search_hyperparameters(
     split_dir: str | Path,
     output_dir: str | Path,
-    checkpoints: str | Sequence[str],
+    base_models: str | Sequence[str],
     target_label: str,
     language: str,
     architecture: str | Architecture = "linear",
@@ -108,7 +108,6 @@ def search_hyperparameters(
     early_stopping_patience: int | None = 5,
     pad_to_multiple_of: int | None = 8,
     max_micro_batch_size: int = 64,
-    gpus_per_trial: float = 1.0,
     validation_index: int | None = None,
     random_state: int | None = None,
     study_name: str | None = None,
@@ -123,7 +122,7 @@ def search_hyperparameters(
 
     The search space is `DEFAULT_SEARCH_SPACE` overridden by `search_space` —
     see `build_search_space` for the accepted forms. On top of it, every
-    (checkpoint, strategy, context_tokens, max_length) combination becomes one
+    (base_model, strategy, context_tokens, max_length) combination becomes one
     `variant` dimension, windowed once before any trial starts and shared across
     all of them.
 
@@ -132,7 +131,12 @@ def search_hyperparameters(
     metric `training_arguments` selects. Out-of-memory trials score worst instead
     of failing; any other error halts the sweep immediately.
 
-    `smoke_test` runs one epoch per variant first, so an unloadable checkpoint or a
+    A trial reserves one GPU when Ray reports any, and runs on CPU when it reports
+    none. There is no knob for this: `per_device_train_batch_size` is per device, so
+    a trial spanning two GPUs would train at twice the batch size it was scored on.
+    Parallelism comes from running trials side by side.
+
+    `smoke_test` runs one epoch per variant first, so an unloadable base model or a
     search dimension the training arguments have no field for costs one epoch rather
     than the sweep's first parallel wave.
 
@@ -160,34 +164,26 @@ def search_hyperparameters(
     validation_index = fold_rotations(data_manifest, requested)[0]
     partitions = split_paths(split_dir, validation_index=validation_index)
 
-    checkpoints = [checkpoints] if isinstance(checkpoints, str) else list(checkpoints)
-    checkpoint_slug = (
-        Path(checkpoints[0]).name if len(checkpoints) == 1 else f"{len(checkpoints)}checkpoints"
+    base_models = [base_models] if isinstance(base_models, str) else list(base_models)
+    base_model_slug = (
+        Path(base_models[0]).name if len(base_models) == 1 else f"{len(base_models)}models"
     )
 
     run_dir = Path(output_dir).resolve() / (
-        run_name or run_directory_name(target_label, architecture, checkpoint_slug)
+        run_name or run_directory_name(target_label, architecture, base_model_slug)
     )
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    variants = build_variants(checkpoints, strategies, context_tokens, max_lengths)
+    variants = build_variants(base_models, strategies, context_tokens, max_lengths)
     space = build_search_space(search_space)
 
     if "variant" in space:
         raise ValueError(
-            "variant is a reserved search dimension, built from checkpoints/strategies/"
+            "variant is a reserved search dimension, built from base_models/strategies/"
             "context_tokens/max_lengths."
         )
 
     validate_search_space(space)
-
-    if gpus_per_trial > 1:
-        raise ValueError(
-            "gpus_per_trial must be at most 1. The searched effective_train_batch_size is "
-            "per trial, but per_device_train_batch_size is per device, so extra GPUs "
-            "multiply the batch a trial actually trains at and the winner stops being "
-            "reproducible on one GPU. Run more trials in parallel instead."
-        )
 
     base_arguments = resolve_base_arguments(training_arguments, run_dir, random_state)
     metric = base_arguments.metric_for_best_model
@@ -202,12 +198,17 @@ def search_hyperparameters(
 
     full_space = {**space, "variant": tune.choice(list(variants))}
 
+    if not ray.is_initialized():
+        ray.init()
+
+    gpus_per_trial = 1 if ray.cluster_resources().get("GPU", 0) else 0
+
     manifest = {
         "split_dir": str(split_dir),
         "data_manifest": data_manifest,
         "validation_index": validation_index,
         "model": {
-            "checkpoints": checkpoints,
+            "base_models": base_models,
             "architecture": architecture_name(architecture),
             "architecture_kwargs": architecture_kwargs or {},
         },
@@ -243,9 +244,6 @@ def search_hyperparameters(
         overlap_policy=overlap_policy,
         min_sentence_tokens=min_sentence_tokens,
     )
-
-    if not ray.is_initialized():
-        ray.init()
 
     def build_trainable(seeds: int, arguments: TrainingArguments = base_arguments) -> Any:
         trainable = tune.with_parameters(
@@ -562,7 +560,7 @@ def winner_configuration(
         "task": "train_model",
         "split_dir": str(split_dir),
         "output_dir": str(output_dir),
-        "checkpoint": variant["checkpoint"],
+        "base_model": variant["base_model"],
         "target_label": target_label,
         "language": language,
         "architecture": architecture_name(architecture),

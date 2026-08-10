@@ -1,4 +1,4 @@
-"""The variant dimension: every (checkpoint, windowing) combination, encoded once."""
+"""The variant dimension: every (base_model, windowing) combination, encoded once."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from ner_lab.training.assessment import architecture_name, encode_partition
 class EncodedVariant:
     """One variant's windowed rows, plus everything a trial needs to train on them."""
 
-    checkpoint: str
+    base_model: str
     strategy: str | WindowStrategy
     context_tokens: int | None
     max_length: int
@@ -31,7 +31,7 @@ class EncodedVariant:
 
 
 def variant_key(
-    checkpoint: str,
+    base_model: str,
     strategy: str | WindowStrategy,
     context_tokens: int | None,
     max_length: int,
@@ -39,23 +39,23 @@ def variant_key(
     """The readable string one variant is sampled and recorded as."""
     strategy_name = strategy if isinstance(strategy, str) else architecture_name(strategy)
 
-    return f"{Path(checkpoint).name}|{strategy_name}|{context_tokens}|{max_length}"
+    return f"{Path(base_model).name}|{strategy_name}|{context_tokens}|{max_length}"
 
 
 def build_variants(
-    checkpoints: Sequence[str],
+    base_models: Sequence[str],
     strategies: Sequence[str | WindowStrategy] = ("greedy",),
     context_tokens: Sequence[int] | None = None,
     max_lengths: Sequence[int] = (256,),
 ) -> dict[str, dict[str, Any]]:
     """
-    Every (checkpoint, strategy, context_tokens, max_length) combination, keyed by
+    Every (base_model, strategy, context_tokens, max_length) combination, keyed by
     `variant_key`.
 
-    These form one search dimension rather than four: the checkpoint's tokenizer
+    These form one search dimension rather than four: the base model's tokenizer
     decides the windowing, so they cannot be sampled independently.
     `context_tokens` only varies for the context strategy; every other strategy
-    gets a single `None` entry per (checkpoint, max_length).
+    gets a single `None` entry per (base_model, max_length).
     """
     if "context" in strategies and not context_tokens:
         raise ValueError("context_tokens is required when the context strategy is searched.")
@@ -65,22 +65,22 @@ def build_variants(
 
     variants: dict[str, dict[str, Any]] = {}
 
-    for checkpoint in checkpoints:
+    for base_model in base_models:
         for max_length in max_lengths:
             for strategy in strategies:
                 context_options = list(context_tokens) if strategy == "context" else [None]
 
                 for context in context_options:
-                    key = variant_key(checkpoint, strategy, context, max_length)
+                    key = variant_key(base_model, strategy, context, max_length)
 
                     if key in variants:
                         raise ValueError(
-                            f"Duplicate variant {key!r} — two checkpoints share the "
+                            f"Duplicate variant {key!r} — two base models share the "
                             "name the key is built from."
                         )
 
                     variants[key] = {
-                        "checkpoint": checkpoint,
+                        "base_model": base_model,
                         "strategy": strategy,
                         "context_tokens": context,
                         "max_length": max_length,
@@ -117,19 +117,19 @@ def encode_variants(
 
     Every trial that samples a variant reuses these frames, so the corpus is
     windowed `len(variants)` times per sweep rather than once per trial.
-    Tokenizers are loaded once per checkpoint and shared across its variants.
+    Tokenizers are loaded once per base model and shared across its variants.
     """
     tokenizers: dict[str, Any] = {}
     encoded: dict[str, EncodedVariant] = {}
 
     for key, specification in variants.items():
-        checkpoint = specification["checkpoint"]
+        base_model = specification["base_model"]
 
-        if checkpoint not in tokenizers:
-            tokenizers[checkpoint] = AutoTokenizer.from_pretrained(checkpoint)
+        if base_model not in tokenizers:
+            tokenizers[base_model] = AutoTokenizer.from_pretrained(base_model)
 
         encoder = Encoder(
-            tokenizer=tokenizers[checkpoint],
+            tokenizer=tokenizers[base_model],
             target_label=target_label,
             language=language,
             max_length=specification["max_length"],
@@ -140,11 +140,11 @@ def encode_variants(
         )
 
         encoded[key] = EncodedVariant(
-            checkpoint=checkpoint,
+            base_model=base_model,
             strategy=specification["strategy"],
             context_tokens=specification["context_tokens"],
             max_length=specification["max_length"],
-            tokenizer=tokenizers[checkpoint],
+            tokenizer=tokenizers[base_model],
             label2id=encoder.label2id,
             id2label=encoder.id2label,
             train_rows=encode_partition(encoder, partitions["train"]),

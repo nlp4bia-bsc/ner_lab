@@ -47,7 +47,7 @@ class AssessmentResult:
 def train_model(
     split_dir: str | Path,
     output_dir: str | Path,
-    checkpoint: str,
+    base_model: str,
     target_label: str,
     language: str,
     architecture: str | Architecture = "linear",
@@ -76,7 +76,7 @@ def train_model(
     `train_validation` split trains once, a `fixed_holdout_kfold` split trains
     once per rotatable fold and aggregates. The fixed holdout is never read.
 
-    Artifacts go to `<output_dir>/<target_label>__<architecture>__<checkpoint>__<timestamp>/`,
+    Artifacts go to `<output_dir>/<target_label>__<architecture>__<base_model>__<timestamp>/`,
     with each fold in its own `fold_XX/` subdirectory. `run_manifest.json` is
     written before training starts, so a crashed run still explains itself.
 
@@ -98,11 +98,11 @@ def train_model(
     rotations = fold_rotations(data_manifest, folds)
 
     run_dir = Path(output_dir).resolve() / (
-        run_name or run_directory_name(target_label, architecture, checkpoint)
+        run_name or run_directory_name(target_label, architecture, base_model)
     )
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint)
+    tokenizer = AutoTokenizer.from_pretrained(base_model)
     encoder = Encoder(
         tokenizer=tokenizer,
         target_label=target_label,
@@ -122,7 +122,7 @@ def train_model(
         "mode": mode,
         "folds": rotations,
         "model": {
-            "checkpoint": checkpoint,
+            "base_model": base_model,
             "architecture": architecture_name(architecture),
             "architecture_kwargs": architecture_kwargs or {},
         },
@@ -148,7 +148,7 @@ def train_model(
         set_seed(resolved_arguments.seed)
 
         model = build_model(
-            checkpoint=checkpoint,
+            base_model=base_model,
             label2id=encoder.label2id,
             id2label=encoder.id2label,
             architecture=architecture,
@@ -189,7 +189,7 @@ def train_model(
             run_metadata=split_provenance(validation_index, partitions),
             model_encoding=model_encoding(
                 encoder=encoder,
-                checkpoint=checkpoint,
+                base_model=base_model,
                 architecture=architecture,
                 architecture_kwargs=architecture_kwargs,
             ),
@@ -295,13 +295,13 @@ def fold_rotations(
 def run_directory_name(
     target_label: str,
     architecture: str | Architecture,
-    checkpoint: str,
+    base_model: str,
     timestamp: str | None = None,
 ) -> str:
     """The directory one assessment writes into: what was trained, on what, when."""
     stamp = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    return f"{target_label}__{architecture_name(architecture)}__{Path(checkpoint).name}__{stamp}"
+    return f"{target_label}__{architecture_name(architecture)}__{Path(base_model).name}__{stamp}"
 
 
 def architecture_name(architecture: str | Architecture) -> str:
@@ -314,7 +314,7 @@ def architecture_name(architecture: str | Architecture) -> str:
 
 def model_encoding(
     encoder: Encoder,
-    checkpoint: str,
+    base_model: str,
     architecture: str | Architecture = "linear",
     architecture_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -328,7 +328,7 @@ def model_encoding(
     """
     return {
         "model": {
-            "checkpoint": checkpoint,
+            "base_model": base_model,
             "architecture": architecture_name(architecture),
             "architecture_kwargs": architecture_kwargs or {},
         },

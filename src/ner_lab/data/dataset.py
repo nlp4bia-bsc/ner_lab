@@ -8,7 +8,7 @@ from typing import Any
 
 import pandas as pd
 
-from ner_lab.data.corpus import build_corpus
+from ner_lab.data.corpus import build_corpus, count_labels
 from ner_lab.data.io import DEFAULT_PARQUET_COMPRESSION, read_corpus, write_corpus
 from ner_lab.data.split import ASSIGNMENTS_FILENAME, SplitResult, create_split
 from ner_lab.data.stratification import DEFAULT_RANDOM_STATE
@@ -144,6 +144,7 @@ def prepare_dataset(
         "normalize_labels": normalize_labels if source_parquet is None else None,
         "n_documents": len(corpus),
         "n_entities": int(corpus["n_entities"].sum()),
+        "n_entities_by_label": count_labels(corpus),
         "upstream_metadata": _upstream_metadata(source_parquet, metadata),
     }
     write_manifest(source_manifest, dataset_root / SOURCE_MANIFEST_FILENAME)

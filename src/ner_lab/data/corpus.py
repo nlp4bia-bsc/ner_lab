@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 from ner_lab.data.brat import read_annotations, resolve_documents
+from ner_lab.data.stratification import parse_document_label_counts
 
 DOCUMENT_COLUMNS = ["doc_id", "text", "entities_json", "n_entities"]
 
@@ -112,6 +113,21 @@ def validate_corpus(documents_df: pd.DataFrame) -> pd.DataFrame:
         _validate_entities(str(row.doc_id), str(row.text), str(row.entities_json))
 
     return corpus.reset_index(drop=True)
+
+
+def count_labels(documents_df: pd.DataFrame) -> dict[str, int]:
+    """
+    How many entities carry each label across the corpus, keyed by label.
+
+    Counts reflect the corpus as annotated: overlapping entities are resolved at
+    encoding time, so the totals describe the corpus rather than the entity set
+    any training run sees. Raises if a document's `n_entities` disagrees with its
+    `entities_json`.
+    """
+    labels, per_document = parse_document_label_counts(documents_df)
+    totals = per_document.sum(axis=0)
+
+    return {label: int(totals[index]) for index, label in enumerate(labels)}
 
 
 def document_fingerprints(documents_df: pd.DataFrame) -> pd.Series:

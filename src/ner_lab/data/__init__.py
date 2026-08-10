@@ -14,6 +14,7 @@ from ner_lab.data.brat import read_ann, read_annotation_tsv, read_annotations, r
 from ner_lab.data.corpus import (
     DOCUMENT_COLUMNS,
     build_corpus,
+    count_labels,
     document_fingerprints,
     validate_corpus,
 )
@@ -52,6 +53,7 @@ __all__ = [
     "assign_partitions",
     "build_balance_report",
     "build_corpus",
+    "count_labels",
     "create_split",
     "derive_dataset_name",
     "document_fingerprints",

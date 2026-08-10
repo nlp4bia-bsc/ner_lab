@@ -14,17 +14,17 @@ BUILTIN_ARCHITECTURES = ("linear", "crf")
 
 
 def build_model(
-    checkpoint: str,
+    base_model: str,
     label2id: dict,
     id2label: dict,
     architecture: str | Architecture = "linear",
     **architecture_kwargs: Any,
 ):
     """
-    Build a token-classification model over a pretrained checkpoint.
+    Build a token-classification model over a pretrained base model.
 
     `architecture` is `"linear"` (a linear head over the encoder), `"crf"`, or any
-    callable taking `(checkpoint, label2id, id2label, **kwargs)` and returning a
+    callable taking `(base_model, label2id, id2label, **kwargs)` and returning a
     model whose `forward` accepts `input_ids`/`attention_mask`/`labels` and returns
     an object with `loss` and `logits`.
 
@@ -35,7 +35,7 @@ def build_model(
     id2label = normalize_id2label(id2label)
 
     if callable(architecture):
-        return architecture(checkpoint, label2id, id2label, **architecture_kwargs)
+        return architecture(base_model, label2id, id2label, **architecture_kwargs)
 
     if architecture not in BUILTIN_ARCHITECTURES:
         raise ValueError(
@@ -46,15 +46,15 @@ def build_model(
     if architecture == "crf":
         from ner_lab.models.crf import CRFForTokenClassification
 
-        return CRFForTokenClassification(checkpoint, label2id, id2label, **architecture_kwargs)
+        return CRFForTokenClassification(base_model, label2id, id2label, **architecture_kwargs)
 
-    return build_linear_model(checkpoint, label2id, id2label, **architecture_kwargs)
+    return build_linear_model(base_model, label2id, id2label, **architecture_kwargs)
 
 
-def build_linear_model(checkpoint: str, label2id: dict, id2label: dict, **kwargs: Any):
+def build_linear_model(base_model: str, label2id: dict, id2label: dict, **kwargs: Any):
     """A pretrained encoder with the stock `AutoModelForTokenClassification` head."""
     return AutoModelForTokenClassification.from_pretrained(
-        checkpoint,
+        base_model,
         num_labels=len(label2id),
         label2id=normalize_label2id(label2id),
         id2label=normalize_id2label(id2label),

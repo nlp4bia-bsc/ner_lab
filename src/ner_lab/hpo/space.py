@@ -11,7 +11,7 @@ from ray.tune.search.sample import Categorical, Domain, Float, Integer
 DEFAULT_SEARCH_SPACE: dict[str, dict[str, Any]] = {
     "learning_rate": {"type": "loguniform", "low": 2e-5, "high": 6e-5},
     "weight_decay": {"type": "uniform", "low": 0.0, "high": 0.1},
-    "warmup_ratio": {"type": "uniform", "low": 0.0, "high": 0.1},
+    "warmup_steps": {"type": "uniform", "low": 0.0, "high": 0.1},
     "effective_train_batch_size": {"type": "choice", "categories": [16, 32, 64]},
     "lr_scheduler_type": {"type": "choice", "categories": ["linear", "cosine"]},
 }

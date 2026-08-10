@@ -78,7 +78,7 @@ def verify_end_to_end(checks: Checks) -> None:
 
     from transformers import AutoTokenizer
 
-    from fixtures import synthetic_corpus, tiny_checkpoint
+    from fixtures import synthetic_corpus, tiny_base_model
     from ner_lab.encoding import Encoder
     from ner_lab.models import build_model
     from ner_lab.evaluation import build_compute_metrics
@@ -91,9 +91,9 @@ def verify_end_to_end(checks: Checks) -> None:
     rows = encoder.encode(corpus)
 
     shared = tempfile.TemporaryDirectory()
-    checkpoint = tiny_checkpoint(Path(shared.name), tokenizer)
+    base_model = tiny_base_model(Path(shared.name), tokenizer)
 
-    model = build_model(str(checkpoint), encoder.label2id, encoder.id2label)
+    model = build_model(str(base_model), encoder.label2id, encoder.id2label)
     compute_metrics = build_compute_metrics(rows, tokenizer, encoder.id2label)
 
     checks.equal("a linear model gets the plain Trainer", resolve_trainer_class(model).__name__, "Trainer")
@@ -162,7 +162,7 @@ def verify_end_to_end(checks: Checks) -> None:
             (saved.paths["best_model"] / "tokenizer_config.json").exists(),
         )
 
-    crf = build_model(str(checkpoint), encoder.label2id, encoder.id2label, architecture="crf")
+    crf = build_model(str(base_model), encoder.label2id, encoder.id2label, architecture="crf")
 
     checks.equal("a CRF model gets the CRF Trainer", resolve_trainer_class(crf), CRFTrainer)
 

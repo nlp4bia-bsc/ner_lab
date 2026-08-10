@@ -24,7 +24,7 @@ dependencies = [
     "nervaluate>=0.2.0",
     "pyyaml>=6.0",
     "codecarbon>=3.2.9",
-    "pynvml>=13.0.1",
+    "nvidia-ml-py>=12.0.0",  # imported as pynvml; the pynvml distribution is deprecated
 ]
 
 [project.scripts]
