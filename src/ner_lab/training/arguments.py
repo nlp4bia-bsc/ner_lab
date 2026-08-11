@@ -32,6 +32,31 @@ DEFAULTS: dict[str, Any] = {
     "ddp_find_unused_parameters": False,
 }
 
+PRECISION_KEYS = ("fp16", "bf16")
+
+
+def default_precision(use_cpu: bool = False) -> dict[str, bool]:
+    """
+    The mixed precision the visible device can actually run.
+
+    bf16 carries fp32's exponent range, so a gradient never underflows the format
+    and no loss scaling is needed. fp16 must scale the loss to lift gradients into
+    a range it can represent, discard whichever steps overflow anyway, and can
+    diverge outright if the scale collapses. Tensor-core throughput is identical
+    for the two on every device that has bf16 at all, so there is nothing to trade
+    against that: bf16 wherever it exists, fp16 on pre-Ampere cards that lack it,
+    neither without CUDA.
+    """
+    import torch
+
+    if use_cpu or not torch.cuda.is_available():
+        return {"fp16": False, "bf16": False}
+
+    if torch.cuda.is_bf16_supported():
+        return {"fp16": False, "bf16": True}
+
+    return {"fp16": True, "bf16": False}
+
 
 def training_arguments(output_dir: str | Path, **overrides: Any) -> TrainingArguments:
     """
@@ -45,8 +70,19 @@ def training_arguments(output_dir: str | Path, **overrides: Any) -> TrainingArgu
     `compute_metrics` built by `ner_lab.evaluation.build_compute_metrics`. Pass
     `metric_for_best_model="eval_loss"` with `greater_is_better=False` to train
     without any span scoring.
+
+    Mixed precision is not in `DEFAULTS`: it is resolved per device by
+    `default_precision`, since no single value is correct on both an H100 and a
+    V100. Naming either `fp16` or `bf16` in `overrides` turns the resolution off
+    and takes exactly what you passed. Whichever way it lands is recorded in the
+    run manifest beside the GPU that ran it.
     """
-    settings = {**DEFAULTS, **overrides, "output_dir": str(output_dir)}
+    chosen = (
+        {key: False for key in PRECISION_KEYS}
+        if any(key in overrides for key in PRECISION_KEYS)
+        else default_precision(bool(overrides.get("use_cpu")))
+    )
+    settings = {**DEFAULTS, **chosen, **overrides, "output_dir": str(output_dir)}
 
     if "eval_strategy" in settings:
         try:

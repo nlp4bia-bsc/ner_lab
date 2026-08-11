@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from ner_lab.training.arguments import DEFAULTS, for_inference, training_arguments
+from ner_lab.training.arguments import (
+    DEFAULTS,
+    default_precision,
+    for_inference,
+    training_arguments,
+)
 from ner_lab.training.assessment import (
     AssessmentResult,
     aggregate_metrics,
@@ -40,6 +45,7 @@ __all__ = [
     "best_epoch_metrics",
     "build_summary",
     "dataset_summary",
+    "default_precision",
     "encode_partition",
     "ensure_int_list",
     "fold_rotations",
