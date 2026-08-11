@@ -11,12 +11,15 @@ from typing import Any, Callable
 
 import pandas as pd
 import torch
+from torch import nn
 from transformers import (
     DataCollatorForTokenClassification,
     EarlyStoppingCallback,
+    PreTrainedTokenizerBase,
     Trainer,
     TrainingArguments,
 )
+from transformers.trainer_utils import TrainOutput
 
 from ner_lab.encoding.rows import IGNORE_INDEX
 from ner_lab.training.dataset import to_dataset, validate_rows
@@ -50,7 +53,13 @@ class CRFTrainer(Trainer):
     one reach the evaluation stack in the same shape.
     """
 
-    def prediction_step(self, model, inputs, prediction_loss_only: bool, ignore_keys=None):
+    def prediction_step(
+        self,
+        model: nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
+        prediction_loss_only: bool,
+        ignore_keys: list[str] | None = None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
         from ner_lab.models.crf import decoded_paths_to_logits
 
         has_labels = "labels" in inputs
@@ -87,7 +96,7 @@ def resolve_trainer_class(model) -> type[Trainer]:
 
 def train(
     model,
-    tokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     train_rows: pd.DataFrame,
     validation_rows: pd.DataFrame,
     training_arguments: TrainingArguments,
@@ -254,7 +263,7 @@ def read_model_encoding(model_dir: str | Path) -> dict[str, Any]:
 
 def build_summary(
     trainer: Trainer,
-    train_output,
+    train_output: TrainOutput,
     train_rows: pd.DataFrame,
     validation_rows: pd.DataFrame,
     resources: dict[str, Any] | None = None,

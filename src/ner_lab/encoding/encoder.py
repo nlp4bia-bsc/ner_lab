@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from functools import partial
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import pandas as pd
 import pyarrow.parquet as pq
@@ -20,6 +20,9 @@ from ner_lab.encoding.segmentation import (
 )
 from ner_lab.encoding.tagging import build_iob2_labels, build_label_vocabulary
 from ner_lab.encoding.windowing import select_context_windows, select_greedy_windows
+
+if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizerBase
 
 WindowStrategy = Callable[[list[dict], list[dict], list[dict], str, int], list[dict]]
 
@@ -46,7 +49,7 @@ class Encoder:
 
     def __init__(
         self,
-        tokenizer,
+        tokenizer: PreTrainedTokenizerBase,
         target_label: str,
         language: str,
         max_length: int = 256,
@@ -214,9 +217,9 @@ def describe_encoder(encoder: Encoder) -> dict:
 
 def encoder_from_description(
     description: dict,
-    tokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     strategy: str | WindowStrategy | None = None,
-    **overrides,
+    **overrides: Any,
 ) -> Encoder:
     """
     Rebuild an `Encoder` from `describe_encoder`'s output.

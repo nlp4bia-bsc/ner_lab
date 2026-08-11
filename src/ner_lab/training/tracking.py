@@ -5,10 +5,19 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 import pandas as pd
-from transformers import TrainerCallback
+from transformers import (
+    Trainer,
+    TrainerCallback,
+    TrainerControl,
+    TrainerState,
+    TrainingArguments,
+)
+
+if TYPE_CHECKING:
+    from datasets import Dataset
 
 _silent_logger = logging.getLogger("ner_lab.training.tracking")
 _silent_logger.addHandler(logging.NullHandler())
@@ -27,9 +36,9 @@ class EpochMetricsLogger(TrainerCallback):
 
     def __init__(
         self,
-        trainer,
+        trainer: Trainer,
         scope: str = "eval",
-        train_dataset=None,
+        train_dataset: Dataset | None = None,
         train_compute_metrics: Callable[[Any], dict] | None = None,
     ) -> None:
         self.trainer = trainer
@@ -39,9 +48,16 @@ class EpochMetricsLogger(TrainerCallback):
         self.rows: list[dict[str, Any]] = []
         self._in_train_pass = False
 
-    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+    def on_evaluate(
+        self,
+        args: TrainingArguments,
+        state: TrainerState,
+        control: TrainerControl,
+        metrics: dict[str, float] | None = None,
+        **kwargs: Any,
+    ) -> None:
         if self._in_train_pass:
-            return control
+            return
 
         self._append("eval", metrics or {}, state.epoch, state.global_step)
 
@@ -52,15 +68,13 @@ class EpochMetricsLogger(TrainerCallback):
 
             try:
                 train_metrics = self.trainer.evaluate(
-                    eval_dataset=self.train_dataset, metric_key_prefix="train"
+                    eval_dataset=cast(Any, self.train_dataset), metric_key_prefix="train"
                 )
             finally:
                 self.trainer.compute_metrics = original
                 self._in_train_pass = False
 
             self._append("train", train_metrics, state.epoch, state.global_step)
-
-        return control
 
     def frame(self) -> pd.DataFrame:
         return pd.DataFrame(self.rows)

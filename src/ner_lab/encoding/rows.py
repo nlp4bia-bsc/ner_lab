@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizerBase
+
 IGNORE_INDEX = -100
 
 
-def special_token_template(tokenizer) -> tuple[list[int], list[int]]:
+def special_token_template(tokenizer: PreTrainedTokenizerBase) -> tuple[list[int], list[int]]:
     """
     The special-token ids a tokenizer adds before and after a single sequence.
 

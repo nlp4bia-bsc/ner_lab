@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import ast
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
 
 from ner_lab.encoding.rows import IGNORE_INDEX
+
+if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizerBase
 
 SPAN_COLUMNS = ["filename", "label", "start_span", "end_span", "text"]
 SCORED_SPAN_COLUMNS = [*SPAN_COLUMNS, "score"]
@@ -17,7 +20,7 @@ ROW_COLUMNS = ("doc_id", "input_ids", "labels", "token_offsets", "word_ids")
 
 def gold_spans(
     rows: pd.DataFrame,
-    tokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     id2label: dict,
     ignore_index: int = IGNORE_INDEX,
 ) -> pd.DataFrame:
@@ -48,7 +51,7 @@ def gold_spans(
 def predicted_spans(
     rows: pd.DataFrame,
     predictions: np.ndarray,
-    tokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     id2label: dict,
     ignore_index: int = IGNORE_INDEX,
     texts: dict[str, str] | None = None,

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pysbd
+
+if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizerBase
 
 
 def split_into_sentences(text: str, language: str) -> list[dict]:
@@ -20,7 +25,7 @@ def split_into_sentences(text: str, language: str) -> list[dict]:
     ]
 
 
-def tokenize_document(text: str, tokenizer) -> list[dict]:
+def tokenize_document(text: str, tokenizer: PreTrainedTokenizerBase) -> list[dict]:
     """
     Tokenize a whole document with a fast tokenizer, keeping each token's char span.
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -16,13 +16,16 @@ from ner_lab.evaluation.tokens import (
     token_metrics_by_entity,
 )
 
+if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizerBase
+
 BEST_METRIC = "span_strict_f1"
 
 
 def evaluate_predictions(
     rows: pd.DataFrame,
     predictions: np.ndarray,
-    tokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     id2label: dict,
     ignore_index: int = IGNORE_INDEX,
     min_overlap_percentage: float = 40.0,
@@ -63,7 +66,7 @@ def evaluate_predictions(
 
 def build_compute_metrics(
     rows: pd.DataFrame,
-    tokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     id2label: dict,
     ignore_index: int = IGNORE_INDEX,
     min_overlap_percentage: float = 40.0,
