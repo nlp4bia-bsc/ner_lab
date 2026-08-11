@@ -13,7 +13,7 @@ import pandas as pd
 EPOCH_METRICS_GLOB = "seed_*/epoch_metrics.parquet"
 
 EDGE_FRACTION = 0.05
-TIE_SET_NOTE_THRESHOLD = 3
+TIE_SET_NOTE_FRACTION = 0.5
 OOM_NOTE_THRESHOLD = 0.1
 EPOCH_CAP_NOTE_THRESHOLD = 0.25
 
@@ -388,10 +388,12 @@ def summarize_sweep(
             f"std ({format_difference(noise)}) of the best"
         )
 
-        if tied >= TIE_SET_NOTE_THRESHOLD:
+        share = (tied + 1) / len(completed)
+
+        if tied and share >= TIE_SET_NOTE_FRACTION:
             notes.append(
-                f"{tied} trials are indistinguishable from the winner at this spread — "
-                "the ranking among them is noise, not signal"
+                f"{tied + 1} of the {len(completed)} completed trials are indistinguishable "
+                f"at this spread ({share:.0%}) — the ranking among them is noise, not signal"
             )
 
     winner_rows: list[tuple[str, str]] = []
