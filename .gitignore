@@ -35,3 +35,6 @@ ENV/
 
 # Verification environment
 .venv-verify/
+
+# example files from library output
+examples/

@@ -19,6 +19,7 @@ EPOCH_CAP_NOTE_THRESHOLD = 0.25
 
 RULE_WIDTH = 66
 BODY_WIDTH = 96
+SMALL_UNIT_THRESHOLD = 0.01
 
 
 def format_value(value: Any) -> str:
@@ -33,6 +34,50 @@ def format_value(value: Any) -> str:
         return f"{value:.2e}"
 
     return f"{value:.4g}"
+
+
+def format_difference(value: float) -> str:
+    """
+    A gap or an across-seed spread, kept visible when it is small enough to matter.
+
+    Scores keep a fixed four decimals so two of them line up and compare by eye.
+    The differences between them do not: a gap of 3e-05 is the number deciding
+    whether a winner is real, and `0.0000` reads as though there were none.
+    """
+    if value == 0:
+        return "0"
+
+    return f"{value:.1e}" if abs(value) < 1e-4 else f"{value:.4f}"
+
+
+def format_duration(seconds: float) -> str:
+    """A duration as the two coarsest units that describe it."""
+    hours, remainder = divmod(int(seconds), 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+
+    if minutes:
+        return f"{minutes}m{seconds:02d}s"
+
+    return f"{seconds}s"
+
+
+def format_quantity(value: float, unit: str, scale: float, small_unit: str) -> str:
+    """
+    A physical total in whichever of its two units keeps significant digits on show.
+
+    A sweep's emissions run to fractions of a kilogram, so a fixed `kg` reading
+    rounds most of them to zero; the same number in grams reads at a glance.
+    """
+    if value == 0:
+        return f"0 {unit}"
+
+    if abs(value) < SMALL_UNIT_THRESHOLD:
+        return f"{value * scale:.4g} {small_unit}"
+
+    return f"{value:.4g} {unit}"
 
 
 def trial_outcomes(trials: pd.DataFrame, metric: str) -> dict[str, pd.Series]:
@@ -153,7 +198,7 @@ def dimension_effects(
         )
         described = " · ".join(
             f"{category} {row['mean']:.4f}"
-            + (f" ±{row['std']:.4f}" if pd.notna(row["std"]) else "")
+            + (f" ±{format_difference(row['std'])}" if pd.notna(row["std"]) else "")
             + f" ({int(row['count'])})"
             for category, row in grouped.iterrows()
         )
@@ -232,7 +277,7 @@ def cost_lines(trials: pd.DataFrame) -> list[tuple[str, str]]:
     duration = total("duration_sec")
 
     if duration is not None:
-        lines.append(("wall time", f"{duration / 3600:.2f} h"))
+        lines.append(("wall time", format_duration(duration)))
 
     energy, emissions = total("energy_kwh"), total("emissions_kg_co2")
 
@@ -240,9 +285,9 @@ def cost_lines(trials: pd.DataFrame) -> list[tuple[str, str]]:
         parts = []
 
         if energy is not None:
-            parts.append(f"{energy:.3f} kWh")
+            parts.append(format_quantity(energy, "kWh", 1000, "Wh"))
         if emissions is not None:
-            parts.append(f"{emissions:.3f} kg CO2")
+            parts.append(format_quantity(emissions, "kg CO2", 1000, "g CO2"))
 
         lines.append(("energy", " · ".join(parts)))
 
@@ -322,7 +367,7 @@ def summarize_sweep(
         for part in (
             str(best.get("trial_id")) if best.get("trial_id") else "",
             f"{int(seeds)} seed{'' if seeds == 1 else 's'}" if pd.notna(seeds) else "",
-            f"across-seed std {spread:.4f}" if pd.notna(spread) else "",
+            f"across-seed std {format_difference(spread)}" if pd.notna(spread) else "",
         )
         if part
     )
@@ -330,7 +375,9 @@ def summarize_sweep(
 
     if len(ranked) > 1:
         gap = abs(float(best[metric]) - float(ranked.iloc[1][metric]))
-        header.append(f"Runner-up   {ranked.iloc[1][metric]:.4f}   gap {gap:.4f}")
+        header.append(
+            f"Runner-up   {ranked.iloc[1][metric]:.4f}   gap {format_difference(gap)}"
+        )
 
     noise = noise_scale(completed, metric)
 
@@ -338,7 +385,7 @@ def summarize_sweep(
         tied = int((abs(completed[metric] - float(best[metric])) <= noise).sum()) - 1
         header.append(
             f"Tie set     {tied} other trial{'' if tied == 1 else 's'} within one across-seed "
-            f"std ({noise:.4f}) of the best"
+            f"std ({format_difference(noise)}) of the best"
         )
 
         if tied >= TIE_SET_NOTE_THRESHOLD:

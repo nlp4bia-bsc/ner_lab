@@ -17,6 +17,7 @@ from transformers import TrainingArguments
 from ner_lab.encoding.encoder import WindowStrategy
 from ner_lab.encoding.overlaps import OverlapPolicy
 from ner_lab.data.split import split_paths
+from ner_lab.hpo.progress import SweepProgress
 from ner_lab.hpo.report import summarize_sweep
 from ner_lab.hpo.space import (
     DEFAULT_SEARCH_SPACE,
@@ -51,6 +52,7 @@ from ner_lab.training.tracking import gpu_hardware_info
 TRIALS_SUMMARY_FILENAME = "trials_summary.parquet"
 HPO_SUMMARY_FILENAME = "hpo_summary.json"
 WINNER_CONFIG_FILENAME = "winner.yaml"
+TUNE_VERBOSITY = 0
 
 HPO_ARGUMENT_DEFAULTS: dict[str, Any] = {
     "num_train_epochs": 40,
@@ -140,8 +142,10 @@ def search_hyperparameters(
     search dimension the training arguments have no field for costs one epoch rather
     than the sweep's first parallel wave.
 
-    `report` prints the end-of-sweep summary; it is on the result either way, as
-    `HPOResult.report`.
+    `report` prints two lines per trial while the sweep runs and the end-of-sweep
+    summary when it finishes; the summary is on the result either way, as
+    `HPOResult.report`. Ray Tune's own console output is off regardless, so
+    `report=False` makes the sweep silent.
 
     A k-fold split is searched against one rotation, `validation_index`
     (defaulting to the first rotatable fold) — searching across all folds would
@@ -199,7 +203,7 @@ def search_hyperparameters(
     full_space = {**space, "variant": tune.choice(list(variants))}
 
     if not ray.is_initialized():
-        ray.init()
+        ray.init(log_to_driver=False)
 
     gpus_per_trial = 1 if ray.cluster_resources().get("GPU", 0) else 0
 
@@ -276,7 +280,21 @@ def search_hyperparameters(
                 "variant": tune.grid_search(list(variants)),
             },
             tune_config=tune.TuneConfig(num_samples=1),
-            run_config=tune.RunConfig(name="smoke_test", storage_path=str(run_dir)),
+            run_config=tune.RunConfig(
+                name="smoke_test",
+                storage_path=str(run_dir),
+                verbose=TUNE_VERBOSITY,
+                callbacks=[
+                    SweepProgress(
+                        metric=metric_key,
+                        greater_is_better=greater_is_better,
+                        total=len(variants),
+                        stage="smoke",
+                    )
+                ]
+                if report
+                else [],
+            ),
         ).fit()
 
         if smoke_result.num_errors:
@@ -304,6 +322,17 @@ def search_hyperparameters(
         run_config=tune.RunConfig(
             name="trials",
             storage_path=str(run_dir),
+            verbose=TUNE_VERBOSITY,
+            callbacks=[
+                SweepProgress(
+                    metric=metric_key,
+                    greater_is_better=greater_is_better,
+                    total=n_trials,
+                    stage="trial",
+                )
+            ]
+            if report
+            else [],
             failure_config=FailureConfig(max_failures=0, fail_fast=True),
         ),
     ).fit()

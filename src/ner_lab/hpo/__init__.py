@@ -14,6 +14,7 @@ from ner_lab.hpo.search import (
     winner_configuration,
     write_winner_config,
 )
+from ner_lab.hpo.progress import SweepProgress
 from ner_lab.hpo.report import summarize_sweep
 from ner_lab.hpo.space import (
     DEFAULT_SEARCH_SPACE,
@@ -43,6 +44,7 @@ __all__ = [
     "HPO_ARGUMENT_DEFAULTS",
     "EncodedVariant",
     "HPOResult",
+    "SweepProgress",
     "best_trial",
     "build_domain",
     "build_search_space",
