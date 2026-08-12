@@ -29,6 +29,7 @@ from ner_lab.data import (
     read_annotations,
     read_corpus,
     read_split,
+    resolve_mismatch,
     split_documents,
     validate_assignments,
     validate_corpus,
@@ -183,6 +184,8 @@ def verify_corpus(checks: Checks, workspace: Path) -> None:
 
     orphaned = annotations.assign(filename="ghost")
     checks.raises("orphan annotation is caught", ValueError, build_corpus, documents, orphaned)
+
+    verify_mismatch_policies(checks, documents, annotations)
 
     corpus_path = workspace / "documents.parquet"
     write_corpus(corpus, corpus_path)
@@ -429,6 +432,53 @@ def verify_split(checks: Checks, workspace: Path) -> None:
     )
 
 
+def verify_mismatch_policies(
+    checks: Checks,
+    documents: dict[str, str],
+    annotations: pd.DataFrame,
+) -> None:
+    unannotated = sorted(documents)[-1]
+    partial = annotations[annotations["filename"] != unannotated]
+    mixed = pd.concat([partial, partial.head(1).assign(filename="ghost")], ignore_index=True)
+
+    checks.raises("mismatch raises by default", ValueError, build_corpus, documents, mixed)
+
+    documents_win = build_corpus(documents, mixed, on_mismatch="documents")
+
+    checks.equal("documents policy keeps every document", len(documents_win), len(documents))
+    checks.equal(
+        "documents policy leaves the unannotated document empty",
+        int(documents_win.loc[documents_win["doc_id"] == unannotated, "n_entities"].iloc[0]),
+        0,
+    )
+
+    annotations_win = build_corpus(documents, mixed, on_mismatch="annotations")
+
+    checks.equal(
+        "annotations policy drops the unannotated document",
+        len(annotations_win),
+        len(documents) - 1,
+    )
+    checks.check(
+        "annotations policy invents no document for the orphan",
+        "ghost" not in set(annotations_win["doc_id"]),
+    )
+
+    kept_documents, kept_annotations, report = resolve_mismatch(documents, mixed, "annotations")
+
+    checks.equal("report names the dropped document", report.dropped_documents, [unannotated])
+    checks.equal("report names the orphan annotation", report.dropped_annotation_files, ["ghost"])
+    checks.equal("kept documents match the report", len(kept_documents), len(documents) - 1)
+    checks.equal("kept annotations drop the orphan", len(kept_annotations), len(partial))
+
+    _, _, clean = resolve_mismatch(documents, annotations, "annotations")
+
+    checks.equal("an agreeing corpus drops nothing", clean.dropped_documents, [])
+    checks.raises(
+        "unknown policy raises", ValueError, resolve_mismatch, documents, mixed, "txt"
+    )
+
+
 def verify_prepare_dataset(checks: Checks, workspace: Path) -> None:
     documents, annotations = synthetic_documents(30)
     txt_dir, ann_dir = write_brat(workspace / "prepare_source", documents, annotations)
@@ -459,6 +509,48 @@ def verify_prepare_dataset(checks: Checks, workspace: Path) -> None:
         sum(manifest["n_entities_by_label"].values()),
         manifest["n_entities"],
     )
+
+    checks.equal("manifest records the mismatch policy", manifest["on_mismatch"], "error")
+    checks.equal("nothing is dropped when the sources agree", manifest["dropped_documents"], [])
+
+    (txt_dir / "unannotated.txt").write_text("Sin anotaciones en este documento.", encoding="utf-8")
+    (ann_dir / "ghost.ann").write_text("T1\tDISEASE 0 6\tfiebre\n", encoding="utf-8")
+
+    checks.raises(
+        "prepare_dataset raises on a mismatch by default",
+        ValueError,
+        prepare_dataset,
+        output_dir=output_dir,
+        documents=txt_dir,
+        annotations=ann_dir,
+        dataset_name="synthetic_mismatch",
+    )
+
+    reconciled = prepare_dataset(
+        output_dir=output_dir,
+        documents=txt_dir,
+        annotations=ann_dir,
+        dataset_name="synthetic_reconciled",
+        on_mismatch="annotations",
+    )
+    reconciled_manifest = json.loads(
+        (reconciled.dataset_root / "source_manifest.json").read_text()
+    )
+
+    checks.equal("the reconciled corpus keeps only annotated documents", len(reconciled.corpus), len(documents))
+    checks.equal(
+        "the manifest names the dropped document",
+        reconciled_manifest["dropped_documents"],
+        ["unannotated"],
+    )
+    checks.equal(
+        "the manifest names the dropped annotation file",
+        reconciled_manifest["dropped_annotation_files"],
+        ["ghost"],
+    )
+
+    (txt_dir / "unannotated.txt").unlink()
+    (ann_dir / "ghost.ann").unlink()
 
     kfold = prepare_dataset(
         output_dir=output_dir,

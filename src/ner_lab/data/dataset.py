@@ -8,7 +8,14 @@ from typing import Any
 
 import pandas as pd
 
-from ner_lab.data.corpus import build_corpus, count_labels
+from ner_lab.data.brat import read_annotations, resolve_documents
+from ner_lab.data.corpus import (
+    MismatchPolicy,
+    SourceMismatch,
+    build_corpus,
+    count_labels,
+    resolve_mismatch,
+)
 from ner_lab.data.io import DEFAULT_PARQUET_COMPRESSION, read_corpus, write_corpus
 from ner_lab.data.split import ASSIGNMENTS_FILENAME, SplitResult, create_split
 from ner_lab.data.stratification import DEFAULT_RANDOM_STATE
@@ -97,6 +104,7 @@ def prepare_dataset(
     source_parquet: str | Path | None = None,
     dataset_name: str | None = None,
     normalize_labels: bool = False,
+    on_mismatch: MismatchPolicy = "error",
     split: bool = True,
     validation_size: float = 0.2,
     kfolds: int | None = None,
@@ -117,6 +125,10 @@ def prepare_dataset(
 
     Set `split=False` to write only the canonical corpus. Set `kfolds` for
     fixed-holdout cross-validation instead of a train/validation split.
+
+    Documents and annotations that name different files raise by default. Set
+    `on_mismatch` to `"documents"` or `"annotations"` to reconcile them instead;
+    whatever a policy dropped is recorded in `source_manifest.json`.
     """
     _validate_inputs(documents, annotations, source_parquet, kfolds, holdout_fold)
 
@@ -128,11 +140,18 @@ def prepare_dataset(
     dataset_root = Path(output_dir) / dataset_name
     dataset_root.mkdir(parents=True, exist_ok=True)
 
+    mismatch: SourceMismatch | None = None
+
     if source_parquet is not None:
         corpus_path = Path(source_parquet)
         corpus = read_corpus(corpus_path)
     else:
-        corpus = build_corpus(documents, annotations, normalize_labels=normalize_labels)
+        documents_dict, annotations_df, mismatch = resolve_mismatch(
+            resolve_documents(documents),
+            read_annotations(annotations, normalize_labels=normalize_labels),
+            on_mismatch,
+        )
+        corpus = build_corpus(documents_dict, annotations_df)
         corpus_path = write_corpus(corpus, dataset_root / corpus_filename, compression)
 
     source_manifest: dict[str, Any] = {
@@ -142,6 +161,11 @@ def prepare_dataset(
         "source_parquet": str(corpus_path),
         "source_parquet_sha256": file_sha256(corpus_path),
         "normalize_labels": normalize_labels if source_parquet is None else None,
+        "on_mismatch": on_mismatch if source_parquet is None else None,
+        "dropped_documents": mismatch.dropped_documents if mismatch is not None else None,
+        "dropped_annotation_files": (
+            mismatch.dropped_annotation_files if mismatch is not None else None
+        ),
         "n_documents": len(corpus),
         "n_entities": int(corpus["n_entities"].sum()),
         "n_entities_by_label": count_labels(corpus),

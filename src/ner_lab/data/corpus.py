@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import pandas as pd
 
@@ -12,6 +14,8 @@ from ner_lab.data.brat import read_annotations, resolve_documents
 from ner_lab.data.stratification import parse_document_label_counts
 
 DOCUMENT_COLUMNS = ["doc_id", "text", "entities_json", "n_entities"]
+
+MismatchPolicy = Literal["error", "documents", "annotations"]
 
 DOCUMENT_DTYPES = {
     "doc_id": "string",
@@ -21,10 +25,74 @@ DOCUMENT_DTYPES = {
 }
 
 
+@dataclass(frozen=True)
+class SourceMismatch:
+    dropped_documents: list[str] = field(default_factory=list)
+    dropped_annotation_files: list[str] = field(default_factory=list)
+
+
+def resolve_mismatch(
+    documents: dict[str, str],
+    annotations: pd.DataFrame,
+    on_mismatch: MismatchPolicy = "error",
+) -> tuple[dict[str, str], pd.DataFrame, SourceMismatch]:
+    """
+    Reconcile a document set with an annotation set that names different files.
+
+    `error` raises when an annotated filename has no document, which is the
+    default: a missing document is usually a broken export rather than an
+    intentional subset. `documents` lets the document set win, dropping
+    annotations that name no document. `annotations` lets the annotation set
+    win, additionally dropping documents that carry no annotation at all.
+
+    An annotated filename with no document is dropped under both non-raising
+    policies — there is no text for its offsets to refer to.
+    """
+    if on_mismatch not in ("error", "documents", "annotations"):
+        raise ValueError(
+            f"Unknown on_mismatch policy: {on_mismatch!r}. "
+            "Expected 'error', 'documents', or 'annotations'."
+        )
+
+    filenames = annotations["filename"].astype(str)
+    orphans = sorted(set(filenames) - set(documents))
+
+    if on_mismatch == "error":
+        if orphans:
+            raise ValueError(
+                f"{len(orphans)} annotated filename(s) have no matching document and "
+                f"would be silently dropped: {orphans[:10]}. Pass "
+                "on_mismatch='documents' to drop them, or on_mismatch='annotations' "
+                "to keep only the documents that are annotated."
+            )
+
+        return documents, annotations, SourceMismatch()
+
+    unannotated = sorted(set(documents) - set(filenames)) if on_mismatch == "annotations" else []
+    dropped = set(unannotated)
+
+    kept_documents = {name: text for name, text in documents.items() if name not in dropped}
+
+    if documents and not kept_documents:
+        raise ValueError(
+            f"on_mismatch={on_mismatch!r} dropped every document: none of the "
+            f"{len(documents)} document(s) carry an annotation."
+        )
+
+    kept_annotations = annotations.loc[filenames.isin(list(kept_documents))].reset_index(drop=True)
+
+    return (
+        kept_documents,
+        kept_annotations,
+        SourceMismatch(dropped_documents=unannotated, dropped_annotation_files=orphans),
+    )
+
+
 def build_corpus(
     documents: dict[str, str] | str | Path,
     annotations: pd.DataFrame | str | Path,
     normalize_labels: bool = False,
+    on_mismatch: MismatchPolicy = "error",
     validate: bool = True,
 ) -> pd.DataFrame:
     """
@@ -39,17 +107,16 @@ def build_corpus(
     Source label strings are kept verbatim. Set `normalize_labels=True` to map
     them through `LABEL_ALIASES` onto this library's clinical vocabulary, and
     `validate=False` to skip the whole-corpus check on a corpus you trust.
+
+    Documents and annotations that name different files raise by default; see
+    `resolve_mismatch` for the `on_mismatch` policies that reconcile them
+    instead. Call it directly to learn what a policy dropped.
     """
     documents_dict = resolve_documents(documents)
     annotations_df = read_annotations(annotations, normalize_labels=normalize_labels)
-
-    orphans = sorted(set(annotations_df["filename"].astype(str)) - set(documents_dict))
-
-    if orphans:
-        raise ValueError(
-            f"{len(orphans)} annotated filename(s) have no matching document and "
-            f"would be silently dropped: {orphans[:10]}"
-        )
+    documents_dict, annotations_df, _ = resolve_mismatch(
+        documents_dict, annotations_df, on_mismatch
+    )
 
     rows: list[dict[str, object]] = []
 
