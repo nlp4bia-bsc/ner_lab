@@ -21,6 +21,11 @@ from ner_lab.training.assessment import (
     train_model,
 )
 from ner_lab.training.dataset import ensure_int_list, is_encoded, to_dataset, validate_rows
+from ner_lab.training.devices import (
+    effective_train_batch_size,
+    multi_device_message,
+    require_single_device,
+)
 from ner_lab.training.tracking import EpochMetricsLogger, ResourceTracker, gpu_hardware_info
 from ner_lab.training.trainer import (
     CRFTrainer,
@@ -46,6 +51,7 @@ __all__ = [
     "build_summary",
     "dataset_summary",
     "default_precision",
+    "effective_train_batch_size",
     "encode_partition",
     "ensure_int_list",
     "fold_rotations",
@@ -53,9 +59,11 @@ __all__ = [
     "gpu_hardware_info",
     "is_encoded",
     "model_encoding",
+    "multi_device_message",
     "read_data_manifest",
     "read_model_encoding",
     "remove_checkpoints",
+    "require_single_device",
     "resolve_trainer_class",
     "resolve_training_arguments",
     "run_directory_name",

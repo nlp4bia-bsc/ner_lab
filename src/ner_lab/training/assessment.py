@@ -21,6 +21,7 @@ from ner_lab.evaluation.metrics import build_compute_metrics
 from ner_lab.models.registry import Architecture, build_model
 from ner_lab.provenance import read_manifest, write_manifest
 from ner_lab.training.arguments import training_arguments as build_training_arguments
+from ner_lab.training.devices import effective_train_batch_size, require_single_device
 from ner_lab.training.tracking import gpu_hardware_info
 from ner_lab.training.trainer import train
 
@@ -65,6 +66,7 @@ def train_model(
     include_confusion: bool = False,
     save_model: bool = False,
     track_resources: bool = True,
+    allow_multi_device: bool = False,
     folds: Sequence[int] | None = None,
     random_state: int | None = None,
     run_name: str | None = None,
@@ -91,6 +93,15 @@ def train_model(
     carries an `encoding.json` beside its weights, which is what
     `ner_lab.inference` loads. Each fold gets a freshly built model, and the
     previous fold's is released before the next one is built.
+
+    More than one visible GPU raises, because `Trainer` would silently train at
+    `per_device_train_batch_size x n_gpu` on a schedule that is as many times
+    shorter — a configuration `ner_lab.hpo` searched on one device is not the same
+    configuration on four. `allow_multi_device` downgrades that to a warning for
+    callers who want the throughput and accept that the batch size and the
+    learning-rate schedule are no longer the ones that were tuned. Both the flag
+    and the resulting `effective_train_batch_size` go into the run manifest, so a
+    run that waived the guard says so on paper rather than only in its stderr.
     """
     split_dir = Path(split_dir).resolve()
     data_manifest = read_data_manifest(split_dir)
@@ -116,6 +127,10 @@ def train_model(
 
     resolved_arguments = resolve_training_arguments(training_arguments, run_dir, random_state)
 
+    device_count = require_single_device(
+        resolved_arguments, allow_multi_device=allow_multi_device
+    )
+
     manifest = {
         "split_dir": str(split_dir),
         "data_manifest": data_manifest,
@@ -130,6 +145,12 @@ def train_model(
         "evaluation": {"min_overlap_percentage": min_overlap_percentage},
         "training_arguments": resolved_arguments.to_dict(),
         "hardware": gpu_hardware_info(),
+        "devices": {
+            "allow_multi_device": allow_multi_device,
+            "effective_train_batch_size": effective_train_batch_size(
+                resolved_arguments, device_count
+            ),
+        },
     }
     manifest_path = write_manifest(manifest, run_dir / RUN_MANIFEST_FILENAME)
 

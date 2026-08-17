@@ -18,6 +18,7 @@ from ner_lab.evaluation.metrics import build_compute_metrics
 from ner_lab.hpo.space import resolve_batch_sizes
 from ner_lab.hpo.variants import EncodedVariant
 from ner_lab.models.registry import Architecture, build_model
+from ner_lab.training.devices import require_single_device
 from ner_lab.training.tracking import ResourceTracker
 from ner_lab.training.trainer import train
 
@@ -60,27 +61,6 @@ def validate_search_space(dimensions: Iterable[str]) -> None:
         f"Unknown search dimension(s): {reported}. A dimension must name a "
         f"`TrainingArguments` field or one of {RESERVED_DIMENSIONS}."
     )
-
-
-def require_single_device() -> None:
-    """
-    Refuse to run a trial across several visible GPUs.
-
-    `per_device_train_batch_size` is per device, so the batch HuggingFace actually
-    trains at is `micro x devices x accumulation`, while `resolve_batch_sizes`
-    guarantees only `micro x accumulation`. Each extra visible device multiplies the
-    searched batch size, misrecords it in the manifest, and leaves the winning
-    configuration unreproducible on the single GPU that final training will use.
-    """
-    visible = torch.cuda.device_count() if torch.cuda.is_available() else 0
-
-    if visible > 1:
-        raise RuntimeError(
-            f"{visible} GPUs are visible to this trial; a trial must see at most one. "
-            "Under Ray each trial reserves exactly one, so this means the reservation "
-            "was bypassed; set CUDA_VISIBLE_DEVICES to a single device. Running more "
-            "trials in parallel beats splitting one trial across devices."
-        )
 
 
 def metric_greater_is_better(arguments: TrainingArguments) -> bool:
@@ -179,7 +159,14 @@ def run_trial(
     if seeds_per_trial < 1:
         raise ValueError("seeds_per_trial must be at least 1.")
 
-    require_single_device()
+    require_single_device(
+        base_arguments,
+        context=(
+            "Under Ray each trial reserves exactly one GPU, so this means the "
+            "reservation was bypassed. Running more trials in parallel beats "
+            "splitting one trial across devices."
+        ),
+    )
 
     metric = base_arguments.metric_for_best_model
 

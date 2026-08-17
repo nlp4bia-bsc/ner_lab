@@ -300,6 +300,16 @@ def verify_end_to_end(checks: Checks) -> None:
         "the manifest records the resolved training arguments",
         manifest["training_arguments"]["num_train_epochs"] == 1,
     )
+    checks.equal(
+        "the manifest records the batch a step really covers",
+        manifest["devices"]["effective_train_batch_size"],
+        4,
+    )
+    checks.equal(
+        "the manifest records that the device guard was not waived",
+        manifest["devices"]["allow_multi_device"],
+        False,
+    )
 
     narrowed = train_model(
         split_dir=kfold_split,

@@ -67,6 +67,87 @@ def verify_arguments(checks: Checks) -> None:
         checks.equal("other defaults survive an override", overridden.weight_decay, 0.01)
 
 
+def verify_devices(checks: Checks) -> None:
+    try:
+        import torch
+    except ImportError:
+        checks.skip("require_single_device", "torch is not installed in this environment")
+        return
+
+    import tempfile
+    import warnings
+
+    from ner_lab.training import (
+        effective_train_batch_size,
+        require_single_device,
+        training_arguments,
+    )
+
+    available, count = torch.cuda.is_available, torch.cuda.device_count
+
+    with tempfile.TemporaryDirectory() as tmp:
+        arguments = training_arguments(tmp, per_device_train_batch_size=16, fp16=False)
+        accumulating = training_arguments(
+            tmp, per_device_train_batch_size=16, gradient_accumulation_steps=2, fp16=False
+        )
+        on_cpu = training_arguments(tmp, use_cpu=True)
+
+        checks.equal(
+            "no device still trains one batch a step",
+            effective_train_batch_size(arguments, 0),
+            16,
+        )
+        checks.equal(
+            "accumulation multiplies the batch",
+            effective_train_batch_size(accumulating, 1),
+            32,
+        )
+        checks.equal(
+            "every device multiplies it again",
+            effective_train_batch_size(accumulating, 4),
+            128,
+        )
+
+        try:
+            torch.cuda.is_available = lambda: False
+            checks.equal("no CUDA trains on no GPU", require_single_device(arguments), 0)
+
+            torch.cuda.is_available = lambda: True
+            torch.cuda.device_count = lambda: 1
+            checks.equal("one visible GPU passes", require_single_device(arguments), 1)
+
+            torch.cuda.device_count = lambda: 4
+            checks.equal("use_cpu ignores the visible GPUs", require_single_device(on_cpu), 0)
+            checks.raises(
+                "four visible GPUs raise",
+                RuntimeError,
+                require_single_device,
+                arguments,
+                match="16 x 4 devices x 1 accumulation = 64",
+            )
+            checks.raises(
+                "the caller's context reaches the message",
+                RuntimeError,
+                require_single_device,
+                arguments,
+                context="reservation was bypassed",
+                match="reservation was bypassed",
+            )
+
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                allowed = require_single_device(arguments, allow_multi_device=True)
+
+            checks.equal("allow_multi_device returns the count", allowed, 4)
+            checks.equal("it warns exactly once", len(caught), 1)
+            checks.check(
+                "the warning names the batch it will really train at",
+                caught and "= 64" in str(caught[0].message),
+            )
+        finally:
+            torch.cuda.is_available, torch.cuda.device_count = available, count
+
+
 def verify_end_to_end(checks: Checks) -> None:
     try:
         import torch  # noqa: F401
@@ -224,6 +305,7 @@ def main() -> int:
 
     verify_rows(checks)
     verify_arguments(checks)
+    verify_devices(checks)
     verify_end_to_end(checks)
 
     return checks.report()
