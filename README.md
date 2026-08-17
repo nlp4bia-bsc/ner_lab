@@ -275,7 +275,8 @@ assessment.run_dir                         # where everything was written
 | `track_resources` | `True` | Wall clock, energy, emissions and peak VRAM per run, via codecarbon. |
 | `folds` | `None` | Narrow a k-fold run to specific validation folds. Invalid without a fixed holdout. |
 | `random_state` | `None` | Overrides `TrainingArguments.seed`. |
-| `run_name` | derived | Overrides the derived `<target_label>__<architecture>__<base_model>__<timestamp>` directory name. |
+| `allow_multi_device` | `False` | Permit a run to see several GPUs, warning loudly, instead of refusing. |
+| `overwrite` | `False` | Replace a run already occupying `output_dir` instead of refusing. |
 
 Everything after `language` configures the `Encoder`, `build_model` and `train` that this
 assembles. Build those yourself and call `ner_lab.training.train` if the assembly is in the
@@ -289,7 +290,7 @@ model: one per fold would keep every fold's weights resident while the next one 
 **Writes:**
 
 ```
-<output_dir>/<target_label>__<architecture>__<base_model>__<timestamp>/
+<output_dir>/                  the run directory itself: nothing is derived or nested
     run_manifest.json          written before training starts, so a crash is debuggable
     fold_metrics.parquet       one row per run: selection metric, best epoch, resources
     assessment_summary.json    mean and standard deviation across runs
@@ -376,7 +377,7 @@ sweep.trials                     # DataFrame, one row per trial
 | `smoke_test` | `True` | A one-epoch, single-seed trial per variant, run before the sweep — a config bug or an unloadable base model costs one epoch, not N parallel hours. |
 | `track_resources` | `True` | Energy, emissions and peak VRAM per trial. |
 | `report` | `True` | Prints the end-of-sweep summary. It is on `HPOResult.report` either way. |
-| `run_name` | derived | Overrides the derived sweep directory name. |
+| `overwrite` | `False` | Replace a run already occupying `output_dir` instead of refusing. |
 
 **GPUs are not a parameter.** A trial reserves exactly one GPU when Ray reports any, and runs
 on CPU when it reports none — so on an 8-GPU node you get eight trials in parallel, never one
@@ -412,23 +413,24 @@ them.
 **Writes:**
 
 ```
-<output_dir>/<target_label>__<architecture>__<base_model>__<timestamp>/
+<output_dir>/                  the sweep directory itself: nothing is derived or nested
     run_manifest.json          before the sweep starts: space, variants, provenance
     trials_summary.parquet     one row per trial: sampled values, score, spread, resources
     hpo_summary.json           the winner, raw and as a train_model config
     winner.yaml                the same winner block, runnable by `ner-lab run`
     smoke_test/, trials/       Ray's own per-trial directories
+    final_train/               where winner.yaml sends the final training run
 ```
 
 `winner.yaml` is the `train_model` block from `hpo_summary.json` as a config file, so the
 winning trial reaches the assessment stage without being retyped:
 
 ```bash
-ner-lab run assets/sweeps/<run>/winner.yaml --output-dir assets/runs
+ner-lab run assets/sweeps/<run>/winner.yaml
 ```
 
-Its `output_dir` is the sweep's own, which puts the training run beside the sweep unless
-`--output-dir` says otherwise. Run it — the sweep's argmax over noisy scores is mildly
+Its `output_dir` is `<the sweep's directory>/final_train`, so it runs as written and keeps the
+final model with the sweep that chose it; `--output-dir` sends it elsewhere. Run it — the sweep's argmax over noisy scores is mildly
 optimistic, so the reportable number is that assessment's k-fold mean ± std, not the sweep's.
 
 ```yaml

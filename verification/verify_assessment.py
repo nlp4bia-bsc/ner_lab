@@ -97,6 +97,42 @@ def verify_naming(checks: Checks) -> None:
     checks.equal("a builtin architecture keeps its name", architecture_name("linear"), "linear")
 
 
+def verify_run_dir_claim(checks: Checks) -> None:
+    from ner_lab.provenance import write_manifest
+    from ner_lab.training.assessment import RUN_MANIFEST_FILENAME, claim_run_dir
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+
+        claimed = claim_run_dir(root / "fresh")
+
+        checks.equal("output_dir is the run directory", claimed, (root / "fresh").resolve())
+        checks.check("it is created if absent", claimed.is_dir())
+        checks.check(
+            "an existing but unclaimed directory is fine",
+            claim_run_dir(root / "fresh") == claimed,
+        )
+
+        write_manifest({"split_dir": "x"}, claimed / RUN_MANIFEST_FILENAME)
+
+        checks.raises(
+            "a directory another run claimed raises",
+            FileExistsError,
+            claim_run_dir,
+            root / "fresh",
+            match="already holds a run",
+        )
+        checks.equal(
+            "overwrite takes it anyway",
+            claim_run_dir(root / "fresh", overwrite=True),
+            claimed,
+        )
+        checks.check(
+            "the refusal leaves the previous run untouched",
+            (claimed / RUN_MANIFEST_FILENAME).exists(),
+        )
+
+
 def verify_aggregation(checks: Checks) -> None:
     from ner_lab.training.assessment import aggregate_metrics, best_epoch_metrics
 
@@ -243,7 +279,7 @@ def verify_end_to_end(checks: Checks) -> None:
     kfold_split = prepare_split(root / "kfold", kfolds=3)
     kfold = train_model(
         split_dir=kfold_split,
-        output_dir=root / "runs",
+        output_dir=root / "runs" / "kfold_run",
         base_model=str(base_model),
         target_label="DISEASE",
         language="es",
@@ -251,7 +287,6 @@ def verify_end_to_end(checks: Checks) -> None:
         max_length=64,
         early_stopping_patience=None,
         track_resources=False,
-        run_name="kfold_run",
     )
 
     checks.equal("the k-fold mode is detected", kfold.mode, "fixed_holdout_kfold")
@@ -313,7 +348,7 @@ def verify_end_to_end(checks: Checks) -> None:
 
     narrowed = train_model(
         split_dir=kfold_split,
-        output_dir=root / "runs",
+        output_dir=root / "runs" / "narrowed_run",
         base_model=str(base_model),
         target_label="DISEASE",
         language="es",
@@ -322,7 +357,6 @@ def verify_end_to_end(checks: Checks) -> None:
         early_stopping_patience=None,
         track_resources=False,
         folds=[2],
-        run_name="narrowed_run",
     )
 
     checks.equal("folds narrows the run to one fold", len(narrowed.fold_metrics), 1)
@@ -331,7 +365,7 @@ def verify_end_to_end(checks: Checks) -> None:
     plain_split = prepare_split(root / "plain", kfolds=None)
     plain = train_model(
         split_dir=plain_split,
-        output_dir=root / "runs",
+        output_dir=root / "runs" / "plain_run",
         base_model=str(base_model),
         target_label="DISEASE",
         language="es",
@@ -340,11 +374,30 @@ def verify_end_to_end(checks: Checks) -> None:
         early_stopping_patience=None,
         track_resources=False,
         save_model=True,
-        run_name="plain_run",
     )
 
     checks.equal("the train/validation mode is detected", plain.mode, "train_validation")
     checks.equal("it trains exactly once", len(plain.fold_metrics), 1)
+    checks.equal(
+        "output_dir is the run directory, with nothing derived under it",
+        plain.run_dir,
+        (root / "runs" / "plain_run").resolve(),
+    )
+    checks.raises(
+        "a second run into the same output_dir raises",
+        FileExistsError,
+        train_model,
+        split_dir=plain_split,
+        output_dir=root / "runs" / "plain_run",
+        base_model=str(base_model),
+        target_label="DISEASE",
+        language="es",
+        training_arguments=arguments,
+        max_length=64,
+        early_stopping_patience=None,
+        track_resources=False,
+        match="already holds a run",
+    )
     checks.check("there is no fold subdirectory", not fold_directories(plain.run_dir))
     checks.check("the single run writes into the run directory", plain.paths["run"] == plain.run_dir)
     checks.check("save_model writes weights", (plain.run_dir / "best_model").is_dir())
@@ -379,6 +432,7 @@ def main() -> int:
 
     verify_rotations(checks)
     verify_naming(checks)
+    verify_run_dir_claim(checks)
     verify_aggregation(checks)
     verify_arguments(checks)
     verify_task_registration(checks)

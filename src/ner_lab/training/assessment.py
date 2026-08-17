@@ -67,9 +67,9 @@ def train_model(
     save_model: bool = False,
     track_resources: bool = True,
     allow_multi_device: bool = False,
+    overwrite: bool = False,
     folds: Sequence[int] | None = None,
     random_state: int | None = None,
-    run_name: str | None = None,
 ) -> AssessmentResult:
     """
     Train one configuration against the split in `split_dir` and record what it scored.
@@ -78,9 +78,13 @@ def train_model(
     `train_validation` split trains once, a `fixed_holdout_kfold` split trains
     once per rotatable fold and aggregates. The fixed holdout is never read.
 
-    Artifacts go to `<output_dir>/<target_label>__<architecture>__<base_model>__<timestamp>/`,
-    with each fold in its own `fold_XX/` subdirectory. `run_manifest.json` is
-    written before training starts, so a crashed run still explains itself.
+    `output_dir` is the run directory: artifacts go into it directly, with each fold
+    of a k-fold split in its own `fold_XX/` subdirectory. Nothing is derived and
+    nothing is nested, so the layout is yours to decide — join
+    `run_directory_name()` yourself for a timestamped one. A directory another run
+    already claimed raises unless `overwrite` is set, checked before anything is
+    created. `run_manifest.json` is written before training starts, so a crashed run
+    still explains itself.
 
     `training_arguments` takes a `TrainingArguments`, a mapping of overrides
     applied to this library's defaults, or nothing for the defaults alone. Every
@@ -103,15 +107,12 @@ def train_model(
     and the resulting `effective_train_batch_size` go into the run manifest, so a
     run that waived the guard says so on paper rather than only in its stderr.
     """
+    run_dir = claim_run_dir(output_dir, overwrite)
+
     split_dir = Path(split_dir).resolve()
     data_manifest = read_data_manifest(split_dir)
     mode = data_manifest["split"]["mode"]
     rotations = fold_rotations(data_manifest, folds)
-
-    run_dir = Path(output_dir).resolve() / (
-        run_name or run_directory_name(target_label, architecture, base_model)
-    )
-    run_dir.mkdir(parents=True, exist_ok=True)
 
     tokenizer = AutoTokenizer.from_pretrained(base_model)
     encoder = Encoder(
@@ -319,10 +320,47 @@ def run_directory_name(
     base_model: str,
     timestamp: str | None = None,
 ) -> str:
-    """The directory one assessment writes into: what was trained, on what, when."""
+    """
+    A directory name describing one run: what was trained, on what, when.
+
+    Nothing calls this on your behalf — `output_dir` is the run directory. Join it
+    yourself for a timestamped tree:
+    `train_model(output_dir=root / run_directory_name(label, architecture, model))`.
+    """
     stamp = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
 
     return f"{target_label}__{architecture_name(architecture)}__{Path(base_model).name}__{stamp}"
+
+
+def claim_run_dir(output_dir: str | Path, overwrite: bool = False) -> Path:
+    """
+    Resolve `output_dir` as the run directory, refusing one a previous run owns.
+
+    `output_dir` is written into directly, so a second run pointed at it would
+    replace the first one's manifest, metrics and weights. A `run_manifest.json`
+    already there means a run claimed this directory, whether it finished or died,
+    and `overwrite` is what says to take it anyway.
+
+    Call this before creating anything, and exactly once per run. It reports a
+    directory a run already owns, and every run fills its own directory as it goes
+    — a second call partway through would refuse the run's own output.
+    """
+    run_dir = Path(output_dir).resolve()
+    claimed = run_dir / RUN_MANIFEST_FILENAME
+
+    if claimed.exists() and not overwrite:
+        stamp = datetime.fromtimestamp(claimed.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+
+        raise FileExistsError(
+            f"{run_dir} already holds a run from {stamp}. output_dir is the run "
+            f"directory itself, so continuing would overwrite its manifest, metrics "
+            f"and weights. Point output_dir at a new directory, or pass "
+            f"overwrite=True to replace what is there."
+        )
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    return run_dir
 
 
 def architecture_name(architecture: str | Architecture) -> str:

@@ -434,7 +434,7 @@ def verify_end_to_end(checks: Checks) -> None:
 
     result = search_hyperparameters(
         split_dir=split_dir,
-        output_dir=root / "sweeps",
+        output_dir=root / "sweeps" / "mini_sweep",
         base_models=str(base_model),
         target_label="DISEASE",
         language="es",
@@ -453,7 +453,6 @@ def verify_end_to_end(checks: Checks) -> None:
         max_micro_batch_size=4,
         early_stopping_patience=None,
         track_resources=False,
-        run_name="mini_sweep",
     )
 
     checks.check("the sweep succeeded", result.summary["success"])
@@ -499,13 +498,23 @@ def verify_end_to_end(checks: Checks) -> None:
         best,
     )
 
+    checks.equal(
+        "the winner config points at a final_train directory under the sweep",
+        best["output_dir"],
+        str(result.run_dir / "final_train"),
+    )
+
     block = {key: value for key, value in best.items() if key != "task"}
     block["training_arguments"]["num_train_epochs"] = 1
-    block["output_dir"] = str(root / "winner_run")
 
-    winner = train_model(**block, track_resources=False, run_name="winner")
+    winner = train_model(**block, track_resources=False)
 
     checks.check("the winner block runs train_model as-is", len(winner.fold_metrics) == 1)
+    checks.equal(
+        "and lands where the config said it would",
+        winner.run_dir,
+        result.run_dir / "final_train",
+    )
 
     shared.cleanup()
 

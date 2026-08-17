@@ -385,7 +385,7 @@ def train_saved_model(root: Path, architecture: str) -> Path:
 
     result = train_model(
         split_dir=prepared.split_dir,
-        output_dir=root / "runs",
+        output_dir=root / "runs" / f"{architecture}_run",
         base_model=str(base_model),
         target_label="DISEASE",
         language="es",
@@ -401,7 +401,6 @@ def train_saved_model(root: Path, architecture: str) -> Path:
         early_stopping_patience=None,
         save_model=True,
         track_resources=False,
-        run_name=f"{architecture}_run",
     )
 
     return result.run_dir / "best_model"

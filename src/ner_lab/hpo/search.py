@@ -43,14 +43,15 @@ from ner_lab.training.arguments import training_arguments as build_training_argu
 from ner_lab.training.assessment import (
     RUN_MANIFEST_FILENAME,
     architecture_name,
+    claim_run_dir,
     fold_rotations,
     read_data_manifest,
-    run_directory_name,
 )
 from ner_lab.training.tracking import gpu_hardware_info
 
 TRIALS_SUMMARY_FILENAME = "trials_summary.parquet"
 HPO_SUMMARY_FILENAME = "hpo_summary.json"
+FINAL_TRAIN_DIRNAME = "final_train"
 WINNER_CONFIG_FILENAME = "winner.yaml"
 TUNE_VERBOSITY = 0
 
@@ -117,7 +118,7 @@ def search_hyperparameters(
     smoke_test: bool = True,
     track_resources: bool = True,
     report: bool = True,
-    run_name: str | None = None,
+    overwrite: bool = False,
 ) -> HPOResult:
     """
     Search hyperparameters for one configuration family against a prepared split.
@@ -152,8 +153,15 @@ def search_hyperparameters(
     multiply an already GPU-day sweep by the fold count. The fixed holdout is
     never read.
 
+    `output_dir` is the sweep directory: the summary, the trials table, the winner
+    config and Ray's per-trial tree all go into it directly, with nothing derived or
+    nested on your behalf — join `run_directory_name()` yourself for a timestamped
+    one. A directory another run already claimed raises unless `overwrite` is set,
+    checked before anything is created so a refused sweep costs nothing.
+
     `hpo_summary.json` records the winner both raw and as a ready-to-run
-    `train_model` YAML config; nothing ever reads it back.
+    `train_model` YAML config pointed at `<output_dir>/final_train`; nothing ever
+    reads it back.
     """
     import ray
     from ray import tune
@@ -162,6 +170,8 @@ def search_hyperparameters(
 
     sweep_start = time.monotonic()
 
+    run_dir = claim_run_dir(output_dir, overwrite)
+
     split_dir = Path(split_dir).resolve()
     data_manifest = read_data_manifest(split_dir)
     requested = None if validation_index is None else [validation_index]
@@ -169,14 +179,6 @@ def search_hyperparameters(
     partitions = split_paths(split_dir, validation_index=validation_index)
 
     base_models = [base_models] if isinstance(base_models, str) else list(base_models)
-    base_model_slug = (
-        Path(base_models[0]).name if len(base_models) == 1 else f"{len(base_models)}models"
-    )
-
-    run_dir = Path(output_dir).resolve() / (
-        run_name or run_directory_name(target_label, architecture, base_model_slug)
-    )
-    run_dir.mkdir(parents=True, exist_ok=True)
 
     variants = build_variants(base_models, strategies, context_tokens, max_lengths)
     space = build_search_space(search_space)
@@ -363,7 +365,7 @@ def search_hyperparameters(
                 "sampled": dict(best.config),
                 "train_model": winner_configuration(
                     split_dir=split_dir,
-                    output_dir=output_dir,
+                    output_dir=run_dir / FINAL_TRAIN_DIRNAME,
                     variant=variants[best.config["variant"]],
                     sampled=best.config,
                     micro_batch_size=optional_int(
@@ -575,6 +577,10 @@ def winner_configuration(
     the API. Sweep-only settings (no checkpointing) are dropped; everything else
     the user overrode for the sweep is carried through, as reported by
     `user_argument_overrides`.
+
+    `output_dir` becomes the config's own `output_dir`, and `train_model` writes
+    into it directly, so this must name a directory no run owns yet — the sweep
+    passes `<its own directory>/final_train`.
     """
     hyperparameters = {
         key: value for key, value in sampled.items() if key not in RESERVED_DIMENSIONS
