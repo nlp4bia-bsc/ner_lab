@@ -275,7 +275,7 @@ assessment.run_dir                         # where everything was written
 | `track_resources` | `True` | Wall clock, energy, emissions and peak VRAM per run, via codecarbon. |
 | `folds` | `None` | Narrow a k-fold run to specific validation folds. Invalid without a fixed holdout. |
 | `random_state` | `None` | Overrides `TrainingArguments.seed`. |
-| `allow_multi_device` | `False` | Permit a run to see several GPUs, warning loudly, instead of refusing. |
+| `devices` | `1` | Pin the run to one GPU whatever the allocation exposes. `"all"` spreads it over every visible one, warning loudly that the batch is no longer the one that was tuned. |
 | `overwrite` | `False` | Replace a run already occupying `output_dir` instead of refusing. |
 
 Everything after `language` configures the `Encoder`, `build_model` and `train` that this

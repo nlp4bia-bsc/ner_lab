@@ -23,6 +23,8 @@ from ner_lab.training.assessment import (
 )
 from ner_lab.training.dataset import ensure_int_list, is_encoded, to_dataset, validate_rows
 from ner_lab.training.devices import (
+    DevicePolicy,
+    apply_device_policy,
     effective_train_batch_size,
     multi_device_message,
     require_single_device,
@@ -44,10 +46,12 @@ __all__ = [
     "DEFAULTS",
     "AssessmentResult",
     "CRFTrainer",
+    "DevicePolicy",
     "EpochMetricsLogger",
     "ResourceTracker",
     "TrainingResult",
     "aggregate_metrics",
+    "apply_device_policy",
     "best_epoch_metrics",
     "build_summary",
     "claim_run_dir",

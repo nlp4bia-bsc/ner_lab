@@ -341,9 +341,14 @@ def verify_end_to_end(checks: Checks) -> None:
         4,
     )
     checks.equal(
-        "the manifest records that the device guard was not waived",
-        manifest["devices"]["allow_multi_device"],
-        False,
+        "the manifest records the device policy the run asked for",
+        manifest["devices"]["policy"],
+        1,
+    )
+    checks.equal(
+        "and how many devices it got",
+        manifest["devices"]["trained_on"],
+        0,
     )
 
     narrowed = train_model(

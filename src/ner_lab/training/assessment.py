@@ -21,7 +21,11 @@ from ner_lab.evaluation.metrics import build_compute_metrics
 from ner_lab.models.registry import Architecture, build_model
 from ner_lab.provenance import read_manifest, write_manifest
 from ner_lab.training.arguments import training_arguments as build_training_arguments
-from ner_lab.training.devices import effective_train_batch_size, require_single_device
+from ner_lab.training.devices import (
+    DevicePolicy,
+    apply_device_policy,
+    effective_train_batch_size,
+)
 from ner_lab.training.tracking import gpu_hardware_info
 from ner_lab.training.trainer import train
 
@@ -66,7 +70,7 @@ def train_model(
     include_confusion: bool = False,
     save_model: bool = False,
     track_resources: bool = True,
-    allow_multi_device: bool = False,
+    devices: DevicePolicy = 1,
     overwrite: bool = False,
     folds: Sequence[int] | None = None,
     random_state: int | None = None,
@@ -98,14 +102,16 @@ def train_model(
     `ner_lab.inference` loads. Each fold gets a freshly built model, and the
     previous fold's is released before the next one is built.
 
-    More than one visible GPU raises, because `Trainer` would silently train at
-    `per_device_train_batch_size x n_gpu` on a schedule that is as many times
-    shorter — a configuration `ner_lab.hpo` searched on one device is not the same
-    configuration on four. `allow_multi_device` downgrades that to a warning for
-    callers who want the throughput and accept that the batch size and the
-    learning-rate schedule are no longer the ones that were tuned. Both the flag
-    and the resulting `effective_train_batch_size` go into the run manifest, so a
-    run that waived the guard says so on paper rather than only in its stderr.
+    `devices` defaults to `1`, which pins the run to one GPU however many the
+    process can see. Left to itself `Trainer` would train at
+    `per_device_train_batch_size x n_gpu` on a schedule as many times shorter, and a
+    configuration `ner_lab.hpo` searched on one device is not the same configuration
+    on four. `"all"` spreads the run over every visible device and warns, for callers
+    who want the throughput and accept that the batch size and the learning-rate
+    schedule are no longer the ones that were tuned. The policy, the number of
+    devices trained on and the resulting `effective_train_batch_size` all go into the
+    run manifest, so a run that took the throughput says so on paper rather than only
+    in its stderr.
     """
     run_dir = claim_run_dir(output_dir, overwrite)
 
@@ -128,9 +134,7 @@ def train_model(
 
     resolved_arguments = resolve_training_arguments(training_arguments, run_dir, random_state)
 
-    device_count = require_single_device(
-        resolved_arguments, allow_multi_device=allow_multi_device
-    )
+    device_count = apply_device_policy(resolved_arguments, devices)
 
     manifest = {
         "split_dir": str(split_dir),
@@ -147,7 +151,8 @@ def train_model(
         "training_arguments": resolved_arguments.to_dict(),
         "hardware": gpu_hardware_info(),
         "devices": {
-            "allow_multi_device": allow_multi_device,
+            "policy": devices,
+            "trained_on": device_count,
             "effective_train_batch_size": effective_train_batch_size(
                 resolved_arguments, device_count
             ),

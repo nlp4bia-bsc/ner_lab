@@ -71,19 +71,21 @@ def verify_devices(checks: Checks) -> None:
     try:
         import torch
     except ImportError:
-        checks.skip("require_single_device", "torch is not installed in this environment")
+        checks.skip("device policy", "torch is not installed in this environment")
         return
 
     import tempfile
     import warnings
 
     from ner_lab.training import (
+        apply_device_policy,
         effective_train_batch_size,
         require_single_device,
         training_arguments,
     )
 
     available, count = torch.cuda.is_available, torch.cuda.device_count
+    select = torch.cuda.set_device
 
     with tempfile.TemporaryDirectory() as tmp:
         arguments = training_arguments(tmp, per_device_train_batch_size=16, fp16=False)
@@ -109,8 +111,11 @@ def verify_devices(checks: Checks) -> None:
         )
 
         try:
+            torch.cuda.set_device = lambda device: None
+
             torch.cuda.is_available = lambda: False
             checks.equal("no CUDA trains on no GPU", require_single_device(arguments), 0)
+            checks.equal("and no policy invents one", apply_device_policy(arguments, 1), 0)
 
             torch.cuda.is_available = lambda: True
             torch.cuda.device_count = lambda: 1
@@ -118,6 +123,7 @@ def verify_devices(checks: Checks) -> None:
 
             torch.cuda.device_count = lambda: 4
             checks.equal("use_cpu ignores the visible GPUs", require_single_device(on_cpu), 0)
+            checks.equal("as does the policy", apply_device_policy(on_cpu, "all"), 0)
             checks.raises(
                 "four visible GPUs raise",
                 RuntimeError,
@@ -133,12 +139,34 @@ def verify_devices(checks: Checks) -> None:
                 context="reservation was bypassed",
                 match="reservation was bypassed",
             )
+            checks.raises(
+                "a device count between one and all is refused",
+                ValueError,
+                apply_device_policy,
+                arguments,
+                2,
+                match="CUDA_VISIBLE_DEVICES",
+            )
+
+            pinned = training_arguments(tmp, per_device_train_batch_size=16, fp16=False)
+
+            with warnings.catch_warnings(record=True) as quiet:
+                warnings.simplefilter("always")
+                checks.equal("pinning trains on one of the four", apply_device_policy(pinned), 1)
+
+            checks.equal("it says nothing while doing it", len(quiet), 0)
+            checks.equal("Trainer is told so through _n_gpu", pinned._n_gpu, 1)
+            checks.equal(
+                "so the batch stays the one that was tuned", pinned.train_batch_size, 16
+            )
+
+            spread = training_arguments(tmp, per_device_train_batch_size=16, fp16=False)
 
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always")
-                allowed = require_single_device(arguments, allow_multi_device=True)
+                allowed = apply_device_policy(spread, "all")
 
-            checks.equal("allow_multi_device returns the count", allowed, 4)
+            checks.equal("'all' returns the visible count", allowed, 4)
             checks.equal("it warns exactly once", len(caught), 1)
             checks.check(
                 "the warning names the batch it will really train at",
@@ -146,6 +174,7 @@ def verify_devices(checks: Checks) -> None:
             )
         finally:
             torch.cuda.is_available, torch.cuda.device_count = available, count
+            torch.cuda.set_device = select
 
 
 def verify_end_to_end(checks: Checks) -> None:
