@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import warnings
 from collections import Counter
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from ner_lab.data import (
     read_annotations,
     read_corpus,
     read_split,
+    resolve_conflicts,
     resolve_mismatch,
     split_documents,
     validate_assignments,
@@ -186,6 +188,7 @@ def verify_corpus(checks: Checks, workspace: Path) -> None:
     checks.raises("orphan annotation is caught", ValueError, build_corpus, documents, orphaned)
 
     verify_mismatch_policies(checks, documents, annotations)
+    verify_conflict_policies(checks, documents, annotations)
 
     corpus_path = workspace / "documents.parquet"
     write_corpus(corpus, corpus_path)
@@ -479,6 +482,84 @@ def verify_mismatch_policies(
     )
 
 
+def verify_conflict_policies(
+    checks: Checks,
+    documents: dict[str, str],
+    annotations: pd.DataFrame,
+) -> None:
+    drifted = annotations.copy()
+    target = drifted.index[0]
+    filename = str(drifted.at[target, "filename"])
+    start = int(drifted.at[target, "start_span"]) + 1
+    end = int(drifted.at[target, "end_span"]) + 1
+    drifted.loc[target, ["start_span", "end_span"]] = [start, end]
+
+    checks.raises("conflict raises by default", ValueError, build_corpus, documents, drifted)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rewritten = build_corpus(documents, drifted, on_conflict="rewrite")
+
+    entity = entities_of(rewritten, filename)[0]
+
+    checks.equal(
+        "rewrite keeps the annotated offsets",
+        (entity["start"], entity["end"]),
+        (start, end),
+    )
+    checks.equal(
+        "rewrite takes the document text",
+        entity["text"],
+        documents[filename][start:end],
+    )
+    checks.check("rewrite warns", any("on_conflict" in str(item.message) for item in caught))
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+
+        resolved, report = resolve_conflicts(documents, drifted, "rewrite")
+
+        checks.equal("report names the rewritten document", report.rewritten_documents, [filename])
+        checks.equal("report counts the rewrite", report.n_rewritten_entities, 1)
+        checks.equal(
+            "the resolved annotation matches the document",
+            str(resolved.at[target, "text"]),
+            documents[filename][start:end],
+        )
+
+        _, clean = resolve_conflicts(documents, annotations, "rewrite")
+
+        checks.equal("an agreeing corpus rewrites nothing", clean.n_rewritten_entities, 0)
+        checks.equal("an agreeing corpus names no document", clean.rewritten_documents, [])
+
+        out_of_range = annotations.copy()
+        out_of_range.loc[target, "end_span"] = len(documents[filename]) + 50
+
+        checks.raises(
+            "rewrite still rejects out-of-range offsets",
+            ValueError,
+            build_corpus,
+            documents,
+            out_of_range,
+            on_conflict="rewrite",
+        )
+    checks.raises(
+        "unknown conflict policy raises",
+        ValueError,
+        resolve_conflicts,
+        documents,
+        drifted,
+        "txt",
+    )
+    checks.raises(
+        "resolve_conflicts rejects an unaligned pair",
+        ValueError,
+        resolve_conflicts,
+        documents,
+        annotations.assign(filename="ghost"),
+    )
+
+
 def verify_prepare_dataset(checks: Checks, workspace: Path) -> None:
     documents, annotations = synthetic_documents(30)
     txt_dir, ann_dir = write_brat(workspace / "prepare_source", documents, annotations)
@@ -512,6 +593,12 @@ def verify_prepare_dataset(checks: Checks, workspace: Path) -> None:
 
     checks.equal("manifest records the mismatch policy", manifest["on_mismatch"], "error")
     checks.equal("nothing is dropped when the sources agree", manifest["dropped_documents"], [])
+    checks.equal("manifest records the conflict policy", manifest["on_conflict"], "raise")
+    checks.equal(
+        "nothing is rewritten when the annotations agree",
+        manifest["n_rewritten_entities"],
+        0,
+    )
 
     (txt_dir / "unannotated.txt").write_text("Sin anotaciones en este documento.", encoding="utf-8")
     (ann_dir / "ghost.ann").write_text("T1\tDISEASE 0 6\tfiebre\n", encoding="utf-8")
@@ -551,6 +638,51 @@ def verify_prepare_dataset(checks: Checks, workspace: Path) -> None:
 
     (txt_dir / "unannotated.txt").unlink()
     (ann_dir / "ghost.ann").unlink()
+
+    (txt_dir / "drifted.txt").write_text("Fiebre alta y tos.", encoding="utf-8")
+    (ann_dir / "drifted.ann").write_text("T1\tDISEASE 1 7\tFiebre\n", encoding="utf-8")
+
+    checks.raises(
+        "prepare_dataset raises on a conflict by default",
+        ValueError,
+        prepare_dataset,
+        output_dir=output_dir,
+        documents=txt_dir,
+        annotations=ann_dir,
+        dataset_name="synthetic_conflict",
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+
+        rewritten = prepare_dataset(
+            output_dir=output_dir,
+            documents=txt_dir,
+            annotations=ann_dir,
+            dataset_name="synthetic_rewritten",
+            on_conflict="rewrite",
+        )
+
+    rewritten_manifest = json.loads(
+        (rewritten.dataset_root / "source_manifest.json").read_text()
+    )
+
+    checks.equal(
+        "the manifest names the rewritten document",
+        rewritten_manifest["rewritten_documents"],
+        ["drifted"],
+    )
+    checks.equal(
+        "the manifest counts the rewrite", rewritten_manifest["n_rewritten_entities"], 1
+    )
+    checks.equal(
+        "the rewritten corpus stores the document text",
+        entities_of(rewritten.corpus, "drifted")[0]["text"],
+        "iebre ",
+    )
+
+    (txt_dir / "drifted.txt").unlink()
+    (ann_dir / "drifted.ann").unlink()
 
     kfold = prepare_dataset(
         output_dir=output_dir,

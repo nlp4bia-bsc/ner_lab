@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -17,6 +18,8 @@ DOCUMENT_COLUMNS = ["doc_id", "text", "entities_json", "n_entities"]
 
 MismatchPolicy = Literal["error", "documents", "annotations"]
 
+ConflictPolicy = Literal["raise", "rewrite"]
+
 DOCUMENT_DTYPES = {
     "doc_id": "string",
     "text": "string",
@@ -29,6 +32,12 @@ DOCUMENT_DTYPES = {
 class SourceMismatch:
     dropped_documents: list[str] = field(default_factory=list)
     dropped_annotation_files: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class SourceConflict:
+    rewritten_documents: list[str] = field(default_factory=list)
+    n_rewritten_entities: int = 0
 
 
 def resolve_mismatch(
@@ -88,11 +97,88 @@ def resolve_mismatch(
     )
 
 
+def resolve_conflicts(
+    documents: dict[str, str],
+    annotations: pd.DataFrame,
+    on_conflict: ConflictPolicy = "raise",
+) -> tuple[pd.DataFrame, SourceConflict]:
+    """
+    Reconcile annotations whose text disagrees with the document it points into.
+
+    `raise` is the default: an annotation whose text is not what its own offsets
+    select is a broken export rather than a subset of the corpus. `rewrite`
+    makes the document authoritative, replacing the annotated surface form with
+    `text[start:end]` and keeping the offsets as annotated.
+
+    The document is never edited to match an annotation, so a rewritten corpus
+    always trains on what its documents actually say.
+
+    Expects the aligned pair `resolve_mismatch` returns: every annotated
+    filename must have a document.
+    """
+    if on_conflict not in ("raise", "rewrite"):
+        raise ValueError(
+            f"Unknown on_conflict policy: {on_conflict!r}. Expected 'raise' or 'rewrite'."
+        )
+
+    resolved = annotations.copy()
+    orphans = sorted(set(resolved["filename"].astype(str)) - set(documents))
+
+    if orphans:
+        raise ValueError(
+            f"{len(orphans)} annotated filename(s) have no matching document: "
+            f"{orphans[:10]}. Reconcile the sources with resolve_mismatch first."
+        )
+
+    mentions = pd.Series(
+        [
+            documents[str(row.filename)][int(row.start_span):int(row.end_span)]
+            for row in resolved.itertuples(index=False)
+        ],
+        index=resolved.index,
+        dtype=object,
+    )
+    conflicting = mentions != resolved["text"].astype(str)
+
+    if not conflicting.any():
+        return resolved, SourceConflict()
+
+    affected = sorted(set(resolved.loc[conflicting, "filename"].astype(str)))
+
+    if on_conflict == "raise":
+        examples = [
+            f"{resolved.at[index, 'filename']}"
+            f"[{resolved.at[index, 'start_span']}:{resolved.at[index, 'end_span']}] "
+            f"annotated {resolved.at[index, 'text']!r}, document has {mentions[index]!r}"
+            for index in resolved.index[conflicting.to_numpy()][:5]
+        ]
+        raise ValueError(
+            f"{int(conflicting.sum())} annotation(s) in {len(affected)} document(s) "
+            f"disagree with the document text: {examples}. Pass on_conflict='rewrite' "
+            "to take the document text as authoritative."
+        )
+
+    resolved.loc[conflicting, "text"] = mentions[conflicting]
+
+    warnings.warn(
+        f"on_conflict='rewrite' replaced the annotated text of "
+        f"{int(conflicting.sum())} annotation(s) in {len(affected)} document(s) "
+        f"with the document text: {affected[:10]}.",
+        stacklevel=2,
+    )
+
+    return resolved, SourceConflict(
+        rewritten_documents=affected,
+        n_rewritten_entities=int(conflicting.sum()),
+    )
+
+
 def build_corpus(
     documents: dict[str, str] | str | Path,
     annotations: pd.DataFrame | str | Path,
     normalize_labels: bool = False,
     on_mismatch: MismatchPolicy = "error",
+    on_conflict: ConflictPolicy = "raise",
     validate: bool = True,
 ) -> pd.DataFrame:
     """
@@ -110,13 +196,17 @@ def build_corpus(
 
     Documents and annotations that name different files raise by default; see
     `resolve_mismatch` for the `on_mismatch` policies that reconcile them
-    instead. Call it directly to learn what a policy dropped.
+    instead. An annotation whose text disagrees with the document it points into
+    also raises by default; set `on_conflict="rewrite"` to take the document
+    text as authoritative. Call either resolver directly to learn what a policy
+    dropped or rewrote.
     """
     documents_dict = resolve_documents(documents)
     annotations_df = read_annotations(annotations, normalize_labels=normalize_labels)
     documents_dict, annotations_df, _ = resolve_mismatch(
         documents_dict, annotations_df, on_mismatch
     )
+    annotations_df, _ = resolve_conflicts(documents_dict, annotations_df, on_conflict)
 
     rows: list[dict[str, object]] = []
 

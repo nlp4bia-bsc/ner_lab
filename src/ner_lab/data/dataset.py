@@ -10,10 +10,13 @@ import pandas as pd
 
 from ner_lab.data.brat import read_annotations, resolve_documents
 from ner_lab.data.corpus import (
+    ConflictPolicy,
     MismatchPolicy,
+    SourceConflict,
     SourceMismatch,
     build_corpus,
     count_labels,
+    resolve_conflicts,
     resolve_mismatch,
 )
 from ner_lab.data.io import DEFAULT_PARQUET_COMPRESSION, read_corpus, write_corpus
@@ -105,6 +108,7 @@ def prepare_dataset(
     dataset_name: str | None = None,
     normalize_labels: bool = False,
     on_mismatch: MismatchPolicy = "error",
+    on_conflict: ConflictPolicy = "raise",
     split: bool = True,
     validation_size: float = 0.2,
     kfolds: int | None = None,
@@ -127,8 +131,11 @@ def prepare_dataset(
     fixed-holdout cross-validation instead of a train/validation split.
 
     Documents and annotations that name different files raise by default. Set
-    `on_mismatch` to `"documents"` or `"annotations"` to reconcile them instead;
-    whatever a policy dropped is recorded in `source_manifest.json`.
+    `on_mismatch` to `"documents"` or `"annotations"` to reconcile them instead.
+    An annotation whose text disagrees with the document it points into also
+    raises by default; set `on_conflict="rewrite"` to take the document text as
+    authoritative. What each policy dropped or rewrote is recorded in
+    `source_manifest.json`.
     """
     _validate_inputs(documents, annotations, source_parquet, kfolds, holdout_fold)
 
@@ -141,6 +148,7 @@ def prepare_dataset(
     dataset_root.mkdir(parents=True, exist_ok=True)
 
     mismatch: SourceMismatch | None = None
+    conflict: SourceConflict | None = None
 
     if source_parquet is not None:
         corpus_path = Path(source_parquet)
@@ -151,6 +159,7 @@ def prepare_dataset(
             read_annotations(annotations, normalize_labels=normalize_labels),
             on_mismatch,
         )
+        annotations_df, conflict = resolve_conflicts(documents_dict, annotations_df, on_conflict)
         corpus = build_corpus(documents_dict, annotations_df)
         corpus_path = write_corpus(corpus, dataset_root / corpus_filename, compression)
 
@@ -165,6 +174,11 @@ def prepare_dataset(
         "dropped_documents": mismatch.dropped_documents if mismatch is not None else None,
         "dropped_annotation_files": (
             mismatch.dropped_annotation_files if mismatch is not None else None
+        ),
+        "on_conflict": on_conflict if source_parquet is None else None,
+        "rewritten_documents": conflict.rewritten_documents if conflict is not None else None,
+        "n_rewritten_entities": (
+            conflict.n_rewritten_entities if conflict is not None else None
         ),
         "n_documents": len(corpus),
         "n_entities": int(corpus["n_entities"].sum()),

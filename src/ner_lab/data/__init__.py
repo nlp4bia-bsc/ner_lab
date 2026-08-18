@@ -12,12 +12,15 @@ from ner_lab.data.assignments import (
 )
 from ner_lab.data.brat import read_ann, read_annotation_tsv, read_annotations, resolve_documents
 from ner_lab.data.corpus import (
+    ConflictPolicy,
     DOCUMENT_COLUMNS,
     MismatchPolicy,
+    SourceConflict,
     SourceMismatch,
     build_corpus,
     count_labels,
     document_fingerprints,
+    resolve_conflicts,
     resolve_mismatch,
     validate_corpus,
 )
@@ -50,8 +53,10 @@ __all__ = [
     "CANONICAL_LABELS",
     "DOCUMENT_COLUMNS",
     "LABEL_ALIASES",
+    "ConflictPolicy",
     "MismatchPolicy",
     "PreparedDataset",
+    "SourceConflict",
     "SourceMismatch",
     "SplitResult",
     "assert_partition_integrity",
@@ -77,6 +82,7 @@ __all__ = [
     "read_dataset_metadata",
     "read_split",
     "resolve_documents",
+    "resolve_conflicts",
     "resolve_mismatch",
     "split_descriptor",
     "split_documents",
