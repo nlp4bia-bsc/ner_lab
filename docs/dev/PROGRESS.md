@@ -3,7 +3,7 @@
 What has actually landed, and the evidence for it. One entry per subsystem, not per session.
 Decisions live in [DECISIONS.md](DECISIONS.md); this file records outcomes.
 
-**Verification suite: 598 checks, all passing.** See [`verification/`](../verification/).
+**Verification suite: 598 checks, all passing.** See [`verification/`](../../verification/).
 
 | Subsystem | Checks | Equivalence with NER-API |
 |---|---|---|
