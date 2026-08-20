@@ -514,23 +514,56 @@ def verify_conflict_policies(
     )
     checks.check("rewrite warns", any("on_conflict" in str(item.message) for item in caught))
 
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        build_corpus(documents, drifted, on_conflict="drop")
+
+    checks.check("drop warns", any("on_conflict='drop'" in str(item.message) for item in caught))
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
 
-        resolved, report = resolve_conflicts(documents, drifted, "rewrite")
+        kept, resolved, report = resolve_conflicts(documents, drifted, "rewrite")
 
         checks.equal("report names the rewritten document", report.rewritten_documents, [filename])
         checks.equal("report counts the rewrite", report.n_rewritten_entities, 1)
+        checks.equal("rewrite keeps every document", len(kept), len(documents))
         checks.equal(
             "the resolved annotation matches the document",
             str(resolved.at[target, "text"]),
             documents[filename][start:end],
         )
 
-        _, clean = resolve_conflicts(documents, annotations, "rewrite")
+        _, _, clean = resolve_conflicts(documents, annotations, "rewrite")
 
         checks.equal("an agreeing corpus rewrites nothing", clean.n_rewritten_entities, 0)
         checks.equal("an agreeing corpus names no document", clean.rewritten_documents, [])
+
+        kept, remaining, dropped_report = resolve_conflicts(documents, drifted, "drop")
+
+        checks.equal(
+            "report names the dropped document", dropped_report.dropped_documents, [filename]
+        )
+        checks.equal("drop rewrites nothing", dropped_report.n_rewritten_entities, 0)
+        checks.equal("drop removes the document", len(kept), len(documents) - 1)
+        checks.check("the dropped document is gone", filename not in kept)
+        checks.check(
+            "drop takes the document's clean annotations with it",
+            not (remaining["filename"].astype(str) == filename).any(),
+        )
+
+        dropped_corpus = build_corpus(documents, drifted, on_conflict="drop")
+
+        checks.equal("the dropped corpus omits the document", len(dropped_corpus), len(documents) - 1)
+
+        checks.raises(
+            "drop refuses to empty the corpus",
+            ValueError,
+            resolve_conflicts,
+            {filename: documents[filename]},
+            drifted[drifted["filename"].astype(str) == filename],
+            "drop",
+        )
 
         out_of_range = annotations.copy()
         out_of_range.loc[target, "end_span"] = len(documents[filename]) + 50
@@ -598,6 +631,11 @@ def verify_prepare_dataset(checks: Checks, workspace: Path) -> None:
         "nothing is rewritten when the annotations agree",
         manifest["n_rewritten_entities"],
         0,
+    )
+    checks.equal(
+        "nothing is dropped when the annotations agree",
+        manifest["dropped_conflicting_documents"],
+        [],
     )
 
     (txt_dir / "unannotated.txt").write_text("Sin anotaciones en este documento.", encoding="utf-8")
@@ -679,6 +717,34 @@ def verify_prepare_dataset(checks: Checks, workspace: Path) -> None:
         "the rewritten corpus stores the document text",
         entities_of(rewritten.corpus, "drifted")[0]["text"],
         "iebre ",
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+
+        dropped = prepare_dataset(
+            output_dir=output_dir,
+            documents=txt_dir,
+            annotations=ann_dir,
+            dataset_name="synthetic_dropped",
+            on_conflict="drop",
+        )
+
+    dropped_manifest = json.loads((dropped.dataset_root / "source_manifest.json").read_text())
+
+    checks.equal(
+        "the manifest names the dropped conflicting document",
+        dropped_manifest["dropped_conflicting_documents"],
+        ["drifted"],
+    )
+    checks.equal(
+        "the dropped corpus omits the conflicting document",
+        len(dropped.corpus),
+        len(documents),
+    )
+    checks.check(
+        "the conflicting document is not in the corpus",
+        "drifted" not in set(dropped.corpus["doc_id"].astype(str)),
     )
 
     (txt_dir / "drifted.txt").unlink()

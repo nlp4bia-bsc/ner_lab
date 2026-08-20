@@ -134,7 +134,8 @@ def prepare_dataset(
     `on_mismatch` to `"documents"` or `"annotations"` to reconcile them instead.
     An annotation whose text disagrees with the document it points into also
     raises by default; set `on_conflict="rewrite"` to take the document text as
-    authoritative. What each policy dropped or rewrote is recorded in
+    authoritative, or `on_conflict="drop"` to drop the documents that carry a
+    conflict. What each policy dropped or rewrote is recorded in
     `source_manifest.json`.
     """
     _validate_inputs(documents, annotations, source_parquet, kfolds, holdout_fold)
@@ -159,7 +160,9 @@ def prepare_dataset(
             read_annotations(annotations, normalize_labels=normalize_labels),
             on_mismatch,
         )
-        annotations_df, conflict = resolve_conflicts(documents_dict, annotations_df, on_conflict)
+        documents_dict, annotations_df, conflict = resolve_conflicts(
+            documents_dict, annotations_df, on_conflict
+        )
         corpus = build_corpus(documents_dict, annotations_df)
         corpus_path = write_corpus(corpus, dataset_root / corpus_filename, compression)
 
@@ -179,6 +182,9 @@ def prepare_dataset(
         "rewritten_documents": conflict.rewritten_documents if conflict is not None else None,
         "n_rewritten_entities": (
             conflict.n_rewritten_entities if conflict is not None else None
+        ),
+        "dropped_conflicting_documents": (
+            conflict.dropped_documents if conflict is not None else None
         ),
         "n_documents": len(corpus),
         "n_entities": int(corpus["n_entities"].sum()),

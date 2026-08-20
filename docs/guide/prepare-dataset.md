@@ -96,9 +96,13 @@ no text for its offsets to refer to.
 |---|---|
 | `"raise"` | Raise. The default, for the same reason. |
 | `"rewrite"` | The document is authoritative: the annotated text is replaced with `text[start:end]`, offsets kept as annotated. |
+| `"drop"` | The document is removed from the corpus, along with all of its annotations. |
 
 The document is never edited to match an annotation, so a rewritten corpus always trains on
-what its documents actually say. `ner_lab.data.resolve_mismatch` and
+what its documents actually say. A dropped document takes its clean annotations with it:
+keeping them would leave a document that looks fully annotated while a real entity is silently
+missing. `"rewrite"` and `"drop"` both warn once, naming the affected documents.
+`ner_lab.data.resolve_mismatch` and
 `ner_lab.data.resolve_conflicts` are the same resolvers, callable directly, and each returns
 a report of what it dropped or rewrote.
 
