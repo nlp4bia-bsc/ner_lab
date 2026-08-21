@@ -47,7 +47,7 @@ from ner_lab.data.split import (
     split_documents,
     split_paths,
 )
-from ner_lab.data.stats import compute_annotation_stats, compute_text_stats
+from ner_lab.data.stats import compute_annotation_stats, compute_text_stats, write_stats
 from ner_lab.data.stratification import parse_document_label_counts
 
 __all__ = [
@@ -93,4 +93,5 @@ __all__ = [
     "validate_assignments",
     "validate_corpus",
     "write_corpus",
+    "write_stats",
 ]

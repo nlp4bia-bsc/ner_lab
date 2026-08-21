@@ -4,17 +4,13 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import Any, Sequence
 
 import yaml
 
 from ner_lab import __version__
-from ner_lab.data.io import DEFAULT_PARQUET_COMPRESSION
 from ner_lab.data.stats import compute_annotation_stats, compute_text_stats
 from ner_lab.tasks import TASKS, resolve_task
-
-if TYPE_CHECKING:
-    import pandas as pd
 
 OVERRIDES = ("random_state", "output_dir")
 STATS_CHOICES = ("none", "text", "both")
@@ -30,16 +26,6 @@ def load_config(path: str | Path) -> dict[str, Any]:
         )
 
     return config
-
-
-def _write_stats(frame: pd.DataFrame, dataset_root: Path, stem: str) -> None:
-    frame.to_json(dataset_root / f"{stem}.json", orient="records", indent=2, force_ascii=False)
-    frame.to_parquet(
-        dataset_root / f"{stem}.parquet",
-        engine="pyarrow",
-        compression=DEFAULT_PARQUET_COMPRESSION,
-        index=False,
-    )
 
 
 def run(args: argparse.Namespace) -> None:
@@ -78,15 +64,14 @@ def run(args: argparse.Namespace) -> None:
     if base_model is None or language is None:
         raise ValueError("stats requires both base_model and language in the config.")
 
-    _write_stats(
-        compute_text_stats(result.corpus, base_model, language), result.dataset_root, "text_stats"
-    )
+    compute_text_stats(result.corpus, base_model, language, output_dir=result.dataset_root)
 
     if stats == "both":
-        _write_stats(
-            compute_annotation_stats(result.corpus, base_model, normalize_labels=normalize_labels),
-            result.dataset_root,
-            "annotation_stats",
+        compute_annotation_stats(
+            result.corpus,
+            base_model,
+            normalize_labels=normalize_labels,
+            output_dir=result.dataset_root,
         )
 
 

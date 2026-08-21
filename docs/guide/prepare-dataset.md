@@ -147,7 +147,6 @@ mention counts, surface-form diversity and span-relation complexity for the enti
 Each returns a single-row DataFrame and neither needs the other:
 
 ```python
-from transformers import AutoTokenizer
 from ner_lab.data import read_corpus, compute_text_stats, compute_annotation_stats
 
 corpus = read_corpus("assets/splits/disease/documents.parquet")
@@ -160,6 +159,13 @@ annotation_stats = compute_annotation_stats(corpus, base_model="xlm-roberta-larg
 nothing pre-loaded needs to be passed in. `language` drives sentence segmentation and is
 required on `compute_text_stats` for the same reason it is required on `Encoder` — a corpus
 carries one language, recorded in `source_manifest.json`, never per document.
+
+Pass `output_dir` to either to also write it as `text_stats.{json,parquet}` /
+`annotation_stats.{json,parquet}` there, via the public `ner_lab.data.write_stats`:
+
+```python
+compute_text_stats(corpus, base_model="xlm-roberta-large", language="es", output_dir="stats/disease")
+```
 
 They are a sibling step to `prepare_dataset`, not a parameter on it: nothing here is called
 automatically from Python. The YAML path below is the one place that wires the two together.

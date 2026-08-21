@@ -8,7 +8,8 @@ Two independent entry points, one per metric table:
 
 Both read the canonical `text` / `entities_json` columns `data.read_corpus` returns and
 each return a single-row DataFrame; neither needs the other, and each loads its own
-tokenizer from `base_model`.
+tokenizer from `base_model`. Pass `output_dir` to either to also write it as
+`<stem>.json` / `<stem>.parquet`, via the public `write_stats`.
 
 Unit conventions
 -----------------
@@ -28,12 +29,14 @@ from bisect import bisect_left, bisect_right
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 from transformers import AutoTokenizer
 
+from ner_lab.data.io import DEFAULT_PARQUET_COMPRESSION
 from ner_lab.data.labels import LABEL_ALIASES, normalize_entity_labels
 from ner_lab.encoding.segmentation import (
     sentence_token_ranges,
@@ -48,6 +51,18 @@ DEFAULT_MATTR_WINDOW = 100
 
 WORD = re.compile(r"\w+", re.UNICODE)
 WHITESPACE = re.compile(r"\s+")
+
+
+def write_stats(frame: pd.DataFrame, output_dir: str | Path, stem: str) -> tuple[Path, Path]:
+    """Write a stats DataFrame as `<stem>.json` and `<stem>.parquet`, returning both paths."""
+    directory = Path(output_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    json_path, parquet_path = directory / f"{stem}.json", directory / f"{stem}.parquet"
+
+    frame.to_json(json_path, orient="records", indent=2, force_ascii=False)
+    frame.to_parquet(parquet_path, engine="pyarrow", compression=DEFAULT_PARQUET_COMPRESSION, index=False)
+
+    return json_path, parquet_path
 
 
 # --------------------------------------------------------------------------- #
@@ -194,13 +209,15 @@ def compute_text_stats(
     language: str,
     *,
     mattr_window: int = DEFAULT_MATTR_WINDOW,
+    output_dir: str | Path | None = None,
     progress: bool = False,
 ) -> pd.DataFrame:
     """
     Text-corpus metrics: documents, sentences, tokens, vocabulary, length
     distributions and lexical diversity, as a single-row DataFrame.
 
-    Reads `text` only; the entity layer is ignored.
+    Reads `text` only; the entity layer is ignored. Pass `output_dir` to also write
+    `text_stats.json` / `text_stats.parquet` there.
     """
     tokenizer = _load_tokenizer(base_model)
     measurements = TextMeasurements()
@@ -211,7 +228,12 @@ def compute_text_stats(
     for text in frame["text"]:
         measurements.add(text or "", language, tokenizer, mattr_window)
 
-    return pd.DataFrame([measurements.row(language)])
+    result = pd.DataFrame([measurements.row(language)])
+
+    if output_dir is not None:
+        write_stats(result, output_dir, "text_stats")
+
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -335,6 +357,7 @@ def compute_annotation_stats(
     base_model: str,
     *,
     normalize_labels: bool = False,
+    output_dir: str | Path | None = None,
     progress: bool = False,
 ) -> pd.DataFrame:
     """
@@ -344,7 +367,8 @@ def compute_annotation_stats(
 
     The breakdown is spread into flat `mentions_<LABEL>` / `pct_<LABEL>` columns
     ordered by corpus-wide frequency, so the table round-trips through parquet and
-    JSON without nesting.
+    JSON without nesting. Pass `output_dir` to also write `annotation_stats.json` /
+    `annotation_stats.parquet` there.
     """
     tokenizer = _load_tokenizer(base_model)
     measurements = AnnotationMeasurements()
@@ -362,4 +386,9 @@ def compute_annotation_stats(
         row[f"mentions_{label}"] = count
         row[f"pct_{label}"] = share(count, mentions)
 
-    return pd.DataFrame([row])
+    result = pd.DataFrame([row])
+
+    if output_dir is not None:
+        write_stats(result, output_dir, "annotation_stats")
+
+    return result
