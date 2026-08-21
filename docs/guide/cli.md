@@ -20,7 +20,9 @@ no seed to set — inference is deterministic.
 
 A flat mapping. A `task` key names the stage; every other key is passed to that stage's
 function as a keyword argument, so **the YAML keys are exactly the parameter names** the guide
-pages document.
+pages document — except on `prepare_dataset`, where `stats`, `base_model`, `language` and
+`normalize_labels` are CLI-only keys that trigger [corpus statistics](prepare-dataset.md#corpus-statistics)
+after the corpus is built, and are not parameters of `prepare_dataset` itself.
 
 | `task` | Function | Parameters |
 |---|---|---|

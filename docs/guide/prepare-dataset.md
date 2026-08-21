@@ -139,6 +139,31 @@ is the quickest way to find the `target_label` values a new corpus supports. Lik
 report, it counts entities **as annotated** — overlaps are resolved at encoding time, so these
 describe the corpus rather than the entity set a training run sees.
 
+## Corpus statistics
+
+`ner_lab.data.compute_text_stats` and `ner_lab.data.compute_annotation_stats` measure a
+corpus DataFrame — size, length distributions, vocabulary and lexical diversity for the text;
+mention counts, surface-form diversity and span-relation complexity for the entity layer.
+Each returns a single-row DataFrame and neither needs the other:
+
+```python
+from transformers import AutoTokenizer
+from ner_lab.data import read_corpus, compute_text_stats, compute_annotation_stats
+
+corpus = read_corpus("assets/splits/disease/documents.parquet")
+
+text_stats = compute_text_stats(corpus, base_model="xlm-roberta-large", language="es")
+annotation_stats = compute_annotation_stats(corpus, base_model="xlm-roberta-large")
+```
+
+`base_model` is a hub id or local path; both functions load their own tokenizer from it, so
+nothing pre-loaded needs to be passed in. `language` drives sentence segmentation and is
+required on `compute_text_stats` for the same reason it is required on `Encoder` — a corpus
+carries one language, recorded in `source_manifest.json`, never per document.
+
+They are a sibling step to `prepare_dataset`, not a parameter on it: nothing here is called
+automatically from Python. The YAML path below is the one place that wires the two together.
+
 ## From YAML
 
 ```yaml
@@ -153,3 +178,28 @@ holdout_fold: 0
 ```bash
 ner-lab run prepare.yaml
 ```
+
+Four extra keys are recognized only here, on the `prepare_dataset` task, and are not
+parameters of `prepare_dataset` itself — the CLI pops them off before calling it, then runs
+the stats functions above and writes their output next to `source_manifest.json`:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `stats` | `"none"` | `"none"`, `"text"`, or `"both"`. |
+| `base_model` | — | Required when `stats` is `"text"` or `"both"`. |
+| `language` | — | Required when `stats` is `"text"` or `"both"`. |
+| `normalize_labels` | `False` | Passed to `compute_annotation_stats` when `stats: "both"`. |
+
+```yaml
+task: prepare_dataset
+documents: corpora/disease/txt
+annotations: corpora/disease/ann
+output_dir: assets/splits
+split: false
+stats: both
+base_model: xlm-roberta-large
+language: es
+```
+
+writes `text_stats.json` / `text_stats.parquet` and `annotation_stats.json` /
+`annotation_stats.parquet` beside `documents.parquet`.

@@ -47,6 +47,7 @@ from ner_lab.data.split import (
     split_documents,
     split_paths,
 )
+from ner_lab.data.stats import compute_annotation_stats, compute_text_stats
 from ner_lab.data.stratification import parse_document_label_counts
 
 __all__ = [
@@ -63,6 +64,8 @@ __all__ = [
     "assign_partitions",
     "build_balance_report",
     "build_corpus",
+    "compute_annotation_stats",
+    "compute_text_stats",
     "count_labels",
     "create_split",
     "derive_dataset_name",
