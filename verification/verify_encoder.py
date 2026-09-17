@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from _harness import Checks, run
 from fixtures import samples_root, synthetic_corpus
 
-from ner_lab.data import build_corpus, write_corpus
-from ner_lab.encoding import Encoder, build_iob2_labels, build_window
+from lab.core import build_corpus, write_corpus
+from lab.ner.encoding import Encoder, build_iob2_labels, build_window
 
 NER_API_ENV = "NER_API_ROOT"
 DEFAULT_NER_API = Path.home() / "bsc" / "NER-API"

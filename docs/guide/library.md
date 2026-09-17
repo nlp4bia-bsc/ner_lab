@@ -13,11 +13,11 @@ A complete pipeline built from them:
 ```python
 from transformers import AutoTokenizer
 
-from ner_lab import (
+from lab.ner import (
     Encoder, build_model, training_arguments, train, build_compute_metrics,
 )
-from ner_lab.data import read_corpus
-from ner_lab.training import model_encoding
+from lab.core import read_corpus
+from lab.ner.training import model_encoding
 
 corpus = read_corpus("assets/splits/disease/train_val_80_20/train.parquet")
 validation = read_corpus("assets/splits/disease/train_val_80_20/validation.parquet")
@@ -51,7 +51,7 @@ Corpus in, one row per window out. Configured once and reused across a split's p
 every partition shares the same `label2id` and token budget.
 
 ```python
-from ner_lab import Encoder
+from lab.ner import Encoder
 
 Encoder(
     tokenizer,
@@ -103,7 +103,7 @@ corpus.
 | `"keep_shortest"` | Keep the shortest. |
 | `"merge_same_label_then_keep_longest"` | Merge overlapping spans that share a label into their union first, then keep the longest of what remains. The default. |
 
-`ner_lab.encoding.describe_encoder(encoder)` returns the configuration as plain data, and
+`lab.ner.encoding.describe_encoder(encoder)` returns the configuration as plain data, and
 `encoder_from_description(...)` rebuilds one from it — that pair is what lets inference window
 its input exactly as training did.
 
@@ -112,7 +112,7 @@ its input exactly as training did.
 ## `build_model`
 
 ```python
-from ner_lab import build_model
+from lab.ner import build_model
 
 build_model(base_model, label2id, id2label, architecture="linear", **architecture_kwargs)
 ```
@@ -126,7 +126,7 @@ build_model(base_model, label2id, id2label, architecture="linear", **architectur
 | `**architecture_kwargs` | — | Forwarded to the chosen architecture, e.g. `dropout=0.2`. |
 
 `"linear"` is the stock `AutoModelForTokenClassification` head. `"crf"` is
-`ner_lab.models.crf.CRFForTokenClassification`, which decodes by Viterbi under BIO transition
+`lab.ner.models.crf.CRFForTokenClassification`, which decodes by Viterbi under BIO transition
 constraints. A callable must return a model whose `forward` accepts
 `input_ids`/`attention_mask`/`labels` and returns an object with `loss` and `logits`.
 
@@ -135,12 +135,12 @@ constraints. A callable must return a model whose `forward` accepts
 ## `training_arguments`
 
 ```python
-from ner_lab import training_arguments
+from lab.ner import training_arguments
 
 training_arguments(output_dir, **overrides) -> TrainingArguments
 ```
 
-Builds `transformers.TrainingArguments` from `ner_lab.training.DEFAULTS`, overridden by
+Builds `transformers.TrainingArguments` from `lab.ner.training.DEFAULTS`, overridden by
 whatever you pass. Every keyword `TrainingArguments` accepts is accepted here, so this is a
 starting point rather than a wrapper — build your own and hand it to `train` if the defaults
 are in the way.
@@ -179,7 +179,7 @@ One training run. Everything that decides *what* is trained is already in the ob
 pass; these parameters decide how the run itself behaves.
 
 ```python
-from ner_lab import train
+from lab.ner import train
 
 train(
     model,
@@ -218,14 +218,14 @@ train(
 | `save_model` | `False` | Keep the weights. Otherwise the selection checkpoints are removed afterwards, including when training raises. |
 | `track_resources` | `False` | Wall clock, energy, emissions and peak VRAM, via codecarbon. |
 | `run_metadata` | `None` | Extra keys recorded in `training_summary.json`. |
-| `model_encoding` | `None` | Written beside saved weights as `encoding.json`. Build it with `ner_lab.training.model_encoding`. |
+| `model_encoding` | `None` | Written beside saved weights as `encoding.json`. Build it with `lab.ner.training.model_encoding`. |
 
 **Returns** a `TrainingResult` with `trainer`, `model`, `metrics`, `epoch_metrics`, `summary`,
 `output_dir`, `resources` and `paths`.
 
 `epoch_metrics.parquet` and `training_summary.json` are always written to
 `training_arguments.output_dir`. Without `model_encoding`, a saved directory cannot be loaded
-by `ner_lab.inference` — and a CRF model, which the Trainer saves as a bare state dict, cannot
+by `lab.ner.inference` — and a CRF model, which the Trainer saves as a bare state dict, cannot
 be rebuilt at all. `save_model=True` with early stopping requires
 `load_best_model_at_end=True`, or the saved weights would be the last epoch's rather than the
 best epoch's; `train` raises rather than letting that through.
@@ -239,7 +239,7 @@ take the same arguments; `build_compute_metrics` returns a callable for
 `train(compute_metrics=...)`, `evaluate_predictions` scores an array you already have.
 
 ```python
-from ner_lab import build_compute_metrics, evaluate_predictions
+from lab.ner import build_compute_metrics, evaluate_predictions
 
 build_compute_metrics(
     rows, tokenizer, id2label,

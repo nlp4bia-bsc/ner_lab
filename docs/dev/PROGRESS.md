@@ -3,10 +3,22 @@
 What has actually landed, and the evidence for it. One entry per subsystem, not per session.
 Decisions live in [DECISIONS.md](DECISIONS.md); this file records outcomes.
 
-**Verification suite: 598 checks, all passing.** See [`verification/`](../../verification/).
+**Verification suite: 754 checks, all passing.** See [`verification/`](../../verification/).
 
 | Subsystem | Checks | Equivalence with NER-API |
 |---|---|---|
+| layering (`core` ← `ner`, no torch in `core`) | 68 | — |
+| `core/` | 153 | conversion + split on the real MultiClinNER sample |
+| `ner/encoding/` leaves | 79 | — |
+| `ner/encoding/` `Encoder` | 45 | exact, 4 tokenizer × strategy combinations |
+| `ner/models/` | 33 | — |
+| `ner/training/` | 53 | — |
+| `ner/evaluation/` | 59 | exact, every metric family |
+| `ner/training/assessment.py` | 76 | — |
+| `ner/hpo/` | 97 | — |
+| `ner/inference.py` | 91 | not diffed — see below |
+
+---|---|---|
 | `data/` | 97 | conversion + split on the real MultiClinNER sample |
 | `encoding/` leaves | 79 | — |
 | `encoding/` `Encoder` | 45 | exact, 4 tokenizer × strategy combinations |
@@ -316,3 +328,35 @@ checkpoint on disk both implementations can read. The pieces it is built from ar
 already verified exact — span reconstruction, the metric families, the official scorer — and
 what is new here is the decoding of score and text, which is checked directly. Worth stating
 plainly rather than leaving implied by a table.
+
+---
+
+## Restructure — 2026-09-17
+
+`ner_lab` became `lab.core` + `lab.ner` (D82–D90), following [RESTRUCTURE.md](RESTRUCTURE.md)
+§3 module for module. Four splits, everything else a rename: sentence segmentation to
+`core`; `evaluation/spans.py` into the span contract (`core.spans`) and the BIO
+reconstruction (`ner.evaluation.spans`); `evaluation/scoring.py` into generic scoring
+(`core.scoring`) and the `id2label` convenience (`ner.evaluation.scoring`); `tasks.py` into
+`core.tasks` plus a string-only table per namespace. Task names are namespaced
+(`core.prepare_dataset`, `ner.train_model`), `cli.run` is `task(**parameters)` and nothing
+else, `lab tasks` lists every task and marks the ones whose extra is missing, and
+`prepare_dataset` owns `stats`/`base_model`/`language` (D87, → notes). `pyproject.toml`
+declares the extras of D85; `lab.ner` keeps nine lazy exports, `prepare_dataset` being
+`lab.core`'s.
+
+Verified: the full suite passes with the same 686 checks before and after the move — the
+only edits to the scripts were import paths and the three namespaced task names — plus the
+68 layering checks added with it. The NEL code was read, not merged (D88); what it settled is
+in RESTRUCTURE.md §8.
+
+**One behaviour change, deliberate:** from YAML, `normalize_labels: true` on
+`prepare_dataset` now normalizes the corpus as well as the annotation statistics. The D81 CLI
+branch popped the key before calling the task, so the corpus was never normalized from YAML
+although the function's documentation said it was.
+
+**One thing noticed, not changed:** `import lab.core` loads `torch` when torch happens to be
+installed, because `core/stats.py` imports `AutoTokenizer` at module level and
+`transformers` 5 imports torch when it finds it. `ner_lab.data` behaved the same. Moving the
+import inside `_load_tokenizer` would make `lab.core` light in a `lab[ner]` environment;
+left for a decision.

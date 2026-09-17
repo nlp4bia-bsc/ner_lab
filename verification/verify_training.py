@@ -14,7 +14,7 @@ from _harness import Checks, run
 
 
 def verify_rows(checks: Checks) -> None:
-    from ner_lab.training.dataset import ensure_int_list, is_encoded, validate_rows
+    from lab.ner.training.dataset import ensure_int_list, is_encoded, validate_rows
 
     checks.equal("a list is coerced", ensure_int_list([1, 2]), [1, 2])
     checks.equal("a tuple is coerced", ensure_int_list((1, 2)), [1, 2])
@@ -53,7 +53,7 @@ def verify_arguments(checks: Checks) -> None:
 
     import tempfile
 
-    from ner_lab.training import DEFAULTS, training_arguments
+    from lab.ner.training import DEFAULTS, training_arguments
 
     with tempfile.TemporaryDirectory() as tmp:
         arguments = training_arguments(tmp)
@@ -77,7 +77,7 @@ def verify_devices(checks: Checks) -> None:
     import tempfile
     import warnings
 
-    from ner_lab.training import (
+    from lab.ner.training import (
         apply_device_policy,
         effective_train_batch_size,
         require_single_device,
@@ -189,10 +189,10 @@ def verify_end_to_end(checks: Checks) -> None:
     from transformers import AutoTokenizer
 
     from fixtures import synthetic_corpus, tiny_base_model
-    from ner_lab.encoding import Encoder
-    from ner_lab.models import build_model
-    from ner_lab.evaluation import build_compute_metrics
-    from ner_lab.training import CRFTrainer, resolve_trainer_class, train, training_arguments
+    from lab.ner.encoding import Encoder
+    from lab.ner.models import build_model
+    from lab.ner.evaluation import build_compute_metrics
+    from lab.ner.training import CRFTrainer, resolve_trainer_class, train, training_arguments
 
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     encoder = Encoder(tokenizer, "DISEASE", "es", max_length=64)

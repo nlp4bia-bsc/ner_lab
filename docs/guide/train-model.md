@@ -6,7 +6,7 @@ plain train/validation split trains once, a fixed-holdout k-fold split trains on
 rotatable fold and aggregates. The fixed holdout is never read.
 
 ```python
-from ner_lab import train_model
+from lab.ner import train_model
 
 assessment = train_model(
     split_dir="assets/splits/disease/kfold_5_holdout_0",
@@ -32,7 +32,7 @@ assessment.run_dir                         # where everything was written
 | `language` | *required* | Sentence-segmentation language for `pysbd`. Never guessed (D33). |
 | `architecture` | `"linear"` | `"linear"`, `"crf"`, or your own `(base_model, label2id, id2label, **kwargs) -> model`. |
 | `architecture_kwargs` | `None` | Extra keywords for the chosen architecture, e.g. `{"dropout": 0.2}`. |
-| `training_arguments` | `None` | A `TrainingArguments`, or a mapping of overrides applied to `ner_lab.training.DEFAULTS`. The YAML path uses the mapping. |
+| `training_arguments` | `None` | A `TrainingArguments`, or a mapping of overrides applied to `lab.ner.training.DEFAULTS`. The YAML path uses the mapping. |
 | `max_length` | `256` | Token budget per window, including special tokens. |
 | `strategy` | `"greedy"` | Window strategy, or your own callable. |
 | `context_tokens` | `None` | Flanking context per window. Only valid with `strategy="context"`. |
@@ -51,7 +51,7 @@ assessment.run_dir                         # where everything was written
 | `random_state` | `None` | Overrides `TrainingArguments.seed`. |
 
 Everything after `language` configures the `Encoder`, `build_model` and `train` that this
-assembles. Build those yourself and call `ner_lab.training.train` if the assembly is in the
+assembles. Build those yourself and call `lab.ner.training.train` if the assembly is in the
 way — the orchestrator applies no policy you cannot reach by
 [composing them](library.md).
 
@@ -80,7 +80,7 @@ is built for you from each run's own validation rows.
 ## From YAML
 
 ```yaml
-task: train_model
+task: ner.train_model
 split_dir: assets/splits/disease/kfold_5_holdout_0
 output_dir: assets/runs
 base_model: PlanTL-GOB-ES/roberta-base-biomedical-clinical-es

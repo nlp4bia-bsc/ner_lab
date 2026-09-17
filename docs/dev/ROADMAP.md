@@ -6,18 +6,20 @@ What is done, what is next, what is still open.
 
 Migration status. Updated as each stage lands.
 
-| Stage | `ner_lab` | From | Status |
+| Stage | `lab` | From | Status |
 |---|---|---|---|
-| Corpus + split | `data/` | `00_generate_data.py`, `src/preprocessing/{load_data,label_normalization,entity_stratified_holdout_kfold}.py` | **done** — task `prepare_dataset` |
-| Encoding | `encoding/` | `src/preprocessing/{dataset_loader,sentence_splitter,window_*,label_builder,row_builder}.py` | **done** — library only, no task (D-note below) |
-| Architectures | `models/` | `src/models/{token_classification_base,simple_ner,crf_transformer}.py` | **done** — `build_model` |
-| Training | `training/` | `src/training/*`, `src/models/token_level_dataset.py`, the training half of `token_classification_base.py` | **done** — `train` |
-| Evaluation | `evaluation/` | `src/metrics/{metrics,multiclinner_eval}.py` | **done** — `build_compute_metrics`, `multiclinner` |
-| Training orchestrator | `training/assessment.py` | `02_train_assessment.py` | **done** — task `train_model` (D48) |
-| HPO | `hpo/` | `01_HPO_ner.py` (13 of its functions live in the script) | **done** — task `search_hyperparameters`. Not "a loop over the orchestrator" as this file once claimed: trials call `train()` directly, with the corpus windowed once per variant (D54) |
-| Inference | `inference.py` | `03_infer_model.py` | **done** — task `predict_entities` (D61) |
+| Corpus + split | `core/` | `00_generate_data.py`, `src/preprocessing/{load_data,label_normalization,entity_stratified_holdout_kfold}.py` | **done** — task `core.prepare_dataset` |
+| Encoding | `ner/encoding/` (segmentation in `core/`) | `src/preprocessing/{dataset_loader,sentence_splitter,window_*,label_builder,row_builder}.py` | **done** — library only, no task (D-note below) |
+| Architectures | `ner/models/` | `src/models/{token_classification_base,simple_ner,crf_transformer}.py` | **done** — `build_model` |
+| Training | `ner/training/` | `src/training/*`, `src/models/token_level_dataset.py`, the training half of `token_classification_base.py` | **done** — `train` |
+| Evaluation | `ner/evaluation/` (span table and generic scoring in `core/`) | `src/metrics/{metrics,multiclinner_eval}.py` | **done** — `build_compute_metrics`, `multiclinner` |
+| Training orchestrator | `ner/training/assessment.py` | `02_train_assessment.py` | **done** — task `ner.train_model` (D48) |
+| HPO | `ner/hpo/` | `01_HPO_ner.py` (13 of its functions live in the script) | **done** — task `ner.search_hyperparameters`. Not "a loop over the orchestrator" as this file once claimed: trials call `train()` directly, with the corpus windowed once per variant (D54) |
+| Inference | `ner/inference.py` | `03_infer_model.py` | **done** — task `ner.predict_entities` (D61) |
 | Analysis / setup scripts | — | `01b_analyze_hpo_trials.py`, `04_official_eval.py`, `build_gold_test_parquets.py`, `aux_download_baseline_model.py` | not library surface; candidates for `examples/` or dropped |
 | Augmentation | — | `00b_augment_data.py` | cut (D16) |
+| Restructure | `core/` + `ner/`, `cli.py` | `ner_lab` | **done** 2026-09-17 — D82–D90, [RESTRUCTURE.md](RESTRUCTURE.md) |
+| NEL | `nel/` | `bsc/nlp4bia-linking` | next — read during the restructure, not merged (D88) |
 
 `Encoder` is deliberately **not** a task: it produces in-memory rows with no artifact worth
 persisting. Training, HPO and inference construct and call it.
@@ -43,7 +45,7 @@ Nothing here blocks the next stage. Each is decided when the stage that needs it
   written yet. The four unmigrated NER-API scripts are candidates for it.
 - **Q11 — Provenance of the caller's code.** D52 dropped NER-API's `git rev-parse HEAD`,
   which recorded the commit of the repo the *script* lived in. What identifies a run's code
-  when the library is an installed wheel is undecided: `ner_lab.__version__` is one answer,
+  when the library is an installed wheel is undecided: `lab.__version__` is one answer,
   a `run_metadata` field the caller fills is another. Decide when someone needs to reproduce
   a run, not before.
 

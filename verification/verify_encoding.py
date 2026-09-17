@@ -9,24 +9,26 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from _harness import Checks, run
 
-from ner_lab.encoding import (
+from lab.core import (
+    merge_ranges,
+    merge_sentences_crossing_entities,
+    merge_short_sentences,
+    sentence_token_ranges,
+    split_into_sentences,
+    tokenize_document,
+)
+from lab.ner.encoding import (
     IGNORE_INDEX,
     build_iob2_labels,
     build_label_vocabulary,
     build_row,
     build_window,
     compute_max_content_length,
-    merge_ranges,
-    merge_sentences_crossing_entities,
-    merge_short_sentences,
     resolve_entities,
     select_context_windows,
     select_greedy_windows,
-    sentence_token_ranges,
     special_token_template,
-    split_into_sentences,
     split_oversized_sentence,
-    tokenize_document,
 )
 
 TEXT = (

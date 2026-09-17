@@ -27,7 +27,7 @@ def verify_space(checks: Checks) -> None:
     from ray import tune
     from ray.tune.search.sample import Domain
 
-    from ner_lab.hpo import (
+    from lab.ner.hpo import (
         DEFAULT_SEARCH_SPACE,
         build_search_space,
         describe_search_space,
@@ -92,7 +92,7 @@ def verify_space(checks: Checks) -> None:
 
 
 def verify_batch_sizes(checks: Checks) -> None:
-    from ner_lab.hpo import resolve_batch_sizes
+    from lab.ner.hpo import resolve_batch_sizes
 
     checks.equal("a fitting batch is not split", resolve_batch_sizes(16, 64), (16, 1))
     checks.equal("an oversized batch accumulates", resolve_batch_sizes(64, 16), (16, 4))
@@ -106,7 +106,7 @@ def verify_batch_sizes(checks: Checks) -> None:
 
 
 def verify_variants(checks: Checks) -> None:
-    from ner_lab.hpo import build_variants, describe_variants, variant_key
+    from lab.ner.hpo import build_variants, describe_variants, variant_key
 
     variants = build_variants(
         ["/models/roberta-base", "/models/beto"],
@@ -167,8 +167,8 @@ def verify_variants(checks: Checks) -> None:
 
 
 def verify_scoring(checks: Checks) -> None:
-    from ner_lab.hpo import is_oom_error, metric_greater_is_better, top_k_epoch_mean
-    from ner_lab.training import training_arguments
+    from lab.ner.hpo import is_oom_error, metric_greater_is_better, top_k_epoch_mean
+    from lab.ner.training import training_arguments
 
     epochs = pd.DataFrame(
         {
@@ -229,8 +229,8 @@ def verify_scoring(checks: Checks) -> None:
 def verify_base_arguments(checks: Checks) -> None:
     from transformers import TrainingArguments
 
-    from ner_lab.hpo import HPO_ARGUMENT_DEFAULTS, resolve_base_arguments
-    from ner_lab.training import DEFAULTS
+    from lab.ner.hpo import HPO_ARGUMENT_DEFAULTS, resolve_base_arguments
+    from lab.ner.training import DEFAULTS
 
     with tempfile.TemporaryDirectory() as tmp:
         base = resolve_base_arguments(None, tmp)
@@ -263,8 +263,8 @@ def verify_base_arguments(checks: Checks) -> None:
 
 
 def verify_winner_configuration(checks: Checks) -> None:
-    from ner_lab.hpo import winner_configuration
-    from ner_lab.training import training_arguments
+    from lab.ner.hpo import winner_configuration
+    from lab.ner.training import training_arguments
 
     with tempfile.TemporaryDirectory() as tmp:
         block = winner_configuration(
@@ -286,7 +286,7 @@ def verify_winner_configuration(checks: Checks) -> None:
             user_overrides={"fp16": False, "save_strategy": "no", "load_best_model_at_end": False},
         )
 
-    checks.equal("the block is a train_model task", block["task"], "train_model")
+    checks.equal("the block is a train_model task", block["task"], "ner.train_model")
     checks.equal("the winning variant decides the base_model", block["base_model"], "/models/beto")
     checks.equal("the winning variant decides the windowing", block["max_length"], 128)
 
@@ -308,8 +308,8 @@ def verify_winner_configuration(checks: Checks) -> None:
 
 
 def verify_winner_config_file(checks: Checks, block: dict) -> None:
-    from ner_lab.cli import load_config
-    from ner_lab.hpo import write_winner_config
+    from lab.cli import load_config
+    from lab.ner.hpo import write_winner_config
 
     with tempfile.TemporaryDirectory() as tmp:
         path = write_winner_config(block, Path(tmp) / "winner.yaml")
@@ -319,12 +319,12 @@ def verify_winner_config_file(checks: Checks, block: dict) -> None:
 
 
 def verify_task_registration(checks: Checks) -> None:
-    from ner_lab.hpo import search_hyperparameters
-    from ner_lab.tasks import resolve_task
+    from lab.ner.hpo import search_hyperparameters
+    from lab.core.tasks import resolve_task
 
     checks.check(
         "the task name resolves to the search",
-        resolve_task("search_hyperparameters") is search_hyperparameters,
+        resolve_task("ner.search_hyperparameters") is search_hyperparameters,
     )
 
 
@@ -332,8 +332,8 @@ def verify_run_trial(checks: Checks) -> None:
     from transformers import AutoTokenizer
 
     from fixtures import tiny_base_model
-    from ner_lab.data.split import split_paths
-    from ner_lab.hpo import build_variants, encode_variants, resolve_base_arguments, run_trial
+    from lab.core.split import split_paths
+    from lab.ner.hpo import build_variants, encode_variants, resolve_base_arguments, run_trial
     from verify_assessment import prepare_split
 
     shared = tempfile.TemporaryDirectory()
@@ -423,8 +423,8 @@ def verify_end_to_end(checks: Checks) -> None:
     from transformers import AutoTokenizer
 
     from fixtures import tiny_base_model
-    from ner_lab.hpo import search_hyperparameters
-    from ner_lab.training import train_model
+    from lab.ner.hpo import search_hyperparameters
+    from lab.ner.training import train_model
     from verify_assessment import prepare_split
 
     shared = tempfile.TemporaryDirectory()
@@ -485,11 +485,11 @@ def verify_end_to_end(checks: Checks) -> None:
 
     best = result.best
 
-    checks.equal("the winner block is a train_model task", best["task"], "train_model")
+    checks.equal("the winner block is a train_model task", best["task"], "ner.train_model")
     checks.equal("it points at the searched split", best["split_dir"], str(split_dir))
     checks.check("it carries a sampled learning rate", 1e-5 <= best["training_arguments"]["learning_rate"] <= 1e-4)
 
-    from ner_lab.cli import load_config
+    from lab.cli import load_config
 
     checks.check("the winner config is written", result.paths["winner"].exists())
     checks.equal(

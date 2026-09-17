@@ -7,7 +7,7 @@ epoch never wins a sweep. Out-of-memory trials score worst instead of failing; a
 halts the sweep immediately rather than burning the remaining trials on the same bug.
 
 ```python
-from ner_lab import search_hyperparameters
+from lab.ner import search_hyperparameters
 
 sweep = search_hyperparameters(
     split_dir="assets/splits/disease/kfold_5_holdout_0",
@@ -35,7 +35,7 @@ sweep.trials                     # DataFrame, one row per trial
 | `language` | *required* | Sentence-segmentation language. |
 | `architecture` | `"linear"` | As in `train_model`. Fixed per sweep, not searched. |
 | `architecture_kwargs` | `None` | Extra keywords for the architecture. |
-| `search_space` | `None` | Overrides applied to `ner_lab.hpo.DEFAULT_SEARCH_SPACE` — see below. |
+| `search_space` | `None` | Overrides applied to `lab.ner.hpo.DEFAULT_SEARCH_SPACE` — see below. |
 | `training_arguments` | `None` | A `TrainingArguments` or a mapping of overrides, as in `train_model`. Defaults add a 40-epoch cap and no checkpointing. Its `metric_for_best_model` is the sweep objective. |
 | `n_trials` | `40` | Configurations sampled by Optuna. |
 | `seeds_per_trial` | `5` | Trainings per trial; the score averages across them. |
@@ -98,7 +98,7 @@ them.
     run_manifest.json          before the sweep starts: space, variants, provenance
     trials_summary.parquet     one row per trial: sampled values, score, spread, resources
     hpo_summary.json           the winner, raw and as a train_model config
-    winner.yaml                the same winner block, runnable by `ner-lab run`
+    winner.yaml                the same winner block, runnable by `lab run`
     smoke_test/, trials/       Ray's own per-trial directories
     final_train/               where winner.yaml sends the final training run
 ```
@@ -107,7 +107,7 @@ them.
 winning trial reaches the assessment stage without being retyped:
 
 ```bash
-ner-lab run assets/sweeps/<run>/winner.yaml
+lab run assets/sweeps/<run>/winner.yaml
 ```
 
 Its `output_dir` is `<the sweep's directory>/final_train`, so it runs as written and keeps the
@@ -118,7 +118,7 @@ assessment's k-fold mean ± std, not the sweep's.
 ## From YAML
 
 ```yaml
-task: search_hyperparameters
+task: ner.search_hyperparameters
 split_dir: assets/splits/disease/kfold_5_holdout_0
 output_dir: assets/sweeps
 base_models:

@@ -67,7 +67,7 @@ def synthetic_documents(n_documents: int = 24, label: str = "DISEASE") -> tuple[
 
 def synthetic_corpus(n_documents: int = 24, label: str = "DISEASE") -> pd.DataFrame:
     """Build a canonical corpus DataFrame directly, bypassing the BRAT readers."""
-    from ner_lab.data import build_corpus
+    from lab.core import build_corpus
 
     documents, annotations = synthetic_documents(n_documents, label)
 

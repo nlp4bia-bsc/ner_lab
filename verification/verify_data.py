@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from _harness import Checks, run
 from fixtures import entities_of, samples_root, synthetic_documents, write_brat
 
-from ner_lab.data import (
+from lab.core import (
     LABEL_ALIASES,
     assign_partitions,
     build_corpus,
@@ -37,8 +37,8 @@ from ner_lab.data import (
     validate_corpus,
     write_corpus,
 )
-from ner_lab.data.corpus import DOCUMENT_COLUMNS, DOCUMENT_DTYPES
-from ner_lab.data.stratification import normalize_ratios, parse_document_label_counts
+from lab.core.corpus import DOCUMENT_COLUMNS, DOCUMENT_DTYPES
+from lab.core.stratification import normalize_ratios, parse_document_label_counts
 
 
 def verify_labels(checks: Checks) -> None:

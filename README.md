@@ -1,7 +1,9 @@
-# ner_lab
+# lab
 
-A library for end-to-end clinical NER: corpus conversion, entity-stratified splitting,
-hyperparameter search, training, inference and evaluation.
+The unit's NLP library: one repository, one import namespace, one CLI. `lab.core` holds the
+data contracts — corpus conversion, entity-stratified splitting, corpus statistics, span
+scoring — with no `torch`. Each task lives in its own subpackage on top of it; `lab.ner` is
+clinical NER end to end: encoding, hyperparameter search, training, inference and evaluation.
 
 **Batteries included, but removable.** One call takes you from a BRAT corpus to a trained
 model, and every step of it is a public function you can call, replace or skip. Defaults are
@@ -28,15 +30,17 @@ the whole pipeline.
 ```bash
 git clone git@github.com:nlp4bia-bsc/ner_lab.git
 cd ner_lab
-uv pip install -e .          # or: pip install -e .
+uv pip install -e ".[ner]"     # or: pip install -e ".[ner]"
 ```
 
-Requires Python 3.10 or newer. `torch` is pinned to exactly `2.10.0`.
+Requires Python 3.10 or newer. `lab` alone is torch-free and gives corpus conversion,
+splitting, statistics and span scoring. `lab[ner]` adds the NER stack; it pins `torch` to
+exactly `2.10.0` through the shared `lab[torch]` extra every tool builds on.
 
 ## Quick start
 
 ```python
-from ner_lab import prepare_dataset
+from lab.core import prepare_dataset
 
 prepared = prepare_dataset(
     output_dir="assets/splits",
@@ -50,7 +54,7 @@ prepared.split.paths["train"]   # Path to the written train.parquet
 ```
 
 ```bash
-ner-lab run prepare.yaml
+lab run prepare.yaml
 ```
 
 Both routes call the same function and produce identical output.
@@ -59,30 +63,36 @@ Both routes call the same function and produce identical output.
 
 | Stage | Entry point | CLI task | Reference |
 |---|---|---|---|
-| Prepare a dataset | `ner_lab.prepare_dataset` | `prepare_dataset` | [guide/prepare-dataset.md](docs/guide/prepare-dataset.md) |
-| Train against a split | `ner_lab.train_model` | `train_model` | [guide/train-model.md](docs/guide/train-model.md) |
-| Search hyperparameters | `ner_lab.search_hyperparameters` | `search_hyperparameters` | [guide/search-hyperparameters.md](docs/guide/search-hyperparameters.md) |
-| Predict with a model | `ner_lab.predict_entities` | `predict_entities` | [guide/predict-entities.md](docs/guide/predict-entities.md) |
-| Encode a corpus | `ner_lab.Encoder` | — | [guide/library.md](docs/guide/library.md) |
-| Build a model | `ner_lab.build_model` | — | [guide/library.md](docs/guide/library.md) |
-| Train one model | `ner_lab.train` | — | [guide/library.md](docs/guide/library.md) |
-| Score predictions | `ner_lab.build_compute_metrics` | — | [guide/library.md](docs/guide/library.md) |
+| Prepare a dataset | `lab.core.prepare_dataset` | `core.prepare_dataset` | [guide/prepare-dataset.md](docs/guide/prepare-dataset.md) |
+| Train against a split | `lab.ner.train_model` | `ner.train_model` | [guide/train-model.md](docs/guide/train-model.md) |
+| Search hyperparameters | `lab.ner.search_hyperparameters` | `ner.search_hyperparameters` | [guide/search-hyperparameters.md](docs/guide/search-hyperparameters.md) |
+| Predict with a model | `lab.ner.predict_entities` | `ner.predict_entities` | [guide/predict-entities.md](docs/guide/predict-entities.md) |
+| Encode a corpus | `lab.ner.Encoder` | — | [guide/library.md](docs/guide/library.md) |
+| Build a model | `lab.ner.build_model` | — | [guide/library.md](docs/guide/library.md) |
+| Train one model | `lab.ner.train` | — | [guide/library.md](docs/guide/library.md) |
+| Score predictions | `lab.ner.build_compute_metrics` | — | [guide/library.md](docs/guide/library.md) |
 
 The four with no CLI task take DataFrames and objects rather than paths, so there is no single
 artifact for a config file to point at. `train_model` is the call that joins them — it takes a
 split directory and assembles them for you.
 
-The CLI itself — one command, its two flags, the config format — is
+Task names carry their subpackage. `lab tasks` lists them and marks any whose extra is not
+installed. The CLI itself — one command, its two flags, the config format — is
 [guide/cli.md](docs/guide/cli.md).
 
 ## Importing
 
-The ten functions that start a stage — or that you build to start one — are importable
-directly from `ner_lab`:
+`lab.core` exports its contracts and every function around them directly:
 
 ```python
-from ner_lab import (
-    prepare_dataset,        # corpus + split
+from lab.core import prepare_dataset, read_corpus, build_corpus, create_split, score_spans
+```
+
+The nine functions that start a NER stage — or that you build to start one — are importable
+directly from `lab.ner`:
+
+```python
+from lab.ner import (
     Encoder,                # corpus -> model-ready rows
     build_model,            # architecture factory
     training_arguments,     # transformers.TrainingArguments with this library's defaults
@@ -95,12 +105,25 @@ from ner_lab import (
 )
 ```
 
-Everything else keeps its subpackage path — `ner_lab.data`, `ner_lab.encoding`,
-`ner_lab.models`, `ner_lab.training`, `ner_lab.evaluation`, `ner_lab.hpo` — and so do the ten
-above, so `from ner_lab.training import train_model` remains correct.
+Everything else keeps its subpackage path — `lab.ner.encoding`, `lab.ner.models`,
+`lab.ner.training`, `lab.ner.evaluation`, `lab.ner.hpo` — and so do the nine above, so
+`from lab.ner.training import train_model` remains correct. Names on `lab.ner` resolve on
+first use, so `import lab.ner` loads nothing.
 
-Names resolve on first use, so `import ner_lab` imports nothing and `ner_lab.data`,
-`ner_lab.encoding` and `ner_lab.evaluation` do not require `torch`.
+## Layout
+
+```
+lab/
+├── core/    data contracts, I/O, provenance, task registry.  No torch.
+├── ner/     clinical NER.                                    torch, via lab[ner].
+└── cli.py   one entry point, `lab`.
+```
+
+Imports point one way: `core` never imports a task subpackage, and task subpackages never
+import each other. They compose through `core`'s two tables instead, so a linker or a
+cross-lingual comparison works on spans from this NER, from gold annotations, or from a
+system outside the library. [`docs/dev/RESTRUCTURE.md`](docs/dev/RESTRUCTURE.md) is the
+argument.
 
 ## The canonical corpus
 
@@ -113,6 +136,10 @@ Entities are stored **as annotated** — overlaps are preserved, and resolving t
 modelling choice made at encoding time, so several policies can be compared without
 regenerating the corpus. One consequence: `n_entities` and the balance report describe the
 corpus, not the entity set any particular training run sees.
+
+The second table is the span table, one row per mention:
+`filename | label | start_span | end_span | text [| score]`. Inference writes it, gold `.ann`
+files read into it, and `lab.core.score_spans` scores any two of them against each other.
 
 ## Documentation
 

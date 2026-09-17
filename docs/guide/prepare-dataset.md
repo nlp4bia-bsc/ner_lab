@@ -3,7 +3,7 @@
 Converts a source corpus to the canonical parquet, splits it, and records provenance.
 
 ```python
-from ner_lab import prepare_dataset
+from lab.core import prepare_dataset
 
 prepare_dataset(
     output_dir,
@@ -23,6 +23,9 @@ prepare_dataset(
     reuse_assignments=True,
     corpus_filename="documents.parquet",
     compression="zstd",
+    stats="none",
+    base_model=None,
+    language=None,
 ) -> PreparedDataset
 ```
 
@@ -33,7 +36,7 @@ prepare_dataset(
 | `annotations` | `None` | A DataFrame, a `.tsv` file, a single `.ann` file, or a directory of `.ann` files. Only valid with `documents`. |
 | `source_parquet` | `None` | An existing canonical parquet, skipping conversion. Mutually exclusive with `documents`. |
 | `dataset_name` | derived | Overrides the derived name (from a sibling `metadata.json`, else the documents directory, else the parquet stem). |
-| `normalize_labels` | `False` | Labels are stored exactly as the source annotations write them. Set `True` to map them through `ner_lab.data.LABEL_ALIASES` onto `DISEASE`/`PROCEDURE`/`SYMPTOM`/`MEDICATION`, ignoring case and accents. |
+| `normalize_labels` | `False` | Labels are stored exactly as the source annotations write them. Set `True` to map them through `lab.core.LABEL_ALIASES` onto `DISEASE`/`PROCEDURE`/`SYMPTOM`/`MEDICATION`, ignoring case and accents. |
 | `on_mismatch` | `"error"` | What to do when the document set and the annotation set name different files. See below. |
 | `on_conflict` | `"raise"` | What to do when an annotation's text disagrees with the document it points into. See below. |
 | `split` | `True` | Set `False` to write only the canonical corpus. |
@@ -45,6 +48,9 @@ prepare_dataset(
 | `reuse_assignments` | `True` | Reuse an existing split if present, after validating it against the corpus. Set `False` to rebuild. |
 | `corpus_filename` | `documents.parquet` | Filename for the converted canonical parquet. |
 | `compression` | `zstd` | Parquet compression codec. |
+| `stats` | `"none"` | `"text"` also writes text statistics beside the corpus; `"both"` adds annotation statistics. See [corpus statistics](#corpus-statistics). |
+| `base_model` | `None` | Tokenizer the statistics count with, by hub name or local path. Required when `stats` is not `"none"`. |
+| `language` | `None` | Sentence-segmentation language for the text statistics. Required when `stats` is not `"none"`. |
 
 Give either `documents` plus `annotations`, or `source_parquet`. Passing both, or neither,
 raises.
@@ -102,21 +108,21 @@ The document is never edited to match an annotation, so a rewritten corpus alway
 what its documents actually say. A dropped document takes its clean annotations with it:
 keeping them would leave a document that looks fully annotated while a real entity is silently
 missing. `"rewrite"` and `"drop"` both warn once, naming the affected documents.
-`ner_lab.data.resolve_mismatch` and
-`ner_lab.data.resolve_conflicts` are the same resolvers, callable directly, and each returns
+`lab.core.resolve_mismatch` and
+`lab.core.resolve_conflicts` are the same resolvers, callable directly, and each returns
 a report of what it dropped or rewrote.
 
 ## Label normalization
 
 Off by default: a corpus keeps the labels its annotations declare. With
 `normalize_labels=True`, labels are canonicalized (accents stripped, uppercased, `-` and
-spaces to `_`) and then looked up in `ner_lab.data.LABEL_ALIASES`, which folds the Spanish and
+spaces to `_`) and then looked up in `lab.core.LABEL_ALIASES`, which folds the Spanish and
 plural spellings onto `DISEASE`/`PROCEDURE`/`SYMPTOM`/`MEDICATION`. Labels absent from the
 table are canonicalized but never renamed. For a corpus with its own vocabulary, normalize the
 annotations yourself and pass the result to `build_corpus`:
 
 ```python
-from ner_lab.data import build_corpus, read_annotations, normalize_annotation_labels
+from lab.core import build_corpus, read_annotations, normalize_annotation_labels
 
 annotations = normalize_annotation_labels(
     read_annotations("corpora/genes/ann"),
@@ -134,20 +140,20 @@ corpus = build_corpus("corpora/genes/txt", annotations)
 "n_entities_by_label": {"DISEASE": 12043, "MEDICATION": 3021}
 ```
 
-`ner_lab.data.count_labels(corpus)` returns the same mapping for any corpus DataFrame, which
+`lab.core.count_labels(corpus)` returns the same mapping for any corpus DataFrame, which
 is the quickest way to find the `target_label` values a new corpus supports. Like the balance
 report, it counts entities **as annotated** — overlaps are resolved at encoding time, so these
 describe the corpus rather than the entity set a training run sees.
 
 ## Corpus statistics
 
-`ner_lab.data.compute_text_stats` and `ner_lab.data.compute_annotation_stats` measure a
+`lab.core.compute_text_stats` and `lab.core.compute_annotation_stats` measure a
 corpus DataFrame — size, length distributions, vocabulary and lexical diversity for the text;
 mention counts, surface-form diversity and span-relation complexity for the entity layer.
 Each returns a single-row DataFrame and neither needs the other:
 
 ```python
-from ner_lab.data import read_corpus, compute_text_stats, compute_annotation_stats
+from lab.core import read_corpus, compute_text_stats, compute_annotation_stats
 
 corpus = read_corpus("assets/splits/disease/documents.parquet")
 
@@ -161,19 +167,21 @@ required on `compute_text_stats` for the same reason it is required on `Encoder`
 carries one language, recorded in `source_manifest.json`, never per document.
 
 Pass `output_dir` to either to also write it as `text_stats.{json,parquet}` /
-`annotation_stats.{json,parquet}` there, via the public `ner_lab.data.write_stats`:
+`annotation_stats.{json,parquet}` there, via the public `lab.core.write_stats`:
 
 ```python
 compute_text_stats(corpus, base_model="xlm-roberta-large", language="es", output_dir="stats/disease")
 ```
 
-They are a sibling step to `prepare_dataset`, not a parameter on it: nothing here is called
-automatically from Python. The YAML path below is the one place that wires the two together.
+`prepare_dataset` runs both for you when asked: `stats="text"` writes `text_stats.{json,parquet}`
+next to `source_manifest.json`, `stats="both"` adds `annotation_stats.*`, and `normalize_labels`
+reaches the annotation statistics as well as the corpus. `base_model` and `language` are
+required as soon as `stats` is not `"none"`, and are checked before any conversion starts.
 
 ## From YAML
 
 ```yaml
-task: prepare_dataset
+task: core.prepare_dataset
 documents: corpora/disease/txt
 annotations: corpora/disease/ann
 output_dir: assets/splits
@@ -182,22 +190,13 @@ holdout_fold: 0
 ```
 
 ```bash
-ner-lab run prepare.yaml
+lab run prepare.yaml
 ```
 
-Four extra keys are recognized only here, on the `prepare_dataset` task, and are not
-parameters of `prepare_dataset` itself — the CLI pops them off before calling it, then runs
-the stats functions above and writes their output next to `source_manifest.json`:
-
-| Key | Default | Meaning |
-|---|---|---|
-| `stats` | `"none"` | `"none"`, `"text"`, or `"both"`. |
-| `base_model` | — | Required when `stats` is `"text"` or `"both"`. |
-| `language` | — | Required when `stats` is `"text"` or `"both"`. |
-| `normalize_labels` | `False` | Passed to `compute_annotation_stats` when `stats: "both"`. |
+Every key is a parameter of `prepare_dataset`, statistics included:
 
 ```yaml
-task: prepare_dataset
+task: core.prepare_dataset
 documents: corpora/disease/txt
 annotations: corpora/disease/ann
 output_dir: assets/splits

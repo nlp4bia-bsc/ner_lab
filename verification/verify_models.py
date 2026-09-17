@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from _harness import Checks, run
 
-from ner_lab.models.bio import (
+from lab.ner.models.bio import (
     bio_constraint_masks,
     bio_entity,
     is_inside_label,
@@ -75,7 +75,7 @@ def verify_registry(checks: Checks) -> None:
         checks.skip("model factory", "torch is not installed in this environment")
         return
 
-    from ner_lab.models import BUILTIN_ARCHITECTURES, build_model
+    from lab.ner.models import BUILTIN_ARCHITECTURES, build_model
 
     checks.equal("builtin architectures", BUILTIN_ARCHITECTURES, ("linear", "crf"))
 

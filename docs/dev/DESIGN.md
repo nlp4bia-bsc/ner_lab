@@ -1,6 +1,6 @@
 # Design
 
-Why `ner_lab` is shaped the way it is. Decisions are numbered in [DECISIONS.md](DECISIONS.md).
+Why `lab` is shaped the way it is. Decisions are numbered in [DECISIONS.md](DECISIONS.md).
 
 ## Design intent
 
@@ -10,10 +10,10 @@ and get an object back. `Trainer` has no CLI; nobody trains a model by typing 25
 Two user surfaces, no more:
 
 ```
-python   from ner_lab.preprocessing import build_split
-         df = build_split(documents=..., validation_size=0.2)
+python   from lab.core import prepare_dataset
+         prepared = prepare_dataset(output_dir=..., documents=..., annotations=...)
 
-yaml     ner-lab run config.yaml
+yaml     lab run config.yaml
 ```
 
 The YAML path is for people who don't want to touch Python. It reads a file into kwargs and
@@ -44,36 +44,31 @@ Three hard rules:
 
 ## Layering
 
-Three tiers, so the caller picks how much is done for them:
+Two axes. Within a subpackage, three tiers, so the caller picks how much is done for them:
 
 ```
 tier 1  pure           objects in -> objects out. No I/O. This is the API users want.
 tier 2  persistence    thin readers/writers. Explicit paths. Nothing else.
-tier 3  orchestration  paths in, directory out, + manifests + provenance. What `ner-lab run` calls.
+tier 3  orchestration  paths in, directory out, + manifests + provenance. What `lab run` calls.
 ```
 
-Where NER-API's existing functions land:
+Across subpackages, imports point one way:
 
-| Existing function | Tier | Note |
-|---|---|---|
-| `create_entity_stratified_partition_assignments()` | 1 | already pure |
-| `build_partition_balance_report()` | 1 | already pure |
-| `load_document_level_parquet()` | 2 | already a reader |
-| `write_document_partition()` | 2 | already a writer |
-| `create_entity_stratified_split(parquet_path, output_dir, …)` | 3 | path-in/dir-out; should also accept a DataFrame |
-| `build_document_level_parquet(documents, annotations, output_path)` | 3 only | **gap** — no way to get the canonical DataFrame without writing a file |
-| `scripts/00_generate_data.py::main()` | 3 | manifest building and name derivation live in the script, unreachable from the library |
+```
+lab/
+├── core/    data contracts, I/O, provenance, task registry.  No torch.
+├── ner/     clinical NER: encoding, models, training, HPO, inference.
+└── cli.py   one entry point, `lab`.
 
-Work implied:
+core  <-  { ner, nel, xlt }
+```
 
-1. Split `build_document_level_parquet` into a tier-1 core returning the canonical
-   `doc_id | text | entities_json | n_entities` DataFrame, plus a tier-2 writer.
-2. Let `create_entity_stratified_split` take an in-memory DataFrame as well as a path.
-3. Lift `00_generate_data.py`'s manifest building, `sha256` provenance, dataset-name
-   derivation and split-descriptor naming into the library, opt-in per D15.
-
-Code may be changed freely during migration — this is not a faithful port.
-
+`core` imports nothing from a task subpackage, and a task subpackage never imports another.
+Tools compose through `core`'s two tables — the corpus (`doc_id | text | entities_json |
+n_entities`) and the span table (`filename | label | start_span | end_span | text [| score]`)
+— not through imports; a subpackage that adds information appends columns. A module moves to
+`core` when a second subpackage needs it, and not before. `verification/verify_layering.py`
+checks the rule. [RESTRUCTURE.md](RESTRUCTURE.md) §2–§4 is the full argument.
 
 ---
 

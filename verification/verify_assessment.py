@@ -27,7 +27,7 @@ def torch_available() -> bool:
 
 
 def verify_rotations(checks: Checks) -> None:
-    from ner_lab.training.assessment import fold_rotations
+    from lab.ner.training.assessment import fold_rotations
 
     checks.equal(
         "a train/validation split has one rotation",
@@ -78,7 +78,7 @@ def verify_rotations(checks: Checks) -> None:
 
 
 def verify_naming(checks: Checks) -> None:
-    from ner_lab.training.assessment import architecture_name, run_directory_name
+    from lab.ner.training.assessment import architecture_name, run_directory_name
 
     checks.equal(
         "the run directory names what was trained",
@@ -98,8 +98,8 @@ def verify_naming(checks: Checks) -> None:
 
 
 def verify_run_dir_claim(checks: Checks) -> None:
-    from ner_lab.provenance import write_manifest
-    from ner_lab.training.assessment import RUN_MANIFEST_FILENAME, claim_run_dir
+    from lab.core.provenance import write_manifest
+    from lab.ner.training.assessment import RUN_MANIFEST_FILENAME, claim_run_dir
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -134,7 +134,7 @@ def verify_run_dir_claim(checks: Checks) -> None:
 
 
 def verify_aggregation(checks: Checks) -> None:
-    from ner_lab.training.assessment import aggregate_metrics, best_epoch_metrics
+    from lab.ner.training.assessment import aggregate_metrics, best_epoch_metrics
 
     frame = pd.DataFrame(
         {"validation_fold": [1, 2], "best_metric": [0.4, 0.6], "label": ["a", "b"]}
@@ -182,8 +182,8 @@ def verify_aggregation(checks: Checks) -> None:
 def verify_arguments(checks: Checks) -> None:
     from transformers import TrainingArguments
 
-    from ner_lab.training import DEFAULTS
-    from ner_lab.training.assessment import resolve_training_arguments
+    from lab.ner.training import DEFAULTS
+    from lab.ner.training.assessment import resolve_training_arguments
 
     with tempfile.TemporaryDirectory() as tmp:
         defaults = resolve_training_arguments(None, tmp)
@@ -211,14 +211,14 @@ def verify_arguments(checks: Checks) -> None:
 
 
 def verify_task_registration(checks: Checks) -> None:
-    from ner_lab.tasks import resolve_task
-    from ner_lab.training.assessment import train_model
+    from lab.core.tasks import resolve_task
+    from lab.ner.training.assessment import train_model
 
-    checks.check("the task name resolves to the orchestrator", resolve_task("train_model") is train_model)
+    checks.check("the task name resolves to the orchestrator", resolve_task("ner.train_model") is train_model)
 
 
 def verify_manifest_reading(checks: Checks) -> None:
-    from ner_lab.training.assessment import read_data_manifest, split_provenance
+    from lab.ner.training.assessment import read_data_manifest, split_provenance
 
     with tempfile.TemporaryDirectory() as tmp:
         checks.raises(
@@ -251,7 +251,7 @@ def fold_directories(run_dir: Path) -> list[Path]:
 def prepare_split(root: Path, kfolds: int | None) -> Path:
     """Write a synthetic corpus and split it, returning the split directory."""
     from fixtures import synthetic_corpus
-    from ner_lab.data import prepare_dataset, write_corpus
+    from lab.core import prepare_dataset, write_corpus
 
     source = write_corpus(synthetic_corpus(24), root / "source" / "documents.parquet")
     prepared = prepare_dataset(
@@ -268,7 +268,7 @@ def verify_end_to_end(checks: Checks) -> None:
     from transformers import AutoTokenizer
 
     from fixtures import tiny_base_model
-    from ner_lab.training import train_model
+    from lab.ner.training import train_model
 
     shared = tempfile.TemporaryDirectory()
     root = Path(shared.name)

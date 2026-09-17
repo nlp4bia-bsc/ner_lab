@@ -1,7 +1,7 @@
 # Verification
 
-Behavioural checks for `ner_lab`, kept outside `src/` so they are never packaged or
-installed. They are plain scripts, not a test suite — run them directly, read the output.
+Behavioural checks for `lab`, kept outside `src/` so they are never packaged or installed.
+They are plain scripts, not a test suite — run them directly, read the output.
 
 ```bash
 uv venv .venv-verify --python 3.12
@@ -12,14 +12,15 @@ uv pip install --python .venv-verify --no-deps -e .
 .venv-verify/bin/python verification/run_all.py
 ```
 
-`torch` is the CPU build. `data/` and `encoding/` never touch it, but `models/`,
-`training/` and `hpo/` do, and a CPU wheel is enough: the end-to-end training checks run
-against a randomly initialized miniature BERT written to a temporary directory, so nothing
-is downloaded. Everything but `verify_hpo.py` runs in seconds; that one starts a local Ray
-instance for its mini-sweep and adds a minute or two.
+`torch` is the CPU build. `lab.core` never imports it — `verify_layering.py` checks that —
+but `lab.ner.models`, `lab.ner.training` and `lab.ner.hpo` do, and a CPU wheel is enough:
+the end-to-end training checks run against a randomly initialized miniature BERT written to
+a temporary directory, so nothing is downloaded. Everything but `verify_hpo.py` runs in
+seconds; that one starts a local Ray instance for its mini-sweep and adds a minute or two.
 
 | Script | Covers |
 |---|---|
+| `verify_layering.py` | the one-way import rule: `core` imports no task subpackage, task subpackages never import each other, `core` and the CLI import no torch |
 | `verify_data.py` | labels, BRAT reading, the canonical schema, stratification, splitting, `prepare_dataset` |
 | `verify_encoding.py` | overlap policies, segmentation, windowing, IOB2 tagging, row assembly |
 | `verify_encoder.py` | `Encoder` construction and encoding, custom strategies, NER-API equivalence |
@@ -28,6 +29,7 @@ instance for its mini-sweep and adds a minute or two.
 | `verify_evaluation.py` | span reconstruction, nervaluate scoring, token metrics, official scorer |
 | `verify_assessment.py` | `train_model`: fold rotation, both split modes, manifests, aggregation |
 | `verify_hpo.py` | search-space forms, variants, trial scoring, OOM handling, a real two-trial Ray sweep, the winner block re-run through `train_model` |
+| `verify_inference.py` | span decoding, `predict_entities` end to end, the official scorer on gold input |
 
 Everything runs on synthetic fixtures built by `fixtures.py`, so the scripts pass on a
 machine with no corpora at all. Two groups of checks additionally use real data and skip

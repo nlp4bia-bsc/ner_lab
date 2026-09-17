@@ -25,7 +25,8 @@ def torch_available() -> bool:
 
 
 def verify_bio_scores(checks: Checks) -> None:
-    from ner_lab.evaluation.spans import bio_to_spans, softmax, span_dataframe
+    from lab.core.spans import span_dataframe
+    from lab.ner.evaluation.spans import bio_to_spans, softmax
 
     offsets = [(0, 4), (5, 9), (10, 14), (15, 20)]
     tags = ["B-DISEASE", "I-DISEASE", "O", "B-DISEASE"]
@@ -91,7 +92,7 @@ def verify_bio_scores(checks: Checks) -> None:
 def verify_encoder_description(checks: Checks) -> None:
     from transformers import AutoTokenizer
 
-    from ner_lab.encoding import Encoder, describe_encoder, encoder_from_description
+    from lab.ner.encoding import Encoder, describe_encoder, encoder_from_description
 
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     encoder = Encoder(
@@ -155,8 +156,8 @@ def verify_unannotated_encoding(checks: Checks) -> None:
     from transformers import AutoTokenizer
 
     from fixtures import synthetic_corpus
-    from ner_lab.encoding import Encoder
-    from ner_lab.encoding.rows import IGNORE_INDEX
+    from lab.ner.encoding import Encoder
+    from lab.ner.encoding.rows import IGNORE_INDEX
 
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     corpus = synthetic_corpus(4)
@@ -196,9 +197,9 @@ def verify_empty_predictions(checks: Checks) -> None:
     from transformers import AutoTokenizer
 
     from fixtures import synthetic_corpus
-    from ner_lab.encoding import Encoder
-    from ner_lab.evaluation.spans import SCORED_SPAN_COLUMNS
-    from ner_lab.inference import decode_spans, write_predictions
+    from lab.ner.encoding import Encoder
+    from lab.core.spans import SCORED_SPAN_COLUMNS
+    from lab.ner.inference import decode_spans, write_predictions
 
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     encoder = Encoder(
@@ -241,8 +242,8 @@ def verify_empty_predictions(checks: Checks) -> None:
 def verify_inference_arguments(checks: Checks) -> None:
     import torch
 
-    from ner_lab.inference import resolve_device
-    from ner_lab.training.arguments import training_arguments
+    from lab.ner.inference import resolve_device
+    from lab.ner.training.arguments import training_arguments
 
     checks.equal("an explicit cpu device is honoured", resolve_device("cpu").type, "cpu")
     checks.equal(
@@ -272,7 +273,7 @@ def verify_inference_arguments(checks: Checks) -> None:
 
 def verify_document_reading(checks: Checks) -> None:
     from fixtures import synthetic_corpus
-    from ner_lab.inference import has_gold, read_documents
+    from lab.ner.inference import has_gold, read_documents
 
     corpus = synthetic_corpus(4)
 
@@ -315,8 +316,8 @@ def verify_document_reading(checks: Checks) -> None:
 
 def verify_reference_reading(checks: Checks) -> None:
     from fixtures import synthetic_corpus
-    from ner_lab.evaluation.multiclinner import write_annotation_tsv
-    from ner_lab.inference import read_reference
+    from lab.ner.evaluation.multiclinner import write_annotation_tsv
+    from lab.ner.inference import read_reference
 
     corpus = synthetic_corpus(4)
 
@@ -346,17 +347,17 @@ def verify_reference_reading(checks: Checks) -> None:
 
 
 def verify_task_registration(checks: Checks) -> None:
-    from ner_lab.inference import predict_entities
-    from ner_lab.tasks import resolve_task
+    from lab.ner.inference import predict_entities
+    from lab.core.tasks import resolve_task
 
     checks.check(
         "the task name resolves to inference",
-        resolve_task("predict_entities") is predict_entities,
+        resolve_task("ner.predict_entities") is predict_entities,
     )
 
 
 def verify_missing_encoding(checks: Checks) -> None:
-    from ner_lab.inference import load_model
+    from lab.ner.inference import load_model
 
     with tempfile.TemporaryDirectory() as tmp:
         checks.raises(
@@ -373,8 +374,8 @@ def train_saved_model(root: Path, architecture: str) -> Path:
     from transformers import AutoTokenizer
 
     from fixtures import synthetic_corpus, tiny_base_model
-    from ner_lab.data import prepare_dataset, write_corpus
-    from ner_lab.training import train_model
+    from lab.core import prepare_dataset, write_corpus
+    from lab.ner.training import train_model
 
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     base_model = tiny_base_model(root, tokenizer)
@@ -408,8 +409,8 @@ def train_saved_model(root: Path, architecture: str) -> Path:
 
 def verify_end_to_end(checks: Checks) -> None:
     from fixtures import synthetic_corpus
-    from ner_lab.evaluation.spans import SCORED_SPAN_COLUMNS
-    from ner_lab.inference import load_model, predict_entities
+    from lab.core.spans import SCORED_SPAN_COLUMNS
+    from lab.ner.inference import load_model, predict_entities
 
     shared = tempfile.TemporaryDirectory()
     root = Path(shared.name)

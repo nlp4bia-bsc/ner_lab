@@ -1,7 +1,7 @@
 # Predict with a trained model
 
 ```python
-from ner_lab import predict_entities
+from lab.ner import predict_entities
 
 result = predict_entities(
     model_dir="assets/runs/DISEASE__crf__.../best_model",
@@ -62,7 +62,7 @@ the tokens the span was decoded from.
 ## From YAML
 
 ```yaml
-task: predict_entities
+task: ner.predict_entities
 model_dir: assets/runs/DISEASE__crf__20260809_120000/best_model
 documents: assets/gold/test.parquet
 output_dir: assets/predictions

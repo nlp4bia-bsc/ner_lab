@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-SCRIPTS = ("verify_data.py", "verify_encoding.py", "verify_encoder.py", "verify_models.py", "verify_training.py", "verify_evaluation.py", "verify_assessment.py", "verify_hpo.py", "verify_inference.py")
+SCRIPTS = ("verify_layering.py", "verify_data.py", "verify_encoding.py", "verify_encoder.py", "verify_models.py", "verify_training.py", "verify_evaluation.py", "verify_assessment.py", "verify_hpo.py", "verify_inference.py")
 
 
 def main() -> int:

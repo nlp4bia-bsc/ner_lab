@@ -14,21 +14,21 @@ sys.path.insert(0, str(Path(__file__).parent))
 from _harness import Checks, run
 from fixtures import samples_root, synthetic_corpus
 
-from ner_lab.evaluation import (
+from lab.core import safe_f1
+from lab.ner.evaluation import (
     bio_to_spans,
     entity_tags,
     evaluate_predictions,
     expand_to_word_extent,
     gold_spans,
     predicted_spans,
-    safe_f1,
     span_metrics,
     strip_bio_prefix,
     token_confusion_matrix,
     token_metrics,
     token_metrics_by_entity,
 )
-from ner_lab.evaluation import multiclinner
+from lab.ner.evaluation import multiclinner
 
 NER_API_ENV = "NER_API_ROOT"
 DEFAULT_NER_API = Path.home() / "bsc" / "NER-API"
@@ -83,7 +83,7 @@ def verify_helpers(checks: Checks) -> None:
 
 
 def verify_reconstruction(checks: Checks, tokenizer) -> None:
-    from ner_lab.encoding import Encoder
+    from lab.ner.encoding import Encoder
 
     corpus = synthetic_corpus(10)
     encoder = Encoder(tokenizer, "DISEASE", "es", max_length=64)
@@ -256,13 +256,13 @@ def verify_against_ner_api(checks: Checks, tokenizer) -> None:
         checks.skip("NER-API metrics equivalence", f"cannot import metrics: {error}")
         return
 
-    from ner_lab.encoding import Encoder
+    from lab.ner.encoding import Encoder
 
     samples = samples_root()
     source = samples / "MultiClinNER-es-train-disease" if samples else None
 
     if source is not None and (source / "txt").is_dir():
-        from ner_lab.data import build_corpus
+        from lab.core import build_corpus
 
         corpus = build_corpus(source / "txt", source / "ann", normalize_labels=True).head(40)
     else:
