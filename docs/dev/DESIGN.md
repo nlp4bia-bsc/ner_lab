@@ -58,6 +58,7 @@ Across subpackages, imports point one way:
 lab/
 ├── core/    data contracts, I/O, provenance, task registry.  No torch.
 ├── ner/     clinical NER: encoding, models, training, HPO, inference.
+├── nel/     entity linking: matching, retrieval, reranking, fusion.
 └── cli.py   one entry point, `lab`.
 
 core  <-  { ner, nel, xlt }

@@ -2,8 +2,10 @@
 
 The unit's NLP library: one repository, one import namespace, one CLI. `lab.core` holds the
 data contracts — corpus conversion, entity-stratified splitting, corpus statistics, span
-scoring — with no `torch`. Each task lives in its own subpackage on top of it; `lab.ner` is
-clinical NER end to end: encoding, hyperparameter search, training, inference and evaluation.
+scoring — with no `torch`. Each task lives in its own subpackage on top of it: `lab.ner` is
+clinical NER end to end, encoding, hyperparameter search, training, inference and evaluation;
+`lab.nel` links the mentions found to an ontology, by lexical matching, sparse or dense
+retrieval and cross-encoder reranking.
 
 **Batteries included, but removable.** One call takes you from a BRAT corpus to a trained
 model, and every step of it is a public function you can call, replace or skip. Defaults are
@@ -30,12 +32,13 @@ the whole pipeline.
 ```bash
 git clone git@github.com:nlp4bia-bsc/ner_lab.git
 cd ner_lab
-uv pip install -e ".[ner]"     # or: pip install -e ".[ner]"
+uv pip install -e ".[ner]"     # or: pip install -e ".[ner]"; ".[nel]" for linking, ".[all]" for both
 ```
 
 Requires Python 3.10 or newer. `lab` alone is torch-free and gives corpus conversion,
-splitting, statistics and span scoring. `lab[ner]` adds the NER stack; it pins `torch` to
-exactly `2.10.0` through the shared `lab[torch]` extra every tool builds on.
+splitting, statistics and span scoring. `lab[ner]` adds the NER stack and `lab[nel]` the
+linking stack; both pin `torch` to exactly `2.10.0` through the shared `lab[torch]` extra
+every tool builds on.
 
 ## Quick start
 
@@ -67,6 +70,7 @@ Both routes call the same function and produce identical output.
 | Train against a split | `lab.ner.train_model` | `ner.train_model` | [guide/train-model.md](docs/guide/train-model.md) |
 | Search hyperparameters | `lab.ner.search_hyperparameters` | `ner.search_hyperparameters` | [guide/search-hyperparameters.md](docs/guide/search-hyperparameters.md) |
 | Predict with a model | `lab.ner.predict_entities` | `ner.predict_entities` | [guide/predict-entities.md](docs/guide/predict-entities.md) |
+| Link mentions to an ontology | `lab.nel.link_entities` | `nel.link_entities` | [guide/link-entities.md](docs/guide/link-entities.md) |
 | Encode a corpus | `lab.ner.Encoder` | — | [guide/library.md](docs/guide/library.md) |
 | Build a model | `lab.ner.build_model` | — | [guide/library.md](docs/guide/library.md) |
 | Train one model | `lab.ner.train` | — | [guide/library.md](docs/guide/library.md) |
@@ -110,12 +114,17 @@ Everything else keeps its subpackage path — `lab.ner.encoding`, `lab.ner.model
 `from lab.ner.training import train_model` remains correct. Names on `lab.ner` resolve on
 first use, so `import lab.ner` loads nothing.
 
+`lab.nel` works the same way: `link_entities`, `EntityLinkingPipeline`, the mention, gazetteer
+and candidate records, `build_matcher` and `reciprocal_rank_fusion` at the top, the matchers
+under `lab.nel.matching` and the retrievers under `lab.nel.retrieval`.
+
 ## Layout
 
 ```
 lab/
 ├── core/    data contracts, I/O, provenance, task registry.  No torch.
 ├── ner/     clinical NER.                                    torch, via lab[ner].
+├── nel/     entity linking.                                 torch, via lab[nel].
 └── cli.py   one entry point, `lab`.
 ```
 
@@ -139,7 +148,8 @@ corpus, not the entity set any particular training run sees.
 
 The second table is the span table, one row per mention:
 `filename | label | start_span | end_span | text [| score]`. Inference writes it, gold `.ann`
-files read into it, and `lab.core.score_spans` scores any two of them against each other.
+files read into it, `lab.core.score_spans` scores any two of them against each other, and
+`lab.nel.link_entities` takes one in and hands it back with `code` columns appended.
 
 ## Documentation
 

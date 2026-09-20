@@ -19,7 +19,7 @@ Migration status. Updated as each stage lands.
 | Analysis / setup scripts | — | `01b_analyze_hpo_trials.py`, `04_official_eval.py`, `build_gold_test_parquets.py`, `aux_download_baseline_model.py` | not library surface; candidates for `examples/` or dropped |
 | Augmentation | — | `00b_augment_data.py` | cut (D16) |
 | Restructure | `core/` + `ner/`, `cli.py` | `ner_lab` | **done** 2026-09-17 — D82–D90, [RESTRUCTURE.md](RESTRUCTURE.md) |
-| NEL | `nel/` | `bsc/nlp4bia-linking` | next — read during the restructure, not merged (D88) |
+| NEL | `nel/` | `bsc/nlp4bia-linking` (library surface) | **done** 2026-09-17 — task `nel.link_entities` (D91–D95) |
 
 `Encoder` is deliberately **not** a task: it produces in-memory rows with no artifact worth
 persisting. Training, HPO and inference construct and call it.
@@ -37,12 +37,44 @@ than migration.
 
 ---
 
+## Next
+
+- **Gold codes in `prepare_dataset`.** Extend the corpus contract so annotated codes travel
+  with the entities: `core.brat` reads `N` lines, `entities_json` entries carry the code,
+  `core.corpus` validates it, and `nel.link_entities` takes gold from the span table
+  instead of its own readers. One commit with its own checks (D93). Blocked on Q14 and Q15.
+
+---
+
 ## Open questions
 
 Nothing here blocks the next stage. Each is decided when the stage that needs it lands.
 
 - **Q10 — `examples/`.** D21 promised a runnable script instead of a `quickstart()`. Nothing
   written yet. The four unmigrated NER-API scripts are candidates for it.
+- **Q12 — Gold codes in the corpus contract.** NEL's benchmark reads a per-document parquet
+  whose mention list carries `code`; ours drops BRAT `N` lines, so a gold span table with
+  codes cannot be built from `prepare_dataset`'s output (D93). Direction settled 2026-09-19:
+  codes belong *inside* the annotations — an optional field on each `entities_json` entry,
+  not a new column alongside it — and `prepare_dataset` writes them whenever the source
+  carries them. What remains open is Q14 and Q15; the work is tracked under *Next*.
+- **Q14 — How does a reader know a corpus parquet carries codes?** `entities_json` is an
+  opaque string column, so the parquet schema is the same with or without codes. Options:
+  a corpus-level flag (parquet key-value metadata, or a column in the split manifest),
+  a `has_codes` column per document, or presence of the field on the entries themselves,
+  with `core.corpus.validate` deciding whether "some entries have a code and some do not"
+  is a valid corpus or an error. Decide with Q15.
+- **Q15 — How is a code stored on an entry?** BRAT `N` lines carry a resource name and an
+  id (`N1 Reference T1 SCTID:123456 term`); NEL's TSV carries a bare `code` and, for
+  composite mentions, `+`-joined codes. Options: a single `code` string, `code` plus
+  `code_source`, or a list. Whatever is chosen must round-trip through `core.brat` and
+  `core.corpus.read_corpus`, and be what `nel.link_entities` reads as gold instead of its
+  own TSV/`.ann` readers (D92, D93).
+- **Q13 — NEL's research code.** `scripts/` (retrieval benchmark, triplet generation,
+  cross-encoder training), `triplets/`, `retrieval/experiments.py`, `utils/profiling.py`,
+  `utils/io.py` and the `rerank_candidates` TSV helper stayed in `bsc/nlp4bia-linking`
+  (D91). Candidates for `examples/` or for a training task once the cross-encoder trainer
+  is needed from the library; the trainer would be `training/`'s second consumer (§2).
 - **Q11 — Provenance of the caller's code.** D52 dropped NER-API's `git rev-parse HEAD`,
   which recorded the commit of the repo the *script* lived in. What identifies a run's code
   when the library is an installed wheel is undecided: `lab.__version__` is one answer,

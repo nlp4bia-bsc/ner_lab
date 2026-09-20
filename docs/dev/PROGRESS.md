@@ -3,11 +3,11 @@
 What has actually landed, and the evidence for it. One entry per subsystem, not per session.
 Decisions live in [DECISIONS.md](DECISIONS.md); this file records outcomes.
 
-**Verification suite: 754 checks, all passing.** See [`verification/`](../../verification/).
+**Verification suite: 862 checks, all passing.** See [`verification/`](../../verification/).
 
 | Subsystem | Checks | Equivalence with NER-API |
 |---|---|---|
-| layering (`core` ← `ner`, no torch in `core`) | 68 | — |
+| layering (`core` ← `{ner, nel}`, no torch in `core`) | 94 | — |
 | `core/` | 153 | conversion + split on the real MultiClinNER sample |
 | `ner/encoding/` leaves | 79 | — |
 | `ner/encoding/` `Encoder` | 45 | exact, 4 tokenizer × strategy combinations |
@@ -17,17 +17,7 @@ Decisions live in [DECISIONS.md](DECISIONS.md); this file records outcomes.
 | `ner/training/assessment.py` | 76 | — |
 | `ner/hpo/` | 97 | — |
 | `ner/inference.py` | 91 | not diffed — see below |
-
----|---|---|
-| `data/` | 97 | conversion + split on the real MultiClinNER sample |
-| `encoding/` leaves | 79 | — |
-| `encoding/` `Encoder` | 45 | exact, 4 tokenizer × strategy combinations |
-| `models/` | 33 | — |
-| `training/` | 35 | — |
-| `evaluation/` | 59 | exact, every metric family |
-| `training/assessment.py` | 65 | — |
-| `hpo/` | 94 | — |
-| `inference.py` | 91 | not diffed — see below |
+| `nel/` | 82 | exact against `nlp4bia-linking`: every matcher, both sparse retrievers, RRF, metrics, graph distances, readers |
 
 ---
 
@@ -360,3 +350,43 @@ installed, because `core/stats.py` imports `AutoTokenizer` at module level and
 `transformers` 5 imports torch when it finds it. `ner_lab.data` behaved the same. Moving the
 import inside `_load_tokenizer` would make `lab.core` light in a `lab[ner]` environment;
 left for a decision.
+
+---
+
+## `nel/` — 2026-09-17
+
+`bsc/nlp4bia-linking`'s library surface became `lab.nel` (D91–D95): records, readers, the
+six lexical matchers, the sparse and encoder retrievers, the sentence-transformers
+cross-encoder reranker, reciprocal rank fusion, retrieval and hierarchy metrics, and the
+pipeline that chains them. Module for module, imports rewritten, four small packages
+flattened (`data/`, `ensembling/`, `rerankers/`, `utils/device`). Out, per D91: the research
+scripts, triplet generation, FAISS profiling, the profiler, the corpus-specific helpers, and
+the profiler-bound `rerank_candidates` TSV helper (Q13).
+
+New here is `nel/linking.py`: task `nel.link_entities` takes a span table and a gazetteer,
+builds the generator a `method` name refers to — a matcher from NEL's registry, `matrix`,
+`faiss`, or `transformer_faiss` / `dense` with a `base_model` — optionally a cross-encoder
+`reranker`, and drives `EntityLinkingPipeline`. The encoder retrievers speak texts-in,
+lists-out; a small adapter gives them the `search` the pipeline expects, so all methods go
+through the one pipeline and the one reranking path. Output per D92: the input columns plus
+`code`, `code_term`, `code_score`, `candidates_json`; an incoming `code` is gold, kept as
+`gold_code`, scored with recall@k, MRR and coverage, and with exact / narrow / broad rates when
+a `hierarchy` pickle is given. `predictions.tsv`, `linking_metrics.json`,
+`linking_manifest.json` with the inputs' sha256.
+
+Verified: 82 checks. NEL's nine pytest tests as checks; side by side with the original
+package on the same synthetic gazetteer and mentions — every registered matcher, `matrix`
+with and without word n-grams and with a threshold, `faiss`, RRF with provenance, the
+metrics, graph distance and direction, `normalize_text` in four configurations, the TSV,
+gazetteer and BRAT readers — identical candidate lists and records; `link_entities` end to
+end on `matrix`, `levenshtein`, `bm25`, `string_match`, `transformer_faiss` and `dense` (the
+last two on the miniature BERT), with a hierarchy, with the reranker on the same miniature
+model, re-linking a linked table, partial gold, no gold, and every validation error.
+
+**Settled by running it:** sentence-transformers 6 with transformers 5.14 loads and runs the
+cross-encoder and the dense retriever; NEL's `transformers<5` cap was stale (D95).
+
+**Changed knowingly:** the per-run `method` in the metrics is the task's own `method`
+argument (`matrix`, `matrix+cross_encoder`), not the retriever class name NEL's
+`CandidateRetrievalPipeline` reported, because the class name and the string the candidates
+carry disagreed (`MatrixBiEncoder` vs `matrix_biencoder`).

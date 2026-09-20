@@ -38,3 +38,6 @@ ENV/
 
 # example files from library output
 examples/
+
+# Personal notes (not tracked)
+IDEAS.md

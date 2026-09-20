@@ -24,7 +24,7 @@ function as a keyword argument, so **the YAML keys are exactly the parameter nam
 pages document. The CLI knows nothing about any task's keys.
 
 Task names are namespaced by subpackage: `core.` for the torch-free contracts, `ner.` for
-clinical NER.
+clinical NER, `nel.` for entity linking.
 
 | `task` | Function | Parameters |
 |---|---|---|
@@ -32,6 +32,7 @@ clinical NER.
 | `ner.train_model` | `lab.ner.train_model` | [train-model.md](train-model.md) |
 | `ner.search_hyperparameters` | `lab.ner.search_hyperparameters` | [search-hyperparameters.md](search-hyperparameters.md) |
 | `ner.predict_entities` | `lab.ner.predict_entities` | [predict-entities.md](predict-entities.md) |
+| `nel.link_entities` | `lab.nel.link_entities` | [link-entities.md](link-entities.md) |
 
 `lab tasks` prints the same list, and marks any task whose extra is not installed in the
 current environment. Running such a task fails with the `pip install lab[<extra>]` that fixes

@@ -3,7 +3,7 @@
 The plan for turning `ner_lab` into one subpackage of a library shared by the NLP unit, with
 normalisation (NEL) and cross-lingual transfer (XLT) as sibling subpackages. Self-contained:
 a reader who has never seen the code should be able to follow it. The decisions it makes are
-D82–D90 in [DECISIONS.md](DECISIONS.md); this document is their rationale.
+D82–D95 in [DECISIONS.md](DECISIONS.md); this document is their rationale.
 
 `lab` is a placeholder for the umbrella name throughout. It is open (§8).
 
@@ -246,6 +246,8 @@ CRF or pysbd.
 Two changes, done in order, each verified before the next starts. **Step 1 landed on
 2026-09-17**: 686 checks passing before and after the move, plus the 68 layering checks
 added with it (`verification/verify_layering.py`, D90). No compatibility shim (D89).
+**Step 2 landed the same day**: `lab.nel` from `bsc/nlp4bia-linking`'s library surface
+(D91–D95), verified by `verification/verify_nel.py` side by side with the original package.
 
 1. **Restructure.** `ner_lab` → `lab.core` + `lab.ner`; namespaced tasks; extras; the four
    splits in §3; `cli.run` made generic. Verified by `verification/run_all.py` and
@@ -293,3 +295,6 @@ Resolved by reading `bsc/nlp4bia-linking` during step 1 (D88):
   and hard-depends on `faiss`, `networkx` and `scikit-learn`. This repo's lock is on
   `transformers` 5.x. Which side moves is decided when `lab[nel]` is written.
 - **`DESIGN.md`'s "Layering" section** now states §2–§3 in short and points here.
+
+Opened by step 2, tracked in ROADMAP.md: gold codes in the corpus contract (Q12, D93) and
+the fate of NEL's research code — scripts, triplets, profiling (Q13, D91).
