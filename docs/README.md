@@ -1,18 +1,19 @@
 # Documentation
 
-Two audiences, two folders.
+Two audiences: the subpackage folders are for using the library, `dev/` is for building it.
 
-## [`guide/`](guide/) — using the library
+## Using the library
 
-| Page | Covers |
-|---|---|
-| [prepare-dataset.md](guide/prepare-dataset.md) | `prepare_dataset`: corpus conversion, disagreeing sources, label normalization, entity-stratified splitting |
-| [train-model.md](guide/train-model.md) | `train_model`: scoring one configuration against a split, single or k-fold |
-| [search-hyperparameters.md](guide/search-hyperparameters.md) | `search_hyperparameters`: the Ray Tune + Optuna sweep and its search space |
-| [predict-entities.md](guide/predict-entities.md) | `predict_entities`: inference with a saved model, and scoring it |
-| [link-entities.md](guide/link-entities.md) | `link_entities`: linking a span table to an ontology, the candidate methods, reranking, scoring |
-| [library.md](guide/library.md) | The pieces the orchestrators are built from: `Encoder`, `build_model`, `training_arguments`, `train`, the metrics builders |
-| [cli.md](guide/cli.md) | `lab run` and `lab tasks`, the YAML config, namespaced task names, exit codes, cluster submission |
+One folder per subpackage. Each index names its maintainer, its CLI tasks and its pages.
+
+| Folder | Subpackage | Pages |
+|---|---|---|
+| [`core/`](core/) | `lab.core` — the data contracts, no `torch` | [prepare-dataset](core/prepare-dataset.md), [library](core/library.md) |
+| [`ner/`](ner/) | `lab.ner` — clinical NER | [train-model](ner/train-model.md), [search-hyperparameters](ner/search-hyperparameters.md), [predict-entities](ner/predict-entities.md), [library](ner/library.md) |
+| [`nel/`](nel/) | `lab.nel` — entity linking | [link-entities](nel/link-entities.md) |
+
+[cli.md](cli.md) is the one page that cuts across them: `lab run` and `lab tasks`, the YAML
+config, namespaced task names, exit codes, cluster submission.
 
 ## [`dev/`](dev/) — building the library
 
@@ -42,5 +43,5 @@ Rules of thumb when updating:
 - **PROGRESS.md** records outcomes and evidence, not narrative. If an entry is growing a
   blow-by-blow account, it belongs in the commit message.
 - Anything not yet decided is an open question in **ROADMAP.md**, not an assumption in code.
-- A parameter that changes name, default or meaning changes **guide/** in the same commit.
-  The guide is the parameter reference; drift there is a bug.
+- A parameter that changes name, default or meaning changes its subpackage's page in the
+  same commit. Those pages are the parameter reference; drift there is a bug.

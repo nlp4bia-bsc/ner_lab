@@ -1,6 +1,6 @@
 # Train a model against a split
 
-Takes a split directory produced by [`prepare_dataset`](prepare-dataset.md) and scores one
+Takes a split directory produced by [`prepare_dataset`](../core/prepare-dataset.md) and scores one
 configuration against it. The split's `data_manifest.json` decides the shape of the run: a
 plain train/validation split trains once, a fixed-holdout k-fold split trains once per
 rotatable fold and aggregates. The fixed holdout is never read.

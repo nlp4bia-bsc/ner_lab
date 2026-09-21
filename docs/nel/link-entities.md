@@ -64,7 +64,7 @@ codes ignores them:
 | `code_score` | The generator's or the reranker's score for it. |
 | `candidates_json` | The `top_k` candidates as a JSON list of `{code, term, score, method, rank, metadata}`. |
 
-Predictions from [`predict_entities`](predict-entities.md) link as they are: the `score` column
+Predictions from [`predict_entities`](../ner/predict-entities.md) link as they are: the `score` column
 they carry is NER's confidence and is preserved untouched beside `code_score`. A table that was
 linked before links again: `gold_code` stays gold and the four columns are written afresh.
 

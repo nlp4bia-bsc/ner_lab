@@ -28,17 +28,17 @@ clinical NER, `nel.` for entity linking.
 
 | `task` | Function | Parameters |
 |---|---|---|
-| `core.prepare_dataset` | `lab.core.prepare_dataset` | [prepare-dataset.md](prepare-dataset.md) |
-| `ner.train_model` | `lab.ner.train_model` | [train-model.md](train-model.md) |
-| `ner.search_hyperparameters` | `lab.ner.search_hyperparameters` | [search-hyperparameters.md](search-hyperparameters.md) |
-| `ner.predict_entities` | `lab.ner.predict_entities` | [predict-entities.md](predict-entities.md) |
-| `nel.link_entities` | `lab.nel.link_entities` | [link-entities.md](link-entities.md) |
+| `core.prepare_dataset` | `lab.core.prepare_dataset` | [prepare-dataset.md](core/prepare-dataset.md) |
+| `ner.train_model` | `lab.ner.train_model` | [train-model.md](ner/train-model.md) |
+| `ner.search_hyperparameters` | `lab.ner.search_hyperparameters` | [search-hyperparameters.md](ner/search-hyperparameters.md) |
+| `ner.predict_entities` | `lab.ner.predict_entities` | [predict-entities.md](ner/predict-entities.md) |
+| `nel.link_entities` | `lab.nel.link_entities` | [link-entities.md](nel/link-entities.md) |
 
 `lab tasks` prints the same list, and marks any task whose extra is not installed in the
 current environment. Running such a task fails with the `pip install lab[<extra>]` that fixes
 it.
 
-The [pieces underneath](library.md) have no task: they take DataFrames and objects rather than
+The [pieces underneath](ner/library.md) have no task: they take DataFrames and objects rather than
 paths, so there is no single artifact for a config file to point at.
 
 ```bash
