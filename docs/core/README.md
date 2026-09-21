@@ -1,6 +1,6 @@
 # `lab.core` — the data contracts
 
-Maintainer: <author> · <email>
+**Authors**: Aziz Ouhida · mohamed.ouhida@bsc.es; Fernando Gallego · fernando.gallego@bsc.es
 
 Everything the task subpackages share, with no `torch`: corpus conversion, entity-stratified
 splitting, corpus statistics, span scoring, provenance. `pip install lab` alone gives you
