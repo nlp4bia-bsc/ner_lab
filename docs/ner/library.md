@@ -264,4 +264,9 @@ evaluate_predictions(rows, predictions, tokenizer, id2label, ...) -> dict
 
 Span metrics are the canonical result and are always computed, in four scenarios — `strict`,
 `exact`, `partial`, `ent_type` — flattened to keys like `span_strict_f1`, which is what
-`metric_for_best_model` defaults to.
+`metric_for_best_model` defaults to. Character metrics come with them: `char_precision`,
+`char_recall`, `char_f1` and the counts `char_correct` / `char_missed` / `char_spurious`,
+the character being the unit, so a boundary that is nearly right scores nearly full marks
+instead of zero. Both families are `lab.core.score_spans` and `lab.core.score_characters`
+applied to the spans reconstructed from the rows; `lab.ner.evaluation.span_metrics` is the
+call that joins them, and `token_diagnostics` the call that adds the token half.

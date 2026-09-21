@@ -28,7 +28,7 @@ from lab.ner.evaluation import (
     token_metrics,
     token_metrics_by_entity,
 )
-from lab.ner.evaluation import multiclinner
+from lab.core import score_characters, spans_from_corpus
 
 NER_API_ENV = "NER_API_ROOT"
 DEFAULT_NER_API = Path.home() / "bsc" / "NER-API"
@@ -98,7 +98,7 @@ def verify_reconstruction(checks: Checks, tokenizer) -> None:
         int(corpus["n_entities"].sum()),
     )
 
-    corpus_spans = multiclinner.spans_from_corpus(corpus)
+    corpus_spans = spans_from_corpus(corpus)
     recovered = set(zip(gold["filename"], gold["start_span"], gold["end_span"]))
     annotated = set(
         zip(corpus_spans["filename"], corpus_spans["start_span"], corpus_spans["end_span"])
@@ -115,6 +115,8 @@ def verify_reconstruction(checks: Checks, tokenizer) -> None:
     checks.equal("perfect predictions score 1.0 strict", metrics["span_strict_f1"], 1.0)
     checks.equal("nothing is missed", metrics["span_strict_missed"], 0)
     checks.equal("nothing is spurious", metrics["span_strict_spurious"], 0)
+    checks.equal("perfect predictions score 1.0 on characters", metrics["char_f1"], 1.0)
+    checks.equal("no character is missed", metrics["char_missed"], 0)
 
     empty = np.zeros((len(rows), max(len(row) for row in rows["labels"]), 3), dtype=np.float32)
     empty[:, :, 0] = 10.0
@@ -125,6 +127,12 @@ def verify_reconstruction(checks: Checks, tokenizer) -> None:
     empty_metrics = span_metrics(gold, none_predicted, id2label=encoder.id2label)
     checks.equal("scoring nothing gives zero F1", empty_metrics["span_strict_f1"], 0.0)
     checks.equal("every gold span is missed", empty_metrics["span_strict_missed"], len(gold))
+    checks.equal("scoring nothing gives zero character F1", empty_metrics["char_f1"], 0.0)
+    checks.equal(
+        "every gold character is missed",
+        empty_metrics["char_missed"],
+        int((gold["end_span"] - gold["start_span"]).sum()),
+    )
 
     checks.raises(
         "a prediction/row length mismatch raises",
@@ -175,53 +183,59 @@ def verify_token_metrics(checks: Checks) -> None:
     checks.equal("all-masked input gives zeros", empty["token_micro_f1"], 0.0)
 
 
-def verify_multiclinner(checks: Checks) -> None:
-    gold = pd.DataFrame(
-        [
-            {"filename": "d1", "label": "DISEASE", "start_span": 0, "end_span": 10, "text": "x"},
-            {"filename": "d1", "label": "DISEASE", "start_span": 20, "end_span": 30, "text": "y"},
-        ]
-    )
+def verify_character_metrics(checks: Checks) -> None:
+    def span(filename, label, start, end):
+        return {"filename": filename, "label": label, "start_span": start, "end_span": end, "text": "x"}
 
-    identical = multiclinner.evaluate_annotations(gold, gold)
+    gold = pd.DataFrame([span("d1", "DISEASE", 0, 10), span("d1", "DISEASE", 20, 30)])
 
-    checks.equal("identical input scores 1.0 strict", identical["strict"]["f1"], 1.0)
-    checks.equal("identical input scores 1.0 char", identical["char_f1"]["f1"], 1.0)
-    checks.equal("both gold spans are true positives", identical["strict"]["tp"], 2)
+    identical = score_characters(gold, gold)
+    checks.equal("identical input scores 1.0", identical["char_f1"], 1.0)
+    checks.equal("every gold character is correct", identical["char_correct"], 20)
+    checks.equal("nothing is spurious", identical["char_spurious"], 0)
 
     shifted = gold.assign(start_span=gold["start_span"] + 2)
-    partial = multiclinner.evaluate_annotations(gold, shifted)
-
-    checks.equal("a shifted span is not a strict match", partial["strict"]["f1"], 0.0)
-    checks.check("but it still scores on character overlap", partial["char_f1"]["f1"] > 0.5)
+    partial = score_characters(gold, shifted)
+    checks.equal("a shifted span keeps its overlapping characters", partial["char_correct"], 16)
+    checks.equal("the uncovered gold characters are missed", partial["char_missed"], 4)
+    checks.equal("the overshoot is spurious", partial["char_spurious"], 0)
+    checks.equal("precision is exact", partial["char_precision"], 1.0)
+    checks.equal("recall is exact", partial["char_recall"], 0.8)
 
     empty = pd.DataFrame(columns=list(gold.columns))
-    nothing = multiclinner.evaluate_annotations(gold, empty)
+    nothing = score_characters(gold, empty)
+    checks.equal("predicting nothing scores zero", nothing["char_f1"], 0.0)
+    checks.equal("every gold character is missed", nothing["char_missed"], 20)
+    checks.equal("scoring against no gold makes every character spurious", score_characters(empty, gold)["char_spurious"], 20)
 
-    checks.equal("predicting nothing scores zero", nothing["strict"]["f1"], 0.0)
-    checks.equal("every gold span is a false negative", nothing["strict"]["fn"], 2)
+    relabelled = gold.assign(label="SYMPTOM")
+    checks.equal("a different label shares no character", score_characters(gold, relabelled)["char_correct"], 0)
 
+    overlapping_gold = pd.DataFrame([span("d1", "DISEASE", 0, 10), span("d1", "DISEASE", 5, 15)])
+    covering = pd.DataFrame([span("d1", "DISEASE", 0, 15)])
     checks.equal(
-        "char overlap is symmetric on identical spans",
-        multiclinner.char_overlap_f1(
-            {"filename": "d", "label": "L", "off0": 0, "off1": 10},
-            {"filename": "d", "label": "L", "off0": 0, "off1": 10},
-        ),
-        1.0,
-    )
-    checks.equal(
-        "a different label scores zero overlap",
-        multiclinner.char_overlap_f1(
-            {"filename": "d", "label": "L", "off0": 0, "off1": 10},
-            {"filename": "d", "label": "M", "off0": 0, "off1": 10},
-        ),
-        0.0,
+        "overlapping gold spans count each character once",
+        score_characters(overlapping_gold, covering),
+        {"char_precision": 1.0, "char_recall": 1.0, "char_f1": 1.0, "char_correct": 15, "char_missed": 0, "char_spurious": 0},
     )
 
-    checks.check("the summary formats", "MultiClinNER" in multiclinner.format_summary(identical))
+    reordered = pd.DataFrame([span("d1", "DISEASE", 8, 15), span("d1", "DISEASE", 10, 20)])
+    single = pd.DataFrame([span("d1", "DISEASE", 10, 20)])
+    checks.equal(
+        "prediction order does not matter",
+        score_characters(single, reordered),
+        score_characters(single, reordered.iloc[::-1]),
+    )
+
+    elsewhere = pd.DataFrame([span("d2", "DISEASE", 0, 5)])
+    checks.equal(
+        "a prediction in a document with no gold is spurious",
+        score_characters(gold, pd.concat([gold, elsewhere]))["char_spurious"],
+        5,
+    )
 
     corpus = synthetic_corpus(4)
-    spans = multiclinner.spans_from_corpus(corpus)
+    spans = spans_from_corpus(corpus)
 
     checks.equal("corpus conversion keeps every entity", len(spans), int(corpus["n_entities"].sum()))
     checks.equal("labels are verbatim", set(spans["label"]), {"DISEASE"})
@@ -235,8 +249,9 @@ def verify_multiclinner(checks: Checks) -> None:
             for row in spans.itertuples(index=False)
         ),
     )
+    checks.equal("a label filter keeps only that label", len(spans_from_corpus(corpus, label="OTHER")), 0)
 
-    verbatim = multiclinner.spans_from_corpus(synthetic_corpus(4, label="FARMACO"))
+    verbatim = spans_from_corpus(synthetic_corpus(4, label="FARMACO"))
     checks.equal("no normalization happens here either", set(verbatim["label"]), {"FARMACO"})
 
 
@@ -251,7 +266,6 @@ def verify_against_ner_api(checks: Checks, tokenizer) -> None:
 
     try:
         from metrics import metrics as old
-        from metrics import multiclinner_eval as old_official
     except Exception as error:
         checks.skip("NER-API metrics equivalence", f"cannot import metrics: {error}")
         return
@@ -298,7 +312,11 @@ def verify_against_ner_api(checks: Checks, tokenizer) -> None:
     )
     new_span = span_metrics(new_gold, new_predicted, id2label=encoder.id2label)
 
-    checks.equal("span metrics identical to NER-API", new_span, old_span)
+    checks.equal(
+        "span metrics identical to NER-API",
+        {key: value for key, value in new_span.items() if key.startswith("span_")},
+        old_span,
+    )
 
     labels = np.array(
         [
@@ -325,12 +343,6 @@ def verify_against_ner_api(checks: Checks, tokenizer) -> None:
         old.compute_token_confusion_matrix(predictions, labels, encoder.id2label),
     )
 
-    checks.equal(
-        "official scoring identical to NER-API",
-        multiclinner.evaluate_annotations(new_gold, new_predicted),
-        old_official.evaluate_annotations(new_gold, new_predicted),
-    )
-
 
 def main() -> int:
     from transformers import AutoTokenizer
@@ -342,7 +354,7 @@ def main() -> int:
     verify_helpers(checks)
     verify_reconstruction(checks, tokenizer)
     verify_token_metrics(checks)
-    verify_multiclinner(checks)
+    verify_character_metrics(checks)
     verify_against_ner_api(checks, tokenizer)
 
     return checks.report()

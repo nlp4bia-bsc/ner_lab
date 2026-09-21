@@ -6,9 +6,9 @@ public, works on DataFrames and mappings as readily as on paths, and applies no 
 orchestrator adds behind your back. Use them directly when the orchestrator's directory
 layout, dataset naming or manifests are in the way.
 
-None of this imports `torch`. The same module holds `score_spans`, the span scorer every
-task's evaluation is built on, so a span table from any system can be scored without the NER
-stack installed.
+None of this imports `torch`. The same module holds `score_spans` and `score_characters`,
+the scorers every task's evaluation is built on, so a span table from any system can be
+scored without the NER stack installed.
 
 A complete pipeline built from them:
 
@@ -182,13 +182,14 @@ so they are not the counts any particular training run sees.
 
 ---
 
-## `score_spans`
+## `score_spans` and `score_characters`
 
 ```python
-from lab.core import score_spans, flatten
+from lab.core import score_spans, score_characters, flatten
 
 results = score_spans(gold, predicted, tags, min_overlap_percentage=40.0)
-flatten(results)   # {"span_strict_f1": ..., "span_partial_recall": ..., ...}
+flatten(results)                    # {"span_strict_f1": ..., "span_partial_recall": ..., ...}
+score_characters(gold, predicted)   # {"char_precision": ..., "char_recall": ..., "char_f1": ..., ...}
 ```
 
 | Parameter | Default | Meaning |
@@ -205,8 +206,18 @@ turns them into scalars keyed `span_strict_precision`, `span_strict_f1`,
 Offsets are converted to nervaluate's inclusive end internally, so both tables use the
 library's half-open convention like everything else.
 
+`score_characters` takes the same two tables and makes the character the unit: a character
+is correct when a gold span and a predicted span of the same label both cover it, precision is
+correct over predicted characters, recall correct over gold characters. There is no matching
+step, so overlapping spans on either side and the order predictions arrive in cannot change
+the result. Keys are `char_precision`, `char_recall`, `char_f1`, `char_correct`,
+`char_missed`, `char_spurious`.
+
 `span_dataframe(spans, scored=None)` builds a span table from a list of dicts, dropping
 duplicate spans and keeping the highest-scoring copy when they carry a `score`.
+`spans_from_corpus(corpus, label=None)` goes the other way — a corpus frame or parquet to
+a span table, one row per entity as annotated, overlaps intact, optionally one label only;
+it is how the gold for scoring comes out of a corpus.
 
 ---
 

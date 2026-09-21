@@ -1,6 +1,6 @@
 # `lab.nel` — entity linking
 
-**Maintainer**: Fernando Gallego · fgalleg1@bsc.es
+**Maintainer**: Fernando Gallego · fernando.gallego@bsc.es; Aziz Ouhida · mohamed.ouhida@bsc.es
 
 Links the mentions in a span table to an ontology: candidates by lexical matching, sparse or
 dense retrieval, fused by reciprocal rank fusion, optionally reranked by a cross-encoder, and

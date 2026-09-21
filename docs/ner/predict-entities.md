@@ -10,8 +10,8 @@ result = predict_entities(
 )
 
 result.spans        # DataFrame: filename | label | start_span | end_span | text | score
-result.metrics      # span and token metrics, when the input carried gold
-result.official     # MultiClinNER strict + character F1, when there was gold to score against
+result.metrics      # span, character and token metrics, when there was gold to score against
+result.summary()    # "412 entities from 96 windows | strict P/R/F1 = 0.81/0.78/0.79 | char F1 = 0.86"
 ```
 
 | Parameter | Default | Meaning |
@@ -19,7 +19,7 @@ result.official     # MultiClinNER strict + character F1, when there was gold to
 | `model_dir` | *required* | A directory of saved weights with an `encoding.json` beside them. |
 | `documents` | *required* | A canonical corpus (frame or parquet), a directory of `.txt` files, or a `{doc_id: text}` mapping. |
 | `output_dir` | *required* | Where predictions and any scores are written. |
-| `reference` | `None` | Gold to score against when `documents` carries none: a corpus parquet or an annotation TSV. |
+| `reference` | `None` | Gold to score against: a corpus parquet or a span table TSV. Takes precedence over any entities `documents` carries. |
 | `pattern` | `"*.txt"` | Glob used when `documents` is a directory. |
 | `encoding` | `"utf-8"` | Text encoding used when `documents` is a directory. |
 | `batch_size` | `16` | Windows per forward pass. |
@@ -30,7 +30,7 @@ result.official     # MultiClinNER strict + character F1, when there was gold to
 | `strategy` | `None` | Only needed when the model was trained with a callable window strategy, which `encoding.json` cannot name. |
 | `pad_to_multiple_of` | `8` | Pad batches to a multiple of this. |
 
-**Returns** an `InferenceResult` with `spans`, `metrics`, `official`, `manifest` and `paths`.
+**Returns** an `InferenceResult` with `spans`, `metrics`, `manifest` and `paths`.
 
 ## The encoding is not restated
 
@@ -41,17 +41,26 @@ exactly as training did and cannot silently disagree with it. That file is also 
 CRF model loadable at all: `CRFForTokenClassification` is not a `PreTrainedModel`, so the
 Trainer saves it as a bare state dict with no `config.json` to rebuild it from.
 
+## Scoring
+
 Gold entities in the input are scored automatically; raw text has none, so pass `reference=`
-to score it officially.
+to score it. Span and character metrics score the predicted spans against the gold **as
+annotated**, restricted to the model's `target_label` — every entity in the corpus counts,
+including ones an overlap policy would have merged or a window would have cut. That is what
+makes these the honest inference numbers, and also why `span_strict_f1` here can differ from
+training's, which is necessarily computed against the gold the model was shown.
+
+Token diagnostics (`token_*`, `confusion_*`) need the encoded rows to carry labels, so they
+are added only when `documents` itself is the annotated corpus; a `reference` on raw text
+gets span and character metrics alone.
 
 ## What it writes
 
 ```
 <output_dir>/
-    predictions.tsv            the official schema plus a score column
-    gold.tsv                   the gold set scored against, in the same schema
-    prediction_metrics.json    span + token metrics, when the input carried gold
-    multiclinner_eval.json     the official strict and character-overlap F1
+    predictions.tsv            the span table plus a score column
+    gold.tsv                   the gold spans scored against, when there were any
+    prediction_metrics.json    span, character and token metrics, when there was gold
     inference_manifest.json    the model, its encoding, and what was predicted on
 ```
 

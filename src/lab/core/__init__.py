@@ -46,6 +46,7 @@ from lab.core.scoring import (
     group_by_document,
     normalize_spans,
     safe_f1,
+    score_characters,
     score_spans,
 )
 from lab.core.segmentation import (
@@ -56,7 +57,7 @@ from lab.core.segmentation import (
     split_into_sentences,
     tokenize_document,
 )
-from lab.core.spans import SCORED_SPAN_COLUMNS, SPAN_COLUMNS, span_dataframe
+from lab.core.spans import SCORED_SPAN_COLUMNS, SPAN_COLUMNS, span_dataframe, spans_from_corpus
 from lab.core.split import (
     SplitResult,
     build_balance_report,
@@ -119,9 +120,11 @@ __all__ = [
     "resolve_mismatch",
     "resolve_task",
     "safe_f1",
+    "score_characters",
     "score_spans",
     "sentence_token_ranges",
     "span_dataframe",
+    "spans_from_corpus",
     "split_descriptor",
     "split_documents",
     "split_into_sentences",

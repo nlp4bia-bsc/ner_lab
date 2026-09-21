@@ -68,7 +68,7 @@ def read_annotations(
 
 def read_annotation_tsv(path: str | Path, normalize_labels: bool = False) -> pd.DataFrame:
     """Read a TSV holding the canonical annotation columns."""
-    annotations = pd.read_csv(path, sep="\t", dtype=str).fillna("")
+    annotations = pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False)
     _require_columns(annotations, ANNOTATION_COLUMNS, f"annotations TSV {path}")
 
     return _canonicalize_annotations(annotations, normalize_labels)

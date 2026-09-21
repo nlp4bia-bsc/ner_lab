@@ -45,6 +45,44 @@ def score_spans(
     return evaluator.evaluate()["overall"]
 
 
+def score_characters(gold: pd.DataFrame, predicted: pd.DataFrame) -> dict[str, float | int]:
+    """
+    Character-level precision, recall and F1, the character being the unit.
+
+    A character counts as correct when a gold span and a predicted span of the
+    same label both cover it. No span matching takes place, so overlapping spans
+    on either side and the order they arrive in cannot change the result. Keys
+    are `char_precision`, `char_recall`, `char_f1`, and the counts `char_correct`,
+    `char_missed`, `char_spurious`.
+    """
+    gold_documents = group_by_document(normalize_spans(gold))
+    predicted_documents = group_by_document(normalize_spans(predicted))
+
+    correct = gold_total = predicted_total = 0
+
+    for doc_id in set(gold_documents) | set(predicted_documents):
+        gold_coverage = _character_coverage(gold_documents.get(doc_id, []))
+        predicted_coverage = _character_coverage(predicted_documents.get(doc_id, []))
+
+        gold_total += sum(_covered(ranges) for ranges in gold_coverage.values())
+        predicted_total += sum(_covered(ranges) for ranges in predicted_coverage.values())
+        correct += sum(
+            _intersection(ranges, predicted_coverage.get(label, []))
+            for label, ranges in gold_coverage.items()
+        )
+
+    scores = safe_f1(correct, predicted_total - correct, gold_total - correct)
+
+    return {
+        "char_precision": scores["precision"],
+        "char_recall": scores["recall"],
+        "char_f1": scores["f1"],
+        "char_correct": scores["tp"],
+        "char_missed": scores["fn"],
+        "char_spurious": scores["fp"],
+    }
+
+
 def flatten(results: dict[str, Any]) -> dict[str, float | int]:
     """Flatten nervaluate's per-scenario objects into scalar metrics."""
     flattened: dict[str, float | int] = {}
@@ -131,3 +169,42 @@ def safe_f1(tp: int, fp: int, fn: int) -> dict[str, float | int]:
         "fp": int(fp),
         "fn": int(fn),
     }
+
+
+def _character_coverage(rows: list[dict[str, Any]]) -> dict[str, list[tuple[int, int]]]:
+    by_label: dict[str, list[tuple[int, int]]] = {}
+
+    for row in rows:
+        by_label.setdefault(row["label"], []).append((row["off0"], row["off1"]))
+
+    return {label: _merge(ranges) for label, ranges in by_label.items()}
+
+
+def _merge(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    merged: list[tuple[int, int]] = []
+
+    for start, end in sorted(ranges):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+
+    return merged
+
+
+def _covered(ranges: list[tuple[int, int]]) -> int:
+    return sum(end - start for start, end in ranges)
+
+
+def _intersection(first: list[tuple[int, int]], second: list[tuple[int, int]]) -> int:
+    total = i = j = 0
+
+    while i < len(first) and j < len(second):
+        total += max(0, min(first[i][1], second[j][1]) - max(first[i][0], second[j][0]))
+
+        if first[i][1] < second[j][1]:
+            i += 1
+        else:
+            j += 1
+
+    return total

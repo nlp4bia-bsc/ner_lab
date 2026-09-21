@@ -1,6 +1,6 @@
 # `lab.ner` — clinical NER
 
-**Maintainer**: Aziz Ouhida · mouhida@bsc.es
+**Authors**: Aziz Ouhida · mohamed.ouhida@bsc.es; Fernando Gallego · fernando.gallego@bsc.es
 
 Encoding, hyperparameter search, training, inference and evaluation, end to end. Installed
 by `lab[ner]`.

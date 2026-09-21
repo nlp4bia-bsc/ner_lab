@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -42,3 +44,50 @@ def span_dataframe(
         frame = frame.sort_values(["filename", "start_span", "end_span"])
 
     return frame.reset_index(drop=True)
+
+
+def spans_from_corpus(
+    corpus: pd.DataFrame | str | Path,
+    label: str | None = None,
+) -> pd.DataFrame:
+    """
+    Turn a canonical corpus into a span table, one row per entity.
+
+    Labels are taken verbatim and overlaps are left as annotated: this is the
+    gold as distributed, not as an overlap policy would rewrite it. Span text is
+    re-derived from the document rather than trusted from the entity.
+    """
+    if not isinstance(corpus, pd.DataFrame):
+        corpus = pd.read_parquet(corpus, columns=["doc_id", "text", "entities_json"])
+
+    rows: list[dict[str, Any]] = []
+
+    for document in corpus.itertuples(index=False):
+        text = str(document.text)
+        entities = json.loads(document.entities_json) if document.entities_json else []
+
+        for entity in entities:
+            entity_label = str(entity["label"])
+
+            if label and entity_label != label:
+                continue
+
+            start, end = int(entity["start"]), int(entity["end"])
+            rows.append(
+                {
+                    "filename": str(document.doc_id),
+                    "label": entity_label,
+                    "start_span": start,
+                    "end_span": end,
+                    "text": text[start:end],
+                }
+            )
+
+    if not rows:
+        return pd.DataFrame(columns=SPAN_COLUMNS)
+
+    return (
+        pd.DataFrame(rows, columns=SPAN_COLUMNS)
+        .sort_values(["filename", "start_span", "end_span"])
+        .reset_index(drop=True)
+    )

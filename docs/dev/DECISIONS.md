@@ -55,9 +55,9 @@ The row is the verdict; the note is the argument.
 | D41 | Discharged by D47. | |
 | D42 | No `target_label` parameter on `train()`. Provenance goes through `run_metadata: dict`. | Nothing in training needs it once `compute_metrics` is injected and the model carries its own `label2id`. |
 | D43 | **No multi-label.** One `target_label`, three classes, indefinitely. | User decision. Removes the pressure to design `2n+1` seams into evaluation that nothing would use. |
-| D44 | **nervaluate/SemEval is the canonical scorer.** The MultiClinNER official scorer stays available as an option, never as the default. | User decision. `span_strict_f1` is what model selection tracks; `ner.evaluation.multiclinner` is for numbers comparable to published shared-task results. |
+| D44 | **nervaluate/SemEval is the canonical scorer.** ~~The MultiClinNER official scorer stays available as an option.~~ The option is removed by D96. | User decision. `span_strict_f1` is what model selection tracks. |
 | D45 | The legacy word-level scoring path is dropped (~250 lines). | `Encoder` only ever emits token-level rows, so the branch was unreachable. |
-| D46 | `multiclinner.spans_from_corpus` takes labels **verbatim**. | D32 applies: the official gold is scored as distributed. Normalizing it silently would make the "official" numbers unofficial. |
+| D46 | `spans_from_corpus` takes labels **verbatim**. Now `lab.core.spans_from_corpus` (D96). | D32 applies: gold is scored as distributed. |
 | D47 | `training_arguments()` defaults to `metric_for_best_model="span_strict_f1"` / `greater_is_better=True`. `train()` raises if a span metric is requested with no `compute_metrics`, naming `build_compute_metrics`. | Matches NER-API and the group's expectation. The guard turns a confusing mid-training KeyError into an immediate, actionable one. |
 | D48 | **The training orchestrator is `ner/training/assessment.py::train_model`, task `ner.train_model`.** No `pipeline/` package. | In `transformers`, `pipelines` means inference; a tier named after itself is a layer that exists only to be a layer. |
 | D49 | **`train_model(training_arguments=...)` accepts a `TrainingArguments`, a mapping of overrides applied to `DEFAULTS`, or `None`.** No `best_config.json` hand-off. | The mapping form is what makes the YAML path work, and it is not an opaque bag: its schema *is* `TrainingArguments`, and an unknown key raises on construction. Reading a JSON file back into a config object would make a file format part of the API. |
@@ -107,6 +107,8 @@ The row is the verdict; the note is the argument.
 | D93 | **Gold codes stay out of the corpus contract for now.** `core.brat` ignores `N` lines; NEL reads codes from its own readers. Q12. | Extending `entities_json` is a change to the contract every subpackage reads, and belongs in its own commit with its own checks. |
 | D94 | **NEL's records and class names are kept as written; the span table is converted to and from them at the task boundary, in `nel/linking.py`.** | Equivalence before improvement: the side-by-side checks compare the ported classes against the original package call for call. |
 | D95 | **`lab[nel]` is `lab[torch]` plus scikit-learn, networkx, tqdm, sentence-transformers and faiss, with a platform marker choosing `faiss-gpu` on Linux x86_64.** NEL's `transformers<5` cap is dropped. | sentence-transformers 6 runs against transformers 5.14; the verify venv proves it on the lexical, sparse and FAISS paths. |
+| D96 | **The MultiClinNER scorer is removed; `lab.core.score_characters` adds character-level P/R/F1 to the canonical metrics.** `ner/evaluation/multiclinner.py`, `InferenceResult.official` and `multiclinner_eval.json` are gone; `spans_from_corpus` moves to `lab.core.spans`. Amends D44, D46. | Its strict F1 was verified identical to nervaluate's except where it was wrong (predictions in a gold-less document never counted as false positives); its character F1 is replaced by the standard character-as-unit definition, which needs no matching step. → notes |
+| D97 | **`predict_entities` scores span and character metrics against the gold as annotated, not against the gold reconstructed from windows.** Token diagnostics stay window-based and are added only when `documents` itself carries the gold; `reference` takes precedence over the corpus's entities. | Reconstructed gold has already lost what overlap resolution merged and windows truncated, so scoring against it cannot count those as missed. Training keeps the window-based number because rows are all it has, so the two `span_strict_f1` values may legitimately differ. |
 
 ## Notes
 
@@ -141,8 +143,7 @@ only a linear model can be reloaded from that.
 
 **Which names:** one is top-level if it starts a stage or must be constructed to start one.
 Result dataclasses are excluded (you never construct one), as are the mutable defaults
-`DEFAULTS`/`DEFAULT_SEARCH_SPACE`/`HPO_ARGUMENT_DEFAULTS` (D32b's trap) and `multiclinner`
-(D44). ~180 public names across the subpackages is the pandas shape, where the folder
+`DEFAULTS`/`DEFAULT_SEARCH_SPACE`/`HPO_ARGUMENT_DEFAULTS` (D32b's trap). ~180 public names across the subpackages is the pandas shape, where the folder
 structure carries meaning, not the transformers one; re-exporting everything would move the
 haystack. **Why lazy:** a package `__init__` executes before any submodule, so a plain import
 of the HPO entry point would make every import cost ray + torch — measured 0.61s → 6.6s — and
@@ -259,6 +260,20 @@ failed after the corpus was built. One behaviour change: the CLI branch popped
 the corpus itself was never normalized although the documentation said it was. Inside the
 task the one parameter reaches both. The cost D81 avoided — `dataset.py` importing
 `stats.py` — is paid.
+
+### D96 — character metrics replace the MultiClinNER scorer
+
+Checked side by side on perturbed synthetic predictions before removal: strict P/R/F1 was
+identical in every ordinary case, since both are greedy exclusive matching with P = TP /
+n_pred and R = TP / n_gold. The two differences were MultiClinNER's own quirk — only gold
+documents are visited, so predictions in a document with no gold are never false positives
+— and nervaluate's order dependence (an overlapping prediction listed before the exact one
+consumes the gold span), which is inherited from NER-API and logged as an open idea. The
+ported `char_f1` was a mean best-overlap score per annotation with non-exclusive matching;
+the replacement counts characters, so it is order- and overlap-independent and reads as a
+plain P/R/F1 with counts (`char_correct`, `char_missed`, `char_spurious`). It lives in
+`lab.core.scoring` so it reaches every consumer at once: `span_metrics`, training's
+`compute_metrics` and `epoch_metrics.parquet`, `predict_entities`, and any two span tables.
 
 ### D92 — the linked span table
 

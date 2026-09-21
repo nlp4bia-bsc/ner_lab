@@ -1,4 +1,4 @@
-"""Scoring NER predictions: span reconstruction from rows, token diagnostics, the official scorer."""
+"""Scoring NER predictions: span reconstruction from rows, span and character metrics, token diagnostics."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from lab.ner.evaluation.metrics import (
     BEST_METRIC,
     build_compute_metrics,
     evaluate_predictions,
+    token_diagnostics,
 )
 from lab.ner.evaluation.scoring import span_metrics
 from lab.ner.evaluation.spans import (
@@ -35,6 +36,7 @@ __all__ = [
     "softmax",
     "span_metrics",
     "strip_bio_prefix",
+    "token_diagnostics",
     "token_confusion_matrix",
     "token_metrics",
     "token_metrics_by_entity",

@@ -36,9 +36,11 @@ def evaluate_predictions(
     """
     Score one set of predictions against the rows they were made on.
 
-    Span metrics are always computed and are the canonical result;
-    `span_strict_f1` is what model selection should track. Token metrics are
-    diagnostic — they say how a model is wrong when the span numbers say it is.
+    Span and character metrics are always computed and are the canonical
+    result; `span_strict_f1` is what model selection should track. Token metrics
+    are diagnostic — they say how a model is wrong when the span numbers say it
+    is. Gold here is reconstructed from the rows, so it is the gold the model was
+    shown: after overlap resolution and windowing.
     """
     gold = gold_spans(rows, tokenizer, id2label, ignore_index)
     predicted = predicted_spans(rows, predictions, tokenizer, id2label, ignore_index)
@@ -50,7 +52,38 @@ def evaluate_predictions(
         min_overlap_percentage=min_overlap_percentage,
     )
 
+    metrics.update(
+        token_diagnostics(
+            rows=rows,
+            predictions=predictions,
+            id2label=id2label,
+            ignore_index=ignore_index,
+            include_tokens=include_tokens,
+            include_by_entity=include_by_entity,
+            include_confusion=include_confusion,
+        )
+    )
+
+    return metrics
+
+
+def token_diagnostics(
+    rows: pd.DataFrame,
+    predictions: np.ndarray,
+    id2label: dict,
+    ignore_index: int = IGNORE_INDEX,
+    include_tokens: bool = True,
+    include_by_entity: bool = True,
+    include_confusion: bool = False,
+) -> dict[str, Any]:
+    """
+    The token-level half of `evaluate_predictions`: how a model is wrong, token by token.
+
+    Reads the gold labels off `rows`, so it needs rows encoded from an annotated
+    corpus; it is what inference adds when its input carried gold.
+    """
     labels = np.array([_padded(row, predictions.shape[1], ignore_index) for row in rows["labels"]])
+    metrics: dict[str, Any] = {}
 
     if include_tokens:
         metrics.update(token_metrics(predictions, labels, id2label, ignore_index))

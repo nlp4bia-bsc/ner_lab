@@ -8,14 +8,13 @@ Every library stage of `bsc/NER-API` is migrated: `core.prepare_dataset`, the `E
 `build_model`, `train`, `ner.train_model`, `ner.search_hyperparameters`,
 `ner.predict_entities`. The restructure into `lab.core` + `lab.ner` (D82–D90) and the
 integration of `bsc/nlp4bia-linking` as `lab.nel` (D91–D95) both landed on 2026-09-17.
-Verification stands at 862 checks across eleven scripts, all passing; see
+Verification stands at 877 checks across eleven scripts, all passing; see
 [`verification/`](../../verification/).
 
 What remains of NER-API is not library surface — `01b_analyze_hpo_trials.py`,
 `04_official_eval.py`, `build_gold_test_parquets.py`, `aux_download_baseline_model.py` —
 and is a candidate for `examples/` (Q10) rather than migration. `hpo/report.py` already
-answers most of what `01b` printed, and `ner.evaluation.multiclinner.evaluate_tsv` is
-`04`'s entry point.
+answers most of what `01b` printed; `04`'s job is `predict_entities` with a `reference`.
 
 `lab.xlt` (cross-lingual transfer) is a planned subpackage; nothing is drawn until what it
 consumes is confirmed (Q16).

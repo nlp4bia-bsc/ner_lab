@@ -316,8 +316,7 @@ def verify_document_reading(checks: Checks) -> None:
 
 def verify_reference_reading(checks: Checks) -> None:
     from fixtures import synthetic_corpus
-    from lab.ner.evaluation.multiclinner import write_annotation_tsv
-    from lab.ner.inference import read_reference
+    from lab.ner.inference import read_reference, write_gold
 
     corpus = synthetic_corpus(4)
 
@@ -334,7 +333,7 @@ def verify_reference_reading(checks: Checks) -> None:
             set(from_parquet["label"].unique()) == {"DISEASE"},
         )
 
-        tsv_path = write_annotation_tsv(from_parquet, root / "gold.tsv")
+        tsv_path = write_gold(from_parquet, root / "gold.tsv")
         from_tsv = read_reference(tsv_path, "DISEASE")
 
         checks.equal("an annotation TSV reads back the same count", len(from_tsv), len(from_parquet))
@@ -409,7 +408,7 @@ def train_saved_model(root: Path, architecture: str) -> Path:
 
 def verify_end_to_end(checks: Checks) -> None:
     from fixtures import synthetic_corpus
-    from lab.core.spans import SCORED_SPAN_COLUMNS
+    from lab.core.spans import SCORED_SPAN_COLUMNS, SPAN_COLUMNS
     from lab.ner.inference import load_model, predict_entities
 
     shared = tempfile.TemporaryDirectory()
@@ -440,13 +439,19 @@ def verify_end_to_end(checks: Checks) -> None:
     checks.check("gold input is scored", scored.metrics is not None)
     checks.check("the metrics file is written", scored.paths["metrics"].exists())
     checks.check("span metrics are among them", "span_strict_f1" in scored.metrics)
-    checks.check("the official scorer runs on gold input", scored.official is not None)
+    checks.check("character metrics too", "char_f1" in scored.metrics)
+    checks.check("and token diagnostics, since the corpus carried the gold", "token_micro_f1" in scored.metrics)
     checks.check("its gold set is written back out", scored.paths["gold"].exists())
+
+    gold_written = pd.read_csv(scored.paths["gold"], sep="\t", dtype=str, keep_default_na=False)
+    checks.equal("the gold file is a span table", list(gold_written.columns), SPAN_COLUMNS)
+    checks.equal("restricted to the target label", set(gold_written["label"]), {"DISEASE"})
     checks.equal(
-        "the official scorer is restricted to the target label",
-        scored.official["entity"],
-        "DISEASE",
+        "and it is the gold as annotated, not as windowed",
+        len(gold_written),
+        int(gold_corpus["n_entities"].sum()),
     )
+    checks.check("the summary carries the headline scores", "char F1" in scored.summary())
     checks.equal(
         "the manifest counts the documents",
         scored.manifest["n_documents"],
@@ -457,7 +462,7 @@ def verify_end_to_end(checks: Checks) -> None:
     predictions = pd.read_csv(scored.paths["predictions"], sep="\t", dtype=str, keep_default_na=False)
 
     checks.equal(
-        "the prediction file is the official schema plus a score",
+        "the prediction file is the span table plus a score",
         list(predictions.columns),
         SCORED_SPAN_COLUMNS,
     )
@@ -497,7 +502,7 @@ def verify_end_to_end(checks: Checks) -> None:
 
     checks.check("raw text predicts without gold", unscored.paths["predictions"].exists())
     checks.check("and is not scored", unscored.metrics is None)
-    checks.check("nor officially scored", unscored.official is None)
+    checks.check("so no gold file is written", "gold" not in unscored.paths)
     checks.equal("the manifest says so", unscored.manifest["scored_against_gold"], False)
     checks.equal("its documents are the ones on disk", unscored.manifest["n_documents"], 3)
 
@@ -510,8 +515,11 @@ def verify_end_to_end(checks: Checks) -> None:
         batch_size=4,
     )
 
-    checks.check("a reference gets raw text officially scored", referenced.official is not None)
-    checks.check("without producing span metrics", referenced.metrics is None)
+    checks.check("a reference gets raw text scored", referenced.metrics is not None)
+    checks.check("with span metrics", "span_strict_f1" in referenced.metrics)
+    checks.check("and character metrics", "char_f1" in referenced.metrics)
+    checks.check("but no token diagnostics, which need gold rows", "token_micro_f1" not in referenced.metrics)
+    checks.check("the reference is recorded", referenced.manifest["reference"] is not None)
 
     filtered = predict_entities(
         model_dir=model_dir,

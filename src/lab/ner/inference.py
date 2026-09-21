@@ -22,15 +22,10 @@ from lab.core.brat import resolve_documents
 from lab.core.corpus import DOCUMENT_COLUMNS, validate_corpus
 from lab.ner.encoding.encoder import Encoder, WindowStrategy, encoder_from_description
 from lab.ner.encoding.rows import IGNORE_INDEX
-from lab.ner.evaluation.metrics import evaluate_predictions
-from lab.ner.evaluation.multiclinner import (
-    evaluate_annotations,
-    format_summary,
-    read_annotation_tsv,
-    spans_from_corpus,
-    write_annotation_tsv,
-)
-from lab.core.spans import SCORED_SPAN_COLUMNS
+from lab.core.brat import read_annotation_tsv
+from lab.core.spans import SCORED_SPAN_COLUMNS, SPAN_COLUMNS, spans_from_corpus
+from lab.ner.evaluation.metrics import token_diagnostics
+from lab.ner.evaluation.scoring import span_metrics
 from lab.ner.evaluation.spans import predicted_spans
 from lab.ner.models.registry import Architecture, build_model
 from lab.core.provenance import write_manifest
@@ -42,7 +37,6 @@ from lab.ner.training.trainer import read_model_encoding, resolve_trainer_class
 PREDICTIONS_FILENAME = "predictions.tsv"
 GOLD_FILENAME = "gold.tsv"
 METRICS_FILENAME = "prediction_metrics.json"
-OFFICIAL_METRICS_FILENAME = "multiclinner_eval.json"
 INFERENCE_MANIFEST_FILENAME = "inference_manifest.json"
 
 
@@ -53,18 +47,21 @@ class InferenceResult:
     output_dir: Path
     spans: pd.DataFrame
     metrics: dict[str, Any] | None
-    official: dict[str, Any] | None
     manifest: dict[str, Any]
     paths: dict[str, Path]
 
     def summary(self) -> str:
-        """A one-line account of the run, plus the official scores when there are any."""
+        """A one-line account of the run, with the headline scores when there are any."""
         line = f"{len(self.spans)} entities from {self.manifest['n_windows']} windows"
 
-        if self.official is None:
+        if self.metrics is None:
             return line
 
-        return f"{line}\n{format_summary(self.official)}"
+        return (
+            f"{line} | strict P/R/F1 = {self.metrics['span_strict_precision']}"
+            f"/{self.metrics['span_strict_recall']}/{self.metrics['span_strict_f1']}"
+            f" | char F1 = {self.metrics['char_f1']}"
+        )
 
 
 def predict_entities(
@@ -92,9 +89,15 @@ def predict_entities(
 
     `documents` is a canonical corpus (frame or parquet), a directory of `.txt`
     files, or a `{doc_id: text}` mapping. Predictions are always written.
-    Documents carrying gold entities are also scored, both with this library's
-    span and token metrics and with the official MultiClinNER scorer; a
-    directory or mapping has no gold, so scoring those needs `reference`.
+    Documents carrying gold entities are also scored; a directory or mapping
+    has no gold, so scoring those needs `reference`, which also takes precedence
+    over the corpus's own entities when both are given.
+
+    Span and character metrics score the predicted spans against the gold as
+    annotated, restricted to the model's `target_label` — not against the gold
+    reconstructed from windows, which is what training sees. Token diagnostics
+    need the encoded rows, so they are added only when `documents` itself
+    carries the gold.
 
     `min_score` drops predicted entities below a mean token probability. Where
     two overlapping windows predict the same span, the higher-scoring copy is
@@ -136,30 +139,34 @@ def predict_entities(
 
     paths = {"predictions": write_predictions(spans, output_dir / PREDICTIONS_FILENAME)}
     metrics: dict[str, Any] | None = None
-    official: dict[str, Any] | None = None
 
-    if has_gold(corpus):
-        metrics = evaluate_predictions(
-            rows=rows,
-            predictions=predictions,
-            tokenizer=tokenizer,
-            id2label=encoder.id2label,
-            min_overlap_percentage=min_overlap_percentage,
-            include_confusion=include_confusion,
-        )
-        paths["metrics"] = write_manifest(metrics, output_dir / METRICS_FILENAME)
-
-    gold = read_reference(reference, encoder.target_label) if reference is not None else None
-
-    if gold is None and has_gold(corpus):
-        gold = spans_from_corpus(corpus, entity=encoder.target_label)
+    if reference is not None:
+        gold = read_reference(reference, encoder.target_label)
+    elif has_gold(corpus):
+        gold = spans_from_corpus(corpus, label=encoder.target_label)
+    else:
+        gold = None
 
     if gold is not None:
-        paths["gold"] = write_annotation_tsv(gold, output_dir / GOLD_FILENAME)
-        official = evaluate_annotations(gold=gold, predicted=spans, entity=encoder.target_label)
-        paths["official_metrics"] = write_manifest(
-            official, output_dir / OFFICIAL_METRICS_FILENAME
+        paths["gold"] = write_gold(gold, output_dir / GOLD_FILENAME)
+        metrics = span_metrics(
+            gold=gold,
+            predicted=spans,
+            tags=[encoder.target_label],
+            min_overlap_percentage=min_overlap_percentage,
         )
+
+        if has_gold(corpus):
+            metrics.update(
+                token_diagnostics(
+                    rows=rows,
+                    predictions=predictions,
+                    id2label=encoder.id2label,
+                    include_confusion=include_confusion,
+                )
+            )
+
+        paths["metrics"] = write_manifest(metrics, output_dir / METRICS_FILENAME)
 
     manifest = {
         "model_dir": str(Path(model_dir).resolve()),
@@ -172,7 +179,6 @@ def predict_entities(
         "min_score": float(min_score),
         "scored_against_gold": metrics is not None,
         "reference": None if reference is None else str(Path(reference).resolve()),
-        "multiclinner_eval": official,
     }
     paths["inference_manifest"] = write_manifest(
         manifest, output_dir / INFERENCE_MANIFEST_FILENAME
@@ -182,7 +188,6 @@ def predict_entities(
         output_dir=output_dir,
         spans=spans,
         metrics=metrics,
-        official=official,
         manifest=manifest,
         paths=paths,
     )
@@ -347,15 +352,17 @@ def decode_spans(
 
 
 def write_predictions(spans: pd.DataFrame, path: str | Path) -> Path:
-    """
-    Write predicted entities as a TSV: the official schema plus a `score` column.
-
-    The extra column is why this is not `write_annotation_tsv` — the official
-    format has no place for confidence, and `multiclinner`'s reader takes the
-    five columns it declares and ignores the rest, so the file scores as-is.
-    """
+    """Write predicted entities as a TSV: the span table plus its `score` column."""
     path = Path(path)
     spans[SCORED_SPAN_COLUMNS].to_csv(path, sep="\t", index=False)
+
+    return path
+
+
+def write_gold(spans: pd.DataFrame, path: str | Path) -> Path:
+    """Write the gold spans a run was scored against, as a span table TSV."""
+    path = Path(path)
+    spans[SPAN_COLUMNS].to_csv(path, sep="\t", index=False)
 
     return path
 
@@ -441,14 +448,14 @@ def _predict(
 
 
 def read_reference(reference: str | Path, target_label: str | None = None) -> pd.DataFrame:
-    """Read a gold set for the official scorer, from an annotation TSV or a corpus parquet."""
+    """Read a gold span table to score against, from an annotation TSV or a corpus parquet."""
     path = Path(reference)
 
     if not path.exists():
         raise FileNotFoundError(f"Reference does not exist: {path}")
 
     if path.suffix == ".parquet":
-        return spans_from_corpus(path, entity=target_label)
+        return spans_from_corpus(path, label=target_label)
 
     annotations = read_annotation_tsv(path)
 
