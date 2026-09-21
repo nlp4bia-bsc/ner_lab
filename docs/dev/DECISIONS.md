@@ -1,108 +1,273 @@
 # Decisions
 
-Numbered, append-only. A superseded decision is struck through in place and points at the one
-that replaced it — the reasoning that turned out wrong is worth keeping.
+Numbered, append-only. A superseded decision keeps its number and points at the one that
+replaced it, so citations still resolve; its old text is in git history.
 
-A row is one line: what was decided, and why in a clause. Reasoning longer than that lives in
-[DECISIONS_NOTES.md](DECISIONS_NOTES.md) under the same number (`→ notes`), or in the design
-document that motivated the decision (`→ RESTRUCTURE.md §n`). The row is the verdict; the
-notes are the argument.
+A row is one line: what was decided, and why in a clause. Where the reasoning needs more, the
+row says `→ notes` and the section under the same number at the bottom of this file has it.
+The row is the verdict; the note is the argument.
+
+## Register
 
 | # | Decision | Rationale |
 |---|---|---|
-| D1 | ~~Package name / import namespace: `ner_lab`; distribution `ner-lab`~~ **Superseded by D82.** | Matches repo. Flat `preprocessing`/`models`/`training`/`metrics` would squat 4 generic names in a shared venv. |
-| D2 | ~~`src/` layout: `src/ner_lab/{preprocessing,models,training,metrics}/`~~ **Superseded by D83.** `src/` layout itself stands. | Prevents accidental imports from cwd; standard for installable packages. |
-| D3 | ~~Single CLI `ner-lab <subcommand>`, one subcommand per stage~~ **Superseded by D11.** | The per-stage subcommand design assumed a flag surface. It doesn't survive the "library first" intent. |
-| D4 | ~~CLI is a thin wrapper over the library~~ **Restated as D11/D12.** | Still true, but the shape changed. |
-| D5 | ~~All dependencies required — no optional extras~~ **Superseded by D85.** | Measured: torch+nvidia = 4.0 GB, ray = 200 MB (3.6%). Extras buy nothing on size, and the first users *are* the HPO users. |
-| D6 | Drop deps `dataclasses`, `pathlib`, `typing` | stdlib since 3.7 / 3.4 / 3.5; floor is 3.10. Installed as real redundant files (`site-packages/pathlib.py` is the 2014 version, `from collections import Sequence`). Inert only because stdlib precedes site-packages in `sys.path`. |
+| D1 | Superseded by D82. | |
+| D2 | Superseded by D83. The `src/` layout itself stands. | Prevents accidental imports from cwd; standard for installable packages. |
+| D3 | Superseded by D11. | |
+| D4 | Restated as D11/D12. | |
+| D5 | Superseded by D85. | |
+| D6 | Drop deps `dataclasses`, `pathlib`, `typing` | stdlib since 3.7 / 3.4 / 3.5; floor is 3.10. Installed as real redundant files, inert only because stdlib precedes site-packages in `sys.path`. |
 | D7 | `torch==2.10.0` stays an exact pin | All known users need exactly 2.10, not a floor. |
-| D8 | No tests in the package or the repo for now. No `pytest` dep. | User decision. Consequence accepted: no regression guard, notably on `metrics.py` (offset-sensitive) and `multiclinner_eval.py` (equivalence to the official scorer rests on a one-off diff). |
+| D8 | No tests in the package. No `pytest` dep. Behavioural checks live in `verification/`, outside `src/`. | User decision. Consequence accepted: no regression guard beyond the verification run. |
 | D9 | Build backend: hatchling | uv-native, no `setup.py`, minimal config. |
-| D10 | Nothing MN5- or SLURM-specific ships. No `sh/`. Pure Python. | Users write their own submit script around the library. Closes Q4. |
-| D11 | **One CLI command: `ner-lab run <config.yaml>`.** No per-stage subcommands. | ~9 stages × ~25 flags = ~200 argparse declarations, each duplicating a function parameter and needing edits in two places on every signature change. |
+| D10 | Nothing MN5- or SLURM-specific ships. No `sh/`. Pure Python. | Users write their own submit script around the library. |
+| D11 | **One CLI command: `lab run <config.yaml>`.** No per-stage subcommands. | ~9 stages × ~25 flags = ~200 argparse declarations, each duplicating a function parameter and needing edits in two places on every signature change. |
 | D12 | YAML is flat, with a `task:` key naming the operation. One file fully describes one run. | Dispatch is a dict lookup; the file is self-contained and readable on its own. |
-| D13 | **~4 named flags total:** `--seed`, `--output-dir`, plus `--version`. No generic `--set key=value`. Everything else lives in the YAML. | Covers the SLURM job-array case (sweep seeds without writing N near-identical YAML files) without reopening a per-stage flag surface. |
+| D13 | **Two override flags:** `--random-state`/`--seed` and `--output-dir`, plus `--version`. No generic `--set key=value`. Everything else lives in the YAML. | Covers the SLURM job-array case (sweep seeds without writing N near-identical YAML files) without reopening a per-stage flag surface. |
 | D14 | HPO and training may write to disk; `output_dir` stays an explicit required parameter, and the function still **returns** its result. | Ray writes per-trial dirs and Trainer writes checkpoints — a 40-trial GPU-day sweep can't live in memory. Precedent: `Trainer` requires `output_dir` and `train()` returns `TrainOutput`. What we kill is "the only way to see a result is to read a file afterward". |
-| D15 | Manifests (`sha256`, `run_manifest.json`, dataset-name derivation) become opt-in behaviour of the persistence layer. | Today they are unconditional side effects inside `00_generate_data.py`. The pure path must not touch them. |
-| D16 | Augmentation is cut from the first release. | `00b_augment_data.py` is broken in NER-API anyway (expects `--input-jsonl`; nothing emits jsonl since the parquet migration). Closes the `augment-data` row. |
-| D17 | Python floor `>=3.10`. | Most clusters are at this version. Closes Q7. |
+| D15 | Manifests (`sha256`, `run_manifest.json`, dataset-name derivation) are behaviour of the persistence layer. | The pure path must not touch them. |
+| D16 | Augmentation is cut from the first release. | `00b_augment_data.py` was broken in NER-API anyway (expected `--input-jsonl`; nothing emitted jsonl since the parquet migration). |
+| D17 | Python floor `>=3.10`. | Most clusters are at this version. |
 | D18 | Drop deps `nltk`, `pydantic`, `psutil` (zero imports). Keep `accelerate` and `optuna` despite zero direct imports. | `accelerate` is required by `Trainer`; `optuna` by `ray.tune.search.optuna.OptunaSearch`. Both would otherwise look dead and get pruned by someone later. |
-| D19 | `ray` must be `ray[tune]`. | Code imports `ray.tune`, `ray.air`, `ray.tune.search.optuna` — none ship in the base wheel. Works in NER-API's venv only because something else dragged them in. Latent bug on a clean install. |
-| D20 | No explanatory comments in library code. Rationale goes in this document. | Comments that narrate what the next line does read as machine-written and add maintenance surface. Comments are for the non-obvious only (e.g. why a dependency with no imports is required). |
-| D21 | No `quickstart()` function. A runnable script in `examples/` instead. | By the "no functions whose only value is calling three others" rule, a quickstart is exactly that. As an example it is something to read and copy; as an API it is dead weight. |
-| D22 | No shared multi-stage pipeline config, and no blocking `run_pipeline()`. | Stages have incompatible runtime shapes: seconds/CPU vs GPU-days/Ray/multi-GPU vs GPU-hours/single-GPU. Chaining them in-process either camps on a login node for days or reimplements SLURM dependencies badly. Parameter drift between stages is instead solved *optionally* — point two runs at the same YAML if you want to; nothing forces it. |
-| D23 | **Entity overlap resolution stays at encoding time, not corpus build time.** The canonical parquet holds raw source annotations, overlaps intact. | Keeps the corpus artifact faithful to the source; overlap handling is a modelling choice. Lets several policies be compared without regenerating the corpus. Consequence, accepted and to be documented: `n_entities` and the split balance report count *unresolved* entities, so they describe the corpus rather than any run's training set. |
-| D24 | ~~Folder structure is created as needed, not defined up front.~~ **Superseded by D83**, which defines it. | Agreed shape: `data/` (document-granularity, persisted) vs `encoding/` (window-granularity, per-run), plus `models/`, `training/`, `evaluation/`, and top-level `cli.py`, `tasks.py`, `provenance.py`, `inference.py`. Details settle during migration. |
-| D25 | `n_entities` is pinned to `int32`, dropping NER-API's `downcast="integer"`. | A data-dependent dtype is a footgun: a corpus fitting `int8` silently changes schema when a densely-annotated document is added. Stable schema over a few saved bytes. |
-| D26 | Implicit behaviour is exposed as public functions that the orchestrator defaults to, never buried inside it. | `derive_dataset_name`, `split_descriptor`, `read_dataset_metadata` are callable and overridable. The `<output_dir>/<dataset_name>/<split_descriptor>/` layout stays in the library because the training stage reads it — it is a contract, not a convenience. |
-| D27 | One name per concept across the library: `random_state`, not `seed`. CLI accepts `--random-state`/`--seed` as aliases for one destination. | The script used `--seed`, the splitter used `random_state`. Two names for one thing is worse than either. Default unified on `DEFAULT_RANDOM_STATE` (the script's 42 was an accident); a default-seeded rerun therefore won't reproduce an old script-made split, and the seed is recorded in the manifest. |
-| D28 | `target_label` is validated against the labels present in the corpus, not against `CANONICAL_LABELS`. To be applied when `encoding/` is migrated. | The data layer is already entity-agnostic (verified on a `GENE/protein/cell-line/Chemical` corpus). Only `label_builder.py` and `dataset_loader.py` hard-raise on the four clinical labels, which would stop the group using this on any other corpus. `CANONICAL_LABELS` stays as an alias table for normalization, not as a whitelist. **Closed by D43:** multi-label IOB2 is not happening. |
-| D29 | **HPO and training are migrated top-down, not bottom-up.** Agree the user-facing signature and return type first, then fill in behind it. | `data/` and `encoding/` have real leaf functions and a thin orchestrator, so bottom-up works and the public API falls out. HPO does not: 13 of its functions are defined in `scripts/01_HPO_ner.py` and only 3 names come from `src/`. Migrating bottom-up there would mean lifting a 691-line `main()` and inheriting Ray-script structure as the public API. |
-| D30 | ~~`NERTrainingConfig` (46 fields) is split by concern into spec objects.~~ **Superseded by D38.** | It mixes four: encoding (already the `Encoder`'s constructor, so it should not appear again), model construction, optimization hyperparameters, and run plumbing. Split, each piece is 5–12 parameters — a fine signature or a small typed object under the refined rule 1. Two specific hazards: `metrics_module_path: str = "metrics.metrics"` imports metrics by string and breaks silently on the rename to `ner_lab.evaluation.metrics`; and `annotation_overlap_policy` would exist in two places once `Encoder` owns it. |
-| D31 | **Encoding never normalizes labels.** The corpus is the source of truth by then; normalization is a corpus-build decision. `Encoder` uses the labels it is given. | NER-API's `load()` re-normalized unconditionally, silently overriding a corpus built with `normalize_labels=False` — the same knob in two layers with the inner one winning. Behaviour change for anyone feeding a non-normalized corpus, accepted. |
-| D32 | **`normalize_labels` defaults to `False` everywhere.** A corpus keeps the labels its annotations declare; normalization is opt-in. | Renaming a corpus's own vocabulary by default is not ours to do; with the default off, no metadata-precedence machinery is needed. → notes |
-| D32b | The alias table stays reachable without being front-of-house: `LABEL_ALIASES` and `normalize_annotation_labels` are exported from `ner_lab.data`, and `normalize_label`/`normalize_entity_labels`/`normalize_annotation_labels` take an `aliases` mapping. `build_corpus` and `prepare_dataset` keep the plain boolean. | A module-level dict users are expected to mutate is a trap. A parameter defaulting to `LABEL_ALIASES` gives a corpus with its own vocabulary a supported path — normalize the annotations, then hand them to `build_corpus` — which is the batteries-removable pattern already used for window strategies. Threading `aliases` through the orchestrators too would buy nothing over that. |
-| D33 | **`language` is a required argument**, on `Encoder` and on `split_into_sentences`. Not read from `metadata.json`, not defaulted to `"es"`. | A parquet may arrive with no sibling metadata, so a metadata lookup needs a fallback anyway, and a fallback here is a silent guess: pysbd segments a Spanish clinical note wrongly under `en` without erroring, which shifts every window boundary. Metadata-then-argument-then-raise was considered and rejected as machinery earning less than it costs. Mandatory is one rule with no hidden state. |
-| D34 | **`models/` builds architectures and nothing else.** No training, no prediction, no saving, no metrics, no `TrainingArguments`. | NER-API's `BaseTokenClassificationModel` is 661 lines doing all of that behind one class, with `SimpleNERModel`/`CRFTransformerModel` overriding `_build_model` — so swapping an architecture means subclassing the trainer. Split, the architecture is a function you can replace with your own, which is what "removable" has to mean here. The training half is `training/`'s problem. |
-| D35 | Architectures are `"linear"` / `"crf"` / any callable, resolved by `build_model`, same shape as `Encoder`'s window strategies. | One extension mechanism for the library, not two. A custom architecture is `(checkpoint, label2id, id2label, **kwargs) -> model`; nothing needs subclassing. NER-API's "simple" is renamed `"linear"` — it describes the head rather than a vibe, and D27 forbids keeping both names. |
-| D36 | The two `*Config` dataclasses (46 and 49 fields) are **not** ported into `models/`. | Both were ~90% training and run plumbing with 3 genuinely model-level fields between them (`dropout`, `constrain_transitions`, `constraint_value`). Those are now keyword arguments on the CRF constructor. This is D30 applied one layer early. |
-| D37 | BIO constraint reasoning lives in a torch-free `models/bio.py`. | It is pure combinatorics over label strings, and it is the part most likely to be silently wrong. Keeping it out of the tensor code makes it verifiable in the torch-free environment; `crf.py` turns the returned booleans into buffers. |
-| D38 | **`train()` accepts a `transformers.TrainingArguments`.** `training_arguments(output_dir, **overrides)` builds one from a module-level `DEFAULTS` dict. | Battery = the helper's defaults; removable = build your own and pass it. Every `TrainingArguments` keyword works without us enumerating it, and HPO sweeps with `dataclasses.replace`. Supersedes D30. |
+| D19 | `ray` must be `ray[tune]`. | Code imports `ray.tune`, `ray.air`, `ray.tune.search.optuna` — none ship in the base wheel. |
+| D20 | No explanatory comments in library code. Rationale goes in this document. | Comments that narrate what the next line does add maintenance surface. Comments are for the non-obvious only (e.g. why a dependency with no imports is required). |
+| D21 | No `quickstart()` function. A runnable script in `examples/` instead. | A function whose only value is calling three others is dead weight as an API; as an example it is something to read and copy. |
+| D22 | No shared multi-stage pipeline config, and no blocking `run_pipeline()`. | Stages have incompatible runtime shapes: seconds/CPU vs GPU-days/Ray/multi-GPU vs GPU-hours/single-GPU. Chaining them in-process either camps on a login node for days or reimplements SLURM dependencies badly. Point two runs at the same YAML if you want to; nothing forces it. |
+| D23 | **Entity overlap resolution stays at encoding time, not corpus build time.** The canonical parquet holds raw source annotations, overlaps intact. | Keeps the corpus faithful to the source; overlap handling is a modelling choice, so several policies can be compared without regenerating the corpus. Consequence: `n_entities` and the split balance report count *unresolved* entities. |
+| D24 | Superseded by D83. | |
+| D25 | `n_entities` is pinned to `int32`, dropping NER-API's `downcast="integer"`. | A data-dependent dtype is a footgun: a corpus fitting `int8` silently changes schema when a densely-annotated document is added. |
+| D26 | Implicit behaviour is exposed as public functions that the orchestrator defaults to, never buried inside it. | `derive_dataset_name`, `split_descriptor`, `read_dataset_metadata` are callable and overridable. The `<output_dir>/<dataset_name>/<split_descriptor>/` layout stays in the library because the training stage reads it — a contract, not a convenience. |
+| D27 | One name per concept across the library: `random_state`, not `seed`. CLI accepts `--random-state`/`--seed` as aliases for one destination. | Two names for one thing is worse than either. Default unified on `DEFAULT_RANDOM_STATE`; the seed is recorded in the manifest. |
+| D28 | `target_label` is validated against the labels present in the corpus, not against `CANONICAL_LABELS`. | The data layer is entity-agnostic (verified on a `GENE/protein/cell-line/Chemical` corpus). `CANONICAL_LABELS` is an alias table for normalization, not a whitelist. |
+| D29 | **Script-shaped stages (HPO, inference) are migrated top-down, not bottom-up.** Agree the user-facing signature and return type first, then fill in behind it. | Migrating bottom-up would mean lifting a 691-line `main()` and inheriting Ray-script structure as the public API. |
+| D30 | Superseded by D38. | |
+| D31 | **Encoding never normalizes labels.** The corpus is the source of truth by then; `Encoder` uses the labels it is given. | NER-API re-normalized unconditionally at load, silently overriding a corpus built with `normalize_labels=False` — the same knob in two layers with the inner one winning. |
+| D32 | **`normalize_labels` defaults to `False` everywhere.** A corpus keeps the labels its annotations declare; normalization is opt-in. | Renaming a corpus's own vocabulary by default is not ours to do. → notes |
+| D32b | The alias table stays reachable without being front-of-house: `LABEL_ALIASES` and the `normalize_*` functions are exported from `lab.core` and take an `aliases` mapping. `build_corpus` and `prepare_dataset` keep the plain boolean. | A module-level dict users are expected to mutate is a trap. A parameter defaulting to `LABEL_ALIASES` gives a corpus with its own vocabulary a supported path — normalize the annotations, then hand them to `build_corpus`. |
+| D33 | **`language` is a required argument**, on `Encoder`, `split_into_sentences` and `compute_text_stats`. Not read from `metadata.json`, not defaulted to `"es"`. | A fallback here is a silent guess: pysbd segments a Spanish clinical note wrongly under `en` without erroring, which shifts every window boundary. Mandatory is one rule with no hidden state. |
+| D34 | **`ner/models/` builds architectures and nothing else.** No training, no prediction, no saving, no metrics. | NER-API's base model class was 661 lines doing all of that, so swapping an architecture meant subclassing the trainer. Split, the architecture is a function you can replace with your own. |
+| D35 | Architectures are `"linear"` / `"crf"` / any callable `(base_model, label2id, id2label, **kwargs) -> model`, resolved by `build_model`, same shape as `Encoder`'s window strategies. | One extension mechanism for the library, not two. NER-API's "simple" is renamed `"linear"` — it describes the head. |
+| D36 | The two `*Config` dataclasses (46 and 49 fields) are **not** ported. | Both were ~90% training and run plumbing with 3 genuinely model-level fields, now keyword arguments on the CRF constructor. |
+| D37 | BIO constraint reasoning lives in a torch-free `ner/models/bio.py`. | Pure combinatorics over label strings, and the part most likely to be silently wrong; keeping it out of the tensor code makes it verifiable without torch. |
+| D38 | **`train()` accepts a `transformers.TrainingArguments`.** `training_arguments(output_dir, **overrides)` builds one from a module-level `DEFAULTS` dict. | Battery = the helper's defaults; removable = build your own and pass it. Every `TrainingArguments` keyword works without us enumerating it. |
 | D39 | The settings HF has no slot for stay explicit parameters on `train()`: `early_stopping_patience`, `pad_to_multiple_of`, `ignore_index`, `metrics_scope`, `save_model`, `track_resources`. | Six named arguments beat smuggling them into a config object HF would ignore. |
-| D40 | `compute_metrics` is injected, not built. `trainer_class` defaults to `CRFTrainer` for a model exposing `decode_from_emissions`, `Trainer` otherwise. | Decouples training from `evaluation/`, which was not yet migrated, so training landed without waiting on it. Duck-typing the CRF trainer means a custom architecture that can Viterbi-decode gets the right Trainer for free. |
-| D41 | ~~`metric_for_best_model` defaults to `eval_loss`.~~ **Discharged by D47** once `evaluation/` landed. | Was a placeholder: span metrics only existed once a `compute_metrics` was supplied, so a `span_strict_f1` default would have crashed every run that did not pass one. |
-| D42 | No `target_label` parameter on `train()`. Provenance goes through `run_metadata: dict`. | Nothing in training needs it once `compute_metrics` is injected and the model carries its own `label2id`. An unused parameter kept only for the summary file is worse than a general one. |
-| D43 | **No multi-label.** One `target_label`, three classes, indefinitely. NER-API's deferred Phase 5 is closed, not postponed. | User decision. Removes the pressure to design `2n+1` seams into evaluation that nothing would use. Supersedes the "still open" note on D28. |
-| D44 | **nervaluate/SemEval is the canonical scorer.** The MultiClinNER official scorer stays available as an option, never as the default. | User decision. `span_strict_f1` is what model selection tracks; `evaluation/multiclinner.py` is for producing numbers comparable to published shared-task results. |
-| D45 | The legacy word-level scoring path is dropped: `dataframe_gold_spans_from_bio`, `dataframe_pred_spans_from_logits`, `predictions_to_word_labels`, the word-level `bio_to_spans`, `ensure_word_spans`, `ensure_list`, and the `is_token_level_dataframe` branch. ~250 lines. | `Encoder` only ever emits token-level rows, so the branch was unreachable in `ner_lab`. It existed for a preprocessing generation that no longer exists. |
-| D46 | `multiclinner.spans_from_corpus` takes labels **verbatim**. NER-API's `gold_annotations_from_parquet` ran them through `normalize_label`. | D32 applies here too: the official gold is scored as distributed. Normalizing it silently would make the "official" numbers unofficial. |
-| D47 | `training_arguments()` defaults to `metric_for_best_model="span_strict_f1"` / `greater_is_better=True`. `train()` raises if a span metric is requested with no `compute_metrics`, naming `build_compute_metrics` in the message. | Discharges D41. The default matches NER-API and the group's expectation now that the metric exists. The guard turns what would be a confusing mid-training KeyError into an immediate, actionable one. |
-| D48 | **The training orchestrator is `training/assessment.py::train_model`, task `train_model`.** No `pipeline/` package. | Closes Q5. In `transformers`, `pipelines` means inference; a tier named after itself is a layer that exists only to be a layer. → notes |
-| D49 | **`train_model(training_arguments=...)` accepts a `TrainingArguments`, a mapping of overrides applied to `DEFAULTS`, or `None`.** NER-API's `best_config.json` hand-off is not reintroduced. | User decision. The mapping form is what makes the YAML path work at all, and it is not the opaque bag rule 1 forbids: its schema *is* `TrainingArguments`, it covers one concern, and an unknown key raises immediately on construction. Reading a JSON file back into a config object would make a file format part of the API — exactly what D29/D38 removed. |
-| D50 | The orchestrator returns metric tables and summaries — `fold_metrics`, `aggregate`, `summaries` — never `TrainingResult` or a live `Trainer`. | Holding one `Trainer` per fold keeps every fold's model resident: five BERT-base folds is ~2 GB that accumulates on the GPU while the next fold trains. Each fold's model is released before the next is built. If you want the object, `save_model=True` writes it, or call `ner_lab.training.train` directly — which is what "removable" means here. Consistent with D14: it still returns its result, just not the live machinery. |
-| D51 | `kfold_summary.parquet`/`.json` become `fold_metrics.parquet` and `assessment_summary.json`, written in **both** split modes. `fold_metrics` rows are reconstructed from `epoch_metrics` at the best epoch, not from a separate `best_eval_metrics` blob. | A single train/validation run and a k-fold run differ in how many rows the table has, not in whether it exists — one filename means downstream analysis does not branch on mode. `best_metric` keeps its own fixed column so aggregation never has to guess the Trainer's `eval_` prefix (NER-API's note, still true). |
-| D52 | **`run_manifest.json` records no git commit.** | NER-API's script ran `git rev-parse HEAD` against its own repo root, which a library cannot do: the interesting commit is the *user's* project, and `ner_lab` may be installed from a wheel with no repo at all. Recorded as Q11 rather than guessed at. Everything else the script wrote — split provenance, resolved arguments, hardware, the embedded data manifest — is kept, and is still written before training starts so a crashed run explains itself. |
-| D53 | `train_model(random_state=...)` sets `TrainingArguments.seed`. | D27's one-name-per-concept rule, and the `--random-state`/`--seed` CLI override is applied to whatever task is named — a task that did not accept it would fail with a `TypeError` on a flag the CLI advertises as universal. |
-| D54 | **HPO is not a loop over `train_model`.** A trial calls `train()` directly; `hpo/` and the orchestrator are siblings over it. | User decision, correcting ROADMAP's earlier assumption. `train_model` takes a split directory and encodes internally, so a trial calling it would re-window the corpus every trial. NER-API windows once per (checkpoint, strategy, context_tokens, max_length) variant and shares the frames across all trials via `tune.with_parameters` — `encode_variants` keeps exactly that: windowed `len(variants)` times per sweep, not `n_trials` times. |
-| D55 | **The search space is Ray domains or a declarative mapping, interchangeably.** `build_search_space` merges `search_space` over `DEFAULT_SEARCH_SPACE`; a value may be a `tune` domain, the YAML mapping form, a scalar (pinned) or `None` (removed). | User decision. The declarative shape is what NER-API already wrote into its manifest; merge-over-defaults matches D49. → notes |
-| D56 | **HPO takes `split_dir`, like `train_model`.** A k-fold split is searched against one rotation, `validation_index` (default: first rotatable fold); the fixed holdout is never read. | User decision. One YAML value points both stages at the same data. Searching across all folds would multiply an already GPU-day sweep by the fold count on top of `seeds_per_trial`; the k-fold mean is the assessment's job (D51), not the search's. |
-| D57 | **`hpo_summary.json` records the winner as a ready-to-run `train_model` YAML config**, beside the raw trial record. Output only — nothing ever reads it back. | User decision. Replaces NER-API's `best_config.json` -> `load_hpo_best_config` round-trip that D29/D49 removed: the hand-off survives as a document for the user, not as a file format in the API. Sweep-only settings (`save_strategy="no"`, `load_best_model_at_end=False`) are stripped; sampled hyperparameters, resolved batch sizes, the epoch cap and the user's own overrides are carried. Verified by running the emitted block through `train_model(**block)` unchanged. |
-| D58 | **`train()` allows early stopping without `load_best_model_at_end` unless `save_model=True`.** The old unconditional raise fires only when weights are kept. | The guard blocked NER-API's deliberate sweep shape: no checkpointing, early stopping on. Verified against transformers 5.14.1: `_determine_best_metric` updates `state.best_metric` on every evaluation regardless of save settings, and `EarlyStoppingCallback` only warns — the stop logic works. The raise stays where the footgun is real: saved weights would be the last epoch's, not the best epoch's. |
-| D59 | No `max_epochs` parameter on `search_hyperparameters`. The cap is `num_train_epochs`, defaulting to 40 via `HPO_ARGUMENT_DEFAULTS`. | D27's one-name rule: NER-API's `--max-epochs` was `num_train_epochs` renamed. It already has a home in `training_arguments`, and the winner block carries it into the assessment stage unchanged. |
-| D60 | **The winner block is also written to `winner.yaml` in the sweep's run directory.** `write_winner_config` is public. **Amended by D77:** its `output_dir` is `<sweep>/final_train`. | D57 left the hand-off correct but manual — retyping ~18 keys where a typo silently changes the run. → notes |
-| D61 | **Inference is `ner_lab/inference.py::predict_entities`, task `predict_entities`.** It takes a `model_dir`, not a run directory. `--random-state` raises a `TypeError` here. | Closes Q8. Pointing at the model keeps inference independent of the orchestrator's artifact layout. → notes |
-| D62 | **A saved model carries an `encoding.json` beside its weights**, written by `train(model_encoding=...)`. Output only — `train_model` never reads one. | User decision. The artifact describes itself, as HF's `config.json` does; it is also the only thing that makes a CRF checkpoint loadable. → notes |
-| D63 | `Encoder(require_target_label=False)` skips the check that `target_label` occurs in the corpus. Default stays `True`. | Rule 3: policy that transforms or rejects the user's data carries an off switch. The guard is right for training, where the typo it catches produces an all-`O` corpus that trains to a plausible-looking zero. It is wrong for inference, where unannotated documents legitimately contain no entity at all. Inference passes `False`; nothing else does. |
-| D64 | **Per-span `score` and `text` are added to `evaluation/spans.py`**, not decoded again in `inference.py`. Both off by default. | Two implementations of B/I transition handling that must agree forever is exactly the duplication this migration exists to remove. → notes |
-| D65 | **The ten stage entry points are re-exported from `ner_lab` lazily, via a module-level `__getattr__`.** Everything else stays at `ner_lab.<subpackage>`. | The folder structure carries meaning (pandas shape, not transformers); lazy so `import ner_lab` stays at 0.04s and torch-free. → notes |
+| D40 | `compute_metrics` is injected, not built. `trainer_class` defaults to `CRFTrainer` for a model exposing `decode_from_emissions`, `Trainer` otherwise. | Decouples training from evaluation. Duck-typing the CRF trainer means a custom architecture that can Viterbi-decode gets the right Trainer for free. |
+| D41 | Discharged by D47. | |
+| D42 | No `target_label` parameter on `train()`. Provenance goes through `run_metadata: dict`. | Nothing in training needs it once `compute_metrics` is injected and the model carries its own `label2id`. |
+| D43 | **No multi-label.** One `target_label`, three classes, indefinitely. | User decision. Removes the pressure to design `2n+1` seams into evaluation that nothing would use. |
+| D44 | **nervaluate/SemEval is the canonical scorer.** The MultiClinNER official scorer stays available as an option, never as the default. | User decision. `span_strict_f1` is what model selection tracks; `ner.evaluation.multiclinner` is for numbers comparable to published shared-task results. |
+| D45 | The legacy word-level scoring path is dropped (~250 lines). | `Encoder` only ever emits token-level rows, so the branch was unreachable. |
+| D46 | `multiclinner.spans_from_corpus` takes labels **verbatim**. | D32 applies: the official gold is scored as distributed. Normalizing it silently would make the "official" numbers unofficial. |
+| D47 | `training_arguments()` defaults to `metric_for_best_model="span_strict_f1"` / `greater_is_better=True`. `train()` raises if a span metric is requested with no `compute_metrics`, naming `build_compute_metrics`. | Matches NER-API and the group's expectation. The guard turns a confusing mid-training KeyError into an immediate, actionable one. |
+| D48 | **The training orchestrator is `ner/training/assessment.py::train_model`, task `ner.train_model`.** No `pipeline/` package. | In `transformers`, `pipelines` means inference; a tier named after itself is a layer that exists only to be a layer. |
+| D49 | **`train_model(training_arguments=...)` accepts a `TrainingArguments`, a mapping of overrides applied to `DEFAULTS`, or `None`.** No `best_config.json` hand-off. | The mapping form is what makes the YAML path work, and it is not an opaque bag: its schema *is* `TrainingArguments`, and an unknown key raises on construction. Reading a JSON file back into a config object would make a file format part of the API. |
+| D50 | The orchestrator returns metric tables and summaries — `fold_metrics`, `aggregate`, `summaries` — never `TrainingResult` or a live `Trainer`. | Holding one `Trainer` per fold keeps every fold's model resident on the GPU. `save_model=True` writes it, or call `lab.ner.train` directly. |
+| D51 | `fold_metrics.parquet` and `assessment_summary.json` are written in **both** split modes; `fold_metrics` rows are reconstructed from `epoch_metrics` at the best epoch. | A single run and a k-fold run differ in how many rows the table has, not in whether it exists — downstream analysis does not branch on mode. |
+| D52 | **`run_manifest.json` records no git commit.** | NER-API ran `git rev-parse HEAD` against its own repo, which a library cannot do: the interesting commit is the *user's* project. Recorded as Q11. |
+| D53 | `train_model(random_state=...)` sets `TrainingArguments.seed`. | D27, and the CLI's `--random-state` reaches whatever task is named. |
+| D54 | **HPO is not a loop over `train_model`.** A trial calls `train()` directly with pre-encoded rows; the corpus is windowed once per (base_model, strategy, context_tokens, max_length) variant per sweep. | `train_model` encodes internally, so a trial calling it would re-window the corpus every trial. |
+| D55 | **The search space is Ray domains or a declarative mapping, interchangeably.** `build_search_space` merges `search_space` over `DEFAULT_SEARCH_SPACE`; a value may be a `tune` domain, the YAML mapping form, a scalar (pinned) or `None` (removed). | The declarative shape is what the sweep manifest records; merge-over-defaults matches D49. → notes |
+| D56 | **HPO takes `split_dir`, like `train_model`.** A k-fold split is searched against one rotation, `validation_index`; the fixed holdout is never read. | One YAML value points both stages at the same data. Searching across all folds would multiply a GPU-day sweep by the fold count; the k-fold mean is the assessment's job (D51). |
+| D57 | **`hpo_summary.json` records the winner as a ready-to-run `train_model` YAML config**, beside the raw trial record. Output only — nothing reads it back. | The hand-off survives as a document for the user, not as a file format in the API. Verified by running the emitted block through `train_model(**block)` unchanged. |
+| D58 | **`train()` allows early stopping without `load_best_model_at_end` unless `save_model=True`.** | The old unconditional raise blocked the sweep shape: no checkpointing, early stopping on. Verified against transformers 5.14.1 that the stop logic works without saving. The raise stays where the footgun is real: saved weights would be the last epoch's. |
+| D59 | No `max_epochs` parameter on `search_hyperparameters`. The cap is `num_train_epochs`, defaulting to 40 via `HPO_ARGUMENT_DEFAULTS`. | D27: it already has a home in `training_arguments`. |
+| D60 | **The winner block is also written to `winner.yaml` in the sweep's run directory**, with `output_dir: <sweep>/final_train` (D77). `write_winner_config` is public. | D57 left the hand-off correct but manual — retyping ~18 keys where a typo silently changes the run. |
+| D61 | **Inference is `ner/inference.py::predict_entities`, task `ner.predict_entities`.** It takes a `model_dir`, not a run directory. `--random-state` raises a `TypeError` here. | Pointing at the model keeps inference independent of the orchestrator's artifact layout: a `fold_XX/best_model` and a directory copied to scratch load identically. Inference is deterministic, and D42 forbids an unused parameter kept to satisfy a flag. |
+| D62 | **A saved model carries an `encoding.json` beside its weights**, written by `train(model_encoding=...)`. Output only — `train_model` never reads one. | The artifact describes itself, as HF's `config.json` does; it is also the only thing that makes a CRF checkpoint loadable. → notes |
+| D63 | `Encoder(require_target_label=False)` skips the check that `target_label` occurs in the corpus. Default stays `True`. | Rule 3. The guard is right for training, where the typo it catches produces an all-`O` corpus; wrong for inference, where unannotated documents legitimately contain no entity. |
+| D64 | **Per-span `score` and `text` are decoded in `ner/evaluation/spans.py`**, not again in `inference.py`. Both off by default. | Two implementations of B/I transition handling that must agree forever is exactly the duplication the migration exists to remove. |
+| D65 | **The stage entry points are re-exported lazily from their subpackage, via a module-level `__getattr__`.** Nine on `lab.ner`, `prepare_dataset` on `lab.core`. Everything else keeps its submodule path. | The folder structure carries meaning; lazy so `import lab.ner` stays instant and torch-free. → notes |
 | D66 | **The pretrained starting point is `base_model`, never `checkpoint`.** `checkpoint` keeps its HF meaning — the `checkpoint-*` snapshots the `Trainer` writes. | D27 in the mirror direction: one name was doing two concepts, and they collided in the run manifest. → notes |
-| D67 | **`source_manifest.json` records `n_entities_by_label`**, built by the public `data.count_labels(corpus)`. | User decision: a manifest saying 15064 entities without saying of what cannot help pick a `target_label`. → notes |
-| D68 | **`gpus_per_trial` is removed from `search_hyperparameters`.** A trial reserves one GPU when the cluster reports any, none otherwise. | User decision: GPU sharing should not be a top-level knob; an unconditional GPU request makes Ray wait forever on CPU-only machines. → notes |
-| D69 | **`DEFAULT_SEARCH_SPACE` searches `warmup_steps`, not `warmup_ratio`**, over the same `uniform(0.0, 0.1)` range. | transformers deprecates `warmup_ratio`; `warmup_steps < 1` is read as a proportion, so the sweep samples exactly the values it did before. → notes |
-| D70 | **The dependency is `nvidia-ml-py>=12.0.0`, not `pynvml`.** `import pynvml` is unchanged. | `pynvml` is a deprecated shim that warns on import; the distribution was renamed, the module was not. → notes |
-| D71 | **Mixed precision is resolved per device, not fixed in `DEFAULTS`.** bf16 where supported, fp16 on pre-Ampere, neither without CUDA; naming either in the overrides takes them verbatim. | `fp16: True` was never a decision and is wrong on Ampere+: bf16 needs no loss scaling and runs at identical throughput. → notes |
-| D72 | **`ner_lab` ships `py.typed` and an `__init__.pyi` stub declaring the ten D65 exports.** The stub replaces the `TYPE_CHECKING` block. | D65's `__getattr__` made every top-level attribute `Any` to type checkers; a `.pyi` is the declared surface while the runtime keeps the lazy import. → notes |
+| D67 | **`source_manifest.json` records `n_entities_by_label`**, built by the public `lab.core.count_labels`. | A manifest saying 15064 entities without saying of what cannot help pick a `target_label`. Consequence: `parse_document_label_counts` raises when a document's `n_entities` disagrees with its `entities_json`, now on every `prepare_dataset` path. |
+| D68 | **`gpus_per_trial` is removed from `search_hyperparameters`.** A trial reserves one GPU when the cluster reports any, none otherwise. | GPU sharing should not be a top-level knob; an unconditional GPU request makes Ray wait forever on CPU-only machines. → notes |
+| D69 | **`DEFAULT_SEARCH_SPACE` searches `warmup_steps`, not `warmup_ratio`**, over the same `uniform(0.0, 0.1)` range. | transformers deprecates `warmup_ratio`; `warmup_steps < 1` is read as a proportion, so the sweep samples exactly the values it did before. |
+| D70 | **The dependency is `nvidia-ml-py>=12.0.0`, not `pynvml`.** `import pynvml` is unchanged. | `pynvml` is a deprecated shim that warns on import; the distribution was renamed, the module was not. The floor is the one `pynvml` itself declared. |
+| D71 | **Mixed precision is resolved per device, not fixed in `DEFAULTS`.** bf16 where supported, fp16 on pre-Ampere, neither without CUDA; naming either in the overrides takes them verbatim. | `fp16: True` was never a decision and is wrong on Ampere+. → notes |
+| D72 | **`lab` ships `py.typed`, and each lazily-exporting subpackage an `__init__.pyi` stub declaring its exports.** | D65's `__getattr__` made every top-level attribute `Any` to type checkers. → notes |
 | D73 | **Public signatures are annotated where the type is unambiguous; the model factories are deliberately left bare.** | The factories' only true common supertype is `nn.Module`, which would promise more than the pluggable architecture requires. → notes |
 | D74 | **A document/annotation filename mismatch is reconciled by policy**: `on_mismatch: "error" \| "documents" \| "annotations"`, default `"error"`; `resolve_mismatch` is public and returns a `SourceMismatch` report. | Rule 3: a policy that drops the user's data carries an off switch, and the switch defaults to strict. → notes |
-| D75 | ~~**`train_model` refuses a multi-GPU allocation**, sharing the guard with HPO via `training/devices.py`.~~ **Amended by D78:** the module move stands, `train_model` now pins rather than refuses. | A confirmed silent regression: the sweep searched at batch 16 and the retrain on `--gres=gpu:4` trained at 64 via `nn.DataParallel`. → notes |
-| D76 | **The run manifest records the device policy and `devices.effective_train_batch_size`.** **Amended by D78:** fields are `devices.policy` / `devices.trained_on`. | The policy is not derivable from anything else in the manifest, and the D75 warning only reached stderr. → notes |
-| D77 | **`output_dir` is the run directory.** `run_name` is deleted; `claim_run_dir` refuses a directory holding a `run_manifest.json` unless `overwrite=True`. | User decision, following HuggingFace: `run_name` was exactly `output_dir/"foo"`, and deleting it closes three defects at once. → notes |
+| D75 | Amended by D78: the `training/devices.py` module stands; `train_model` pins rather than refuses. | The regression that motivated it is in D78's note. |
+| D76 | **The run manifest records `devices.policy`, `devices.trained_on` and `devices.effective_train_batch_size`.** | The policy is not derivable from anything else in the manifest: `gpu_count: 4` is otherwise ambiguous between a deliberate throughput run and a bypass, and a stderr warning is lost when a SLURM log rotates. |
+| D77 | **`output_dir` is the run directory.** `run_name` is deleted; `claim_run_dir` refuses a directory holding a `run_manifest.json` unless `overwrite=True`. | Following HuggingFace: `run_name` was exactly `output_dir/"foo"`, and deleting it closes three defects at once. → notes |
 | D78 | **`train_model` takes `devices: Literal[1, "all"] = 1` and pins to one GPU instead of refusing.** `require_single_device` stays the raise for HPO trials. | `n_gpu` is a plain property HF itself forces down to avoid `DataParallel`; pinning uses that seam and is order-independent, unlike `CUDA_VISIBLE_DEVICES`. → notes |
-| D79 | **An annotation whose text disagrees with its document is resolved by `on_conflict: "raise" \| "rewrite"`**, default `"raise"`; the document always wins. | Labels come from offsets alone, so the `.ann` string can only win by relocating offsets, which the user scoped out. → notes |
-| D80 | **`on_conflict` gains `"drop"`**, removing every conflicting document with all its annotations; `resolve_conflicts` now returns the resolved pair plus the report. | Rewrite is only right when offsets are trustworthy; dropping the whole file is the third honest answer, and dropping only the row would train `O` over a real entity. → notes |
-| D81 | **`data/stats.py::compute_text_stats`/`compute_annotation_stats` are a sibling step to `prepare_dataset`, not a parameter on it.** Both take `base_model: str`; the CLI gains a task-specific `stats:` branch. **Amended by D87**, which folds that branch into the task. | User decision, migrating a standalone script; keeps `dataset.py` and `stats.py` mutually unaware per D22. → notes |
-| D82 | **`ner_lab` becomes one subpackage of a group-wide library, placeholder name `lab`.** Supersedes D1. | One repo, one namespace, one docs site and CLI for the unit; per-tool environments come from extras (D85), not from separate libraries. → RESTRUCTURE.md §1 |
-| D83 | **Layout is `lab.core` / `lab.ner` / `lab.nel` / `lab.xlt` / `lab.cli`, and imports point one way: `core ← {ner, nel, xlt}`.** Task subpackages never import each other. Supersedes D2, D24. | A subpackage is defined by the artifacts it consumes and produces; cross-tool composition happens through `core`'s contracts, not through imports. → RESTRUCTURE.md §2 |
-| D84 | **`core` holds the data contracts and nothing torch: corpus, spans, split, stats, sentence segmentation, generic span scoring, provenance, task registry. Everything else currently in `ner_lab` moves under `ner` as-is, HPO and training included.** | Nothing moves to a shared layer until a second subpackage needs it; segmentation already has two consumers (`Encoder`, `stats`), HPO and the trainer have one. → RESTRUCTURE.md §3 |
-| D85 | **Dependencies are extras: `lab` alone is torch-free; `lab[torch]` carries the shared `torch`/`transformers` pin; `lab[ner]`, `lab[nel]`, `lab[xlt]` build on it.** Supersedes D5. | D5's measurement still holds for NER users; it stops holding once a tool exists that does not need ray, CRF or pysbd. The shared pin keeps the unit on one torch (D7). → RESTRUCTURE.md §6 |
-| D86 | **Task names are namespaced — `ner.train_model`, `core.prepare_dataset` — each subpackage owns a string-only `tasks.py`, and `core.tasks.resolve_task` turns a missing extra into a message naming it.** The CLI stays `lab run <config.yaml>` (D11–D13), plus `lab tasks`. | The YAML is the argument surface; per-subpackage subcommands would duplicate the `task:` key and reopen the per-stage flag surface D11 closed. → RESTRUCTURE.md §5 |
-| D87 | **`cli.run` becomes fully generic: `task(**parameters)` and nothing else.** The `prepare_dataset` stats branch from D81 moves into the task itself. Amends D81. | The CLI cannot know one task's parameters once it dispatches for several subpackages; the task is the only place that knows its own keys. → RESTRUCTURE.md §5 |
-| D88 | **The restructure lands and is verified before any NEL code enters the repo.** The existing NEL code is read during the restructure, not merged. | The two changes fail differently — a rename is verified by `verification/run_all.py` and `examples/full_pipeline.py`; an integration has no tests yet — and one commit boundary each keeps the failure attributable. → RESTRUCTURE.md §7 |
-| D89 | **No `ner_lab` compatibility shim.** The old import name and the un-namespaced task names stop working at the restructure. | 0.1.0, unpublished, internal users only; a shim would keep two names alive for a rename that `lab tasks` and the "task names are namespaced" error already explain. |
-| D90 | **The one-way import rule is checked by `verification/verify_layering.py`**, a static scan run by `run_all.py`, not by import-linter. It also checks that `core` and the CLI import no torch. | No CI exists to give a linter contract teeth; the verification suite is what runs before a stage is called done, and the check needs no dependency. |
-| D91 | **`lab.nel` takes `nlp4bia-linking`'s library surface, not its research code.** Records, readers, the six lexical matchers, the four retrievers, the cross-encoder reranker, RRF, retrieval and hierarchy metrics, the pipeline. Out: `scripts/`, triplet generation, FAISS profiling experiments, the profiler, the corpus-specific helpers, and the script-shaped `rerank_candidates` TSV helper. | The package's own docs say the scripts are never imported; the rest is experiment tooling with corpus paths inside. Their fate is Q13. |
-| D92 | **`nel.link_entities` appends `code`, `code_term`, `code_score`, `candidates_json` to the span table it is given; an incoming `code` column is gold, kept as `gold_code`, and scored.** → notes | The prefixed names keep NER's `score` and NEL's score apart in one row; scoring when gold is present is what `predict_entities` already does. |
-| D93 | **Gold codes stay out of the corpus contract for now.** `core.brat` keeps ignoring `N` lines; NEL reads codes from its own TSV and `.ann` readers. Q12. | Extending `entities_json` is a change to the contract every subpackage reads, and belongs in its own commit with its own checks, not inside an integration. |
-| D94 | **NEL's records and class names are kept as written; the span table is converted to and from them at the task boundary, in `nel/linking.py`.** | Equivalence before improvement: the side-by-side checks compare the ported classes against the original package call for call, which a rewrite to DataFrames would forfeit. |
-| D95 | **`lab[nel]` is `lab[torch]` plus scikit-learn, networkx, tqdm, sentence-transformers and faiss, with NEL's own platform marker choosing `faiss-gpu` on Linux x86_64.** The `transformers<5` cap NEL declared is dropped. | sentence-transformers 6 resolves and runs against this repo's transformers 5.14; the verify venv proves it on the lexical, sparse and FAISS paths. The marker is the colleague's environment, kept until it causes a problem. |
+| D79 | **An annotation whose text disagrees with its document is resolved by `on_conflict: "raise" \| "rewrite"`**, default `"raise"`; the document always wins. | Labels come from offsets alone, so the `.ann` string can only win by relocating offsets, which was scoped out. → notes |
+| D80 | **`on_conflict` gains `"drop"`**, removing every conflicting document with all its annotations; `resolve_conflicts` returns the resolved pair plus the report. | Rewrite is only right when offsets are trustworthy; dropping the whole file is the third honest answer, and dropping only the row would train `O` over a real entity. → notes |
+| D81 | **`core/stats.py::compute_text_stats`/`compute_annotation_stats` take `base_model: str`, not a tokenizer, and `language` is required.** Amended by D87, which puts the `stats` switch on `prepare_dataset`. | These are the simplest-script entry point; `base_model` matches `train_model` (D66) and is honest about what is passed. `language` per D33. |
+| D82 | **`ner_lab` becomes one subpackage of a group-wide library, `lab`.** Supersedes D1. | One repo, one namespace, one docs site and CLI for the unit; per-tool environments come from extras (D85), not from separate libraries. |
+| D83 | **Layout is `lab.core` / `lab.ner` / `lab.nel` / `lab.cli`, and imports point one way: `core ← {ner, nel}`.** Task subpackages never import each other. Supersedes D2, D24. | A subpackage is defined by the artifacts it consumes and produces; cross-tool composition happens through `core`'s contracts, not through imports. |
+| D84 | **`core` holds the data contracts and nothing torch: corpus, spans, split, stats, segmentation, generic span scoring, provenance, task registry. HPO and training stay under `ner`.** | Nothing moves to a shared layer until a second subpackage needs it; segmentation has two consumers, HPO and the trainer have one. |
+| D85 | **Dependencies are extras: `lab` alone is torch-free; `lab[torch]` carries the shared `torch`/`transformers` pin; `lab[ner]`, `lab[nel]` build on it.** Supersedes D5. | D5's measurement (extras save nothing for HPO users) stopped holding once a tool existed that does not need ray, CRF or pysbd. The shared pin keeps the unit on one torch (D7). |
+| D86 | **Task names are namespaced — `ner.train_model`, `core.prepare_dataset` — each subpackage owns a string-only `tasks.py`, and `core.tasks.resolve_task` turns a missing extra into a message naming it.** The CLI stays `lab run`, plus `lab tasks`. | The YAML is the argument surface; per-subpackage subcommands would duplicate the `task:` key and reopen the flag surface D11 closed. |
+| D87 | **`cli.run` is `task(**parameters)` and nothing else.** `prepare_dataset` owns `stats`/`base_model`/`language`. Amends D81. | The CLI cannot know one task's parameters once it dispatches for several subpackages. → notes |
+| D88 | **The restructure landed and was verified before any NEL code entered the repo.** | A rename is verified by existing checks; an integration has none yet. One commit boundary each keeps a failure attributable. |
+| D89 | **No `ner_lab` compatibility shim.** | 0.1.0, unpublished, internal users only. |
+| D90 | **The one-way import rule is checked by `verification/verify_layering.py`**, a static scan, not by import-linter. It also checks that `core` and the CLI import no torch. | No CI exists to give a linter contract teeth; the verification suite is what runs before a stage is called done. |
+| D91 | **`lab.nel` takes `nlp4bia-linking`'s library surface, not its research code.** In: records, readers, the lexical matchers, the retrievers, the cross-encoder reranker, RRF, retrieval and hierarchy metrics, the pipeline. Out: `scripts/`, triplet generation, FAISS profiling, the profiler, corpus-specific helpers. | The package's own docs say the scripts are never imported; the rest is experiment tooling with corpus paths inside. Their fate is Q13. |
+| D92 | **`nel.link_entities` appends `code`, `code_term`, `code_score`, `candidates_json` to the span table it is given; an incoming `code` column is gold, kept as `gold_code`, and scored.** | The prefixed names keep NER's `score` and NEL's score apart in one row. → notes |
+| D93 | **Gold codes stay out of the corpus contract for now.** `core.brat` ignores `N` lines; NEL reads codes from its own readers. Q12. | Extending `entities_json` is a change to the contract every subpackage reads, and belongs in its own commit with its own checks. |
+| D94 | **NEL's records and class names are kept as written; the span table is converted to and from them at the task boundary, in `nel/linking.py`.** | Equivalence before improvement: the side-by-side checks compare the ported classes against the original package call for call. |
+| D95 | **`lab[nel]` is `lab[torch]` plus scikit-learn, networkx, tqdm, sentence-transformers and faiss, with a platform marker choosing `faiss-gpu` on Linux x86_64.** NEL's `transformers<5` cap is dropped. | sentence-transformers 6 runs against transformers 5.14; the verify venv proves it on the lexical, sparse and FAISS paths. |
+
+## Notes
+
+### D32 — `normalize_labels` defaults to `False`
+
+CARMEN-I's `.ann` holds `FARMACO` and its `metadata.json` declares `FARMACO`; the two agree,
+and the only thing overruling them was `LABEL_ALIASES`, a table inside this library. With the
+default off nothing is rewritten unless asked, so no metadata-precedence machinery and no
+rename warning are needed. Normalization was never blanket reassignment: unknown labels pass
+through canonicalized (accents stripped, uppercased, `-`/space → `_`); only the alias keys
+are reassigned.
+
+### D55 — search space forms
+
+The declarative `{"type": "loguniform", "low": ..., "high": ...}` form is what the sweep
+manifest records, and `describe_search_space` round-trips it back. Pin-and-remove (a scalar
+pins, `None` removes) is what makes a partial override usable. `variant` is reserved, built
+from `base_models`/`strategies`/`context_tokens`/`max_lengths`. `effective_train_batch_size`
+is searched with the micro batch derived under `max_micro_batch_size`, because searching
+both produced duplicate experiments.
+
+### D62 — `encoding.json`
+
+Restating eight encoder values where a wrong `max_length` silently shifts every window
+boundary is the transcription failure `winner.yaml` had just been added to remove (D60).
+It is also the only thing that makes a CRF checkpoint loadable: `CRFForTokenClassification`
+is an `nn.Module`, not a `PreTrainedModel`, so `Trainer.save_model` writes a bare state dict
+with no `config.json` to rebuild the wrapper from. `train()` without it still saves weights;
+only a linear model can be reloaded from that.
+
+### D65 — lazy re-exports
+
+**Which names:** one is top-level if it starts a stage or must be constructed to start one.
+Result dataclasses are excluded (you never construct one), as are the mutable defaults
+`DEFAULTS`/`DEFAULT_SEARCH_SPACE`/`HPO_ARGUMENT_DEFAULTS` (D32b's trap) and `multiclinner`
+(D44). ~180 public names across the subpackages is the pandas shape, where the folder
+structure carries meaning, not the transformers one; re-exporting everything would move the
+haystack. **Why lazy:** a package `__init__` executes before any submodule, so a plain import
+of the HPO entry point would make every import cost ray + torch — measured 0.61s → 6.6s — and
+raise in an environment without torch. With `__getattr__`, importing the package loads
+nothing and only the torch functions pull torch. Precedent is `transformers`' own `__init__`.
+
+### D66 — `base_model`
+
+`run_manifest.json` wrote `model.checkpoint` meaning the pretrained encoder while
+`training_summary.json` wrote `best.checkpoint` meaning a Trainer snapshot, in one run
+directory. `base_model` over `base_model_path` because the values are usually Hub identifiers
+(HF's own argument is `pretrained_model_name_or_path` for that reason); plural `base_models`
+in HPO because there it is a search dimension.
+
+### D68 — no `gpus_per_trial`
+
+Hardcoding `{"gpu": 1}` was rejected once the consequence surfaced: the end-to-end sweep
+verification runs on a CPU-only machine, and an unconditional GPU request does not fail
+there, it makes Ray **wait forever**. Resolving from `ray.cluster_resources()` keeps the knob
+gone and the sweep testable. The residual risk — a silent CPU downgrade on a misconfigured
+allocation — is blunted by the smoke test running first and by the manifest recording what
+was resolved. `trial.require_single_device` is the real single-GPU guard.
+
+### D71 — mixed precision per device
+
+fp16's smallest normal is 6.1e-5 while transformer gradients reach 1e-9, so it needs dynamic
+loss scaling and can diverge if the scale collapses. bf16 carries fp32's exponent range, so
+none of that machinery exists. There is no speed trade: A100/H100 tensor cores run both at
+identical throughput. A fixed default cannot be right for both, since V100/T4 lack bf16. The
+cost accepted is that numerics depend on the node, which is why the run manifest records the
+resolved dtype beside the GPU that chose it. Side effect: CPU runs work unaided, where
+`fp16: True` used to be invalid.
+
+### D72 / D73 — typing
+
+A module that defines `__getattr__` makes every attribute a type checker cannot bind
+statically resolve to `Any`, so a typo type-checked clean and nothing had a signature or a
+completion. A `.pyi` takes priority over the `.py` for pyright and mypy, so the stub is the
+declared surface while the runtime keeps the lazy import; the stub's `__all__` is asserted
+equal to the runtime's. `py.typed` is the other half — without it an editable install is a
+third-party library whose annotations a checker is not permitted to trust. The model
+factories stay bare because `build_model` returns a `PreTrainedModel`, or a
+`CRFForTokenClassification` (an `nn.Module`), or whatever a user's callable hands back;
+declaring `nn.Module` would promise what the pluggable architecture does not require.
+`encoding/` and `evaluation/` import `PreTrainedTokenizerBase` under `TYPE_CHECKING` only,
+keeping the torch-free half torch-free.
+
+### D74 — `on_mismatch`
+
+The two directions were asymmetric before: an `.ann` with no `.txt` raised, while a `.txt`
+with no `.ann` was silently kept with zero entities. `"documents"` keeps that asymmetry and
+only drops orphan annotations; `"annotations"` makes the annotation set define the corpus,
+additionally dropping unannotated documents — a real behaviour change for that side, hence
+opt-in. Neither policy can keep an orphan annotation: there is no text for its offsets. The
+report is a return value rather than `DataFrame.attrs`, so `prepare_dataset` resolves its own
+sources and hands `build_corpus` the aligned pair. A policy that would drop *every* document
+raises instead of returning an empty corpus.
+
+### D77 — `output_dir` is the run directory
+
+`run_name="foo"` was exactly `output_dir=output_dir/"foo"`, so the simplification is
+deletion. It closes three defects: the collision with `TrainingArguments.run_name`, which
+both reached through `train_model` meaning unrelated things; the unreachable `timestamp`
+parameter on `run_directory_name`; and `run_name="/abs"` silently discarding `output_dir`
+(`Path("/a/b") / "/etc"` is `/etc`). The timestamp had been doing two jobs, organising and
+guaranteeing uniqueness; flat keeps the first, so the overwrite guard supplies the second.
+It is checked once, before any `mkdir`, so a wrong path costs a second rather than
+GPU-hours. `run_directory_name()` stays public, so the old layout is one call away. The
+winner config emits `<sweep>/final_train` because the sweep's parent `output_dir` would
+scatter final-train artifacts across the user's top-level runs directory.
+
+### D78 — pinning to one GPU
+
+The regression that started this (D75) was confirmed, not hypothetical: the sweep searched
+at batch 16 and the retrain on `--gres=gpu:4` trained at 64 via `nn.DataParallel`, which
+the Trainer applies whenever `n_gpu > 1`. Steps per epoch fall by the device count and every
+step-denominated setting follows — a fractional `warmup_steps`, the cosine decay — so the
+sweep's validation score never reproduced on retrain. D75 refused such allocations and told
+the caller to set `CUDA_VISIBLE_DEVICES`, but that only works before CUDA initialises, which
+`arguments.py` does early via `is_bf16_supported()`; the fix could only be applied outside
+the process, and the raise came *after* a sweep had spent its GPU-hours. Pinning instead:
+`n_gpu` is a property over `_n_gpu` that HF itself forces down to avoid `DataParallel`, and
+`train_batch_size` derives from it, so `devices=1` reads `arguments.device` to freeze the
+cached `_setup_devices`, then sets `_n_gpu = min(visible, 1)`. **Why `Literal[1, "all"]`:**
+`Trainer` wraps with a bare `nn.DataParallel(model)` whose `device_ids` defaults to every
+visible device regardless of `_n_gpu`, so `devices=2` on a 4-GPU node would make the batch
+accounting say 2 while replication spanned 4 — the exact silent mismatch this exists to
+prevent. **Why trials keep the raise:** a trial holds a one-GPU Ray reservation, so a second
+visible device means the reservation was bypassed; pinning would hide a broken cluster
+setup behind a run that looks fine.
+
+### D79 / D80 — `on_conflict`
+
+Labels are assigned from character offsets alone (`tagging.py` tags a token by overlap with
+`entity["start"]`/`entity["end"]`), and the entity's `text` never reaches the model. Storing
+the `.ann` surface form against unchanged offsets would record one thing and train on
+another, so the `.ann` can only "win" by relocating offsets, which needs a search with
+ambiguous and absent cases — scoped out. `"rewrite"` replaces the surface form with
+`text[start:end]`, the one resolution that leaves the corpus internally consistent; the
+downstream raise sites stay strict, and an out-of-range offset still fails validation.
+`"drop"` exists because rewrite is only right when the offsets are the trustworthy half;
+when they drifted, rewriting mislabels a span. Dropping only the conflicting row was
+rejected: the document would read as fully annotated while a real entity is absent, training
+`O` over it. `resolve_conflicts` returns the resolved pair so a caller cannot forget to act on
+the report and write a corpus with the conflicting documents kept but their annotations
+stripped. Both policies warn when they fire; the default raises.
+
+### D87 — `stats` on `prepare_dataset`
+
+`prepare_dataset` validates `stats`/`base_model`/`language` up front with its other inputs,
+so a missing `base_model` fails before any conversion starts, where the old CLI branch only
+failed after the corpus was built. One behaviour change: the CLI branch popped
+`normalize_labels` off the YAML and passed it only to the annotation statistics, so from YAML
+the corpus itself was never normalized although the documentation said it was. Inside the
+task the one parameter reaches both. The cost D81 avoided — `dataset.py` importing
+`stats.py` — is paid.
+
+### D92 — the linked span table
+
+NEL's own TSV format already used `code` for the *gold* code, and its output wrote the
+linking score as `score`, the column NER's predictions carry for their confidence. NEL's
+output verbatim (`gold_code`, `predicted_code`, `predicted_term`, `score`, `method`) was
+rejected for the prefixed set because a row that came out of `predict_entities` and went
+through `link_entities` then reads unambiguously — `score` is still what NER meant,
+`code_score` what NEL meant — and `code` on the output is what a downstream consumer wants to
+read. `candidates_json` holds the whole `top_k` list because the reranker, RRF provenance and
+any error analysis need more than the top hit, and one JSON cell keeps the table one row per
+mention. The per-run `method` is in the manifest, not on every row.
