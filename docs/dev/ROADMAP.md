@@ -8,7 +8,7 @@ Every library stage of `bsc/NER-API` is migrated: `core.prepare_dataset`, the `E
 `build_model`, `train`, `ner.train_model`, `ner.search_hyperparameters`,
 `ner.predict_entities`. The restructure into `lab.core` + `lab.ner` (D82–D90) and the
 integration of `bsc/nlp4bia-linking` as `lab.nel` (D91–D95) both landed on 2026-09-17.
-Verification stands at 877 checks across eleven scripts, all passing; see
+Verification stands at 878 checks across eleven scripts, all passing; see
 [`verification/`](../../verification/).
 
 What remains of NER-API is not library surface — `01b_analyze_hpo_trials.py`,
@@ -61,13 +61,10 @@ Nothing here blocks the next stage. Each is decided when the stage that needs it
   `read_corpus`, and be what `nel.link_entities` reads as gold (D92, D93).
 - **Q16 — What XLT consumes.** Assumed: corpora (`core.corpus`) and model identifiers,
   producing a report table and a manifest. To be confirmed before its subpackage is drawn.
-- **Q17 — `import lab.core` loads torch when torch is installed.** `core/stats.py` imports
-  `AutoTokenizer` at module level, and `transformers` 5 imports torch when it finds it.
-  Moving the import inside `_load_tokenizer` would make `lab.core` light in a `lab[ner]`
-  environment. Noticed at the restructure, left for a decision.
 - **Q18 — The umbrella name.** `lab` was chosen as a placeholder and is now the directory
   `src/lab`, the distribution name, the CLI command and every import in the docs. Renaming
   is a find-and-replace, cheapest before anyone depends on it. Supervisor's call.
 
 *Closed:* Q1–Q9 during the migration (scope, cluster scripts → D10, task naming → D48,
-Python floor → D17, public API → D65).
+Python floor → D17, public API → D65); Q17 (`lab.core` loading torch — the tokenizer import
+moved inside `stats._load_tokenizer`, 7.0s → 0.3s, checked by `verify_layering.py`).

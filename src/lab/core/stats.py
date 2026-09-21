@@ -34,7 +34,6 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
-from transformers import AutoTokenizer
 
 from lab.core.io import DEFAULT_PARQUET_COMPRESSION
 from lab.core.labels import LABEL_ALIASES, normalize_entity_labels
@@ -71,6 +70,8 @@ def write_stats(frame: pd.DataFrame, output_dir: str | Path, stem: str) -> tuple
 
 
 def _load_tokenizer(base_model: str) -> PreTrainedTokenizerBase:
+    from transformers import AutoTokenizer
+
     tokenizer = AutoTokenizer.from_pretrained(base_model, use_fast=True)
 
     if not tokenizer.is_fast:

@@ -91,7 +91,7 @@ core  <-  { ner, nel, xlt }
 (D83). `nel` does not know `ner` exists. Composition across tools — run NER, then link its
 output — happens at the edge, in an `examples/` script or the user's own pipeline, not in a
 subpackage that imports both. `verification/verify_layering.py` checks the rule statically,
-and that `core` and the CLI import no torch (D90).
+and that importing `core` and the CLI loads neither torch nor transformers (D90).
 
 **A subpackage is defined by the artifacts it consumes and produces, not by its topic.**
 Something moves to `core` when a second subpackage needs it, and not before — otherwise

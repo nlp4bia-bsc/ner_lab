@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+import subprocess
+import sys
 from pathlib import Path
 
 from _harness import Checks, run
@@ -63,6 +65,19 @@ def main() -> int:
             checks.equal(f"{relative} stays torch-free", torch, [])
 
     checks.check("scanned the source tree", len(files) > 20)
+
+    loaded = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, lab.core, lab.cli; "
+            "print(' '.join(sorted(name for name in ('torch', 'transformers') if name in sys.modules)))",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    checks.equal("importing lab.core and lab.cli loads neither torch nor transformers", loaded.stdout.split(), [])
 
     return checks.report()
 
