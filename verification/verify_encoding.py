@@ -199,6 +199,80 @@ def verify_segmentation(checks: Checks, tokenizer) -> None:
     checks.equal("merge_ranges rebuilds the text", fused["text"], TEXT[fused["start"]:fused["end"]])
 
 
+def verify_offset_trimming(checks: Checks, tokenizers: dict) -> None:
+    text = "El paciente\n\n  consume alcohol y tabaco.\n"
+
+    for name, tokenizer in tokenizers.items():
+        raw = tokenizer(
+            text,
+            add_special_tokens=False,
+            return_offsets_mapping=True,
+            truncation=False,
+        )
+        tokens = tokenize_document(text, tokenizer)
+
+        checks.equal(
+            f"{name}: trimming drops no token",
+            len(tokens),
+            sum(1 for start, end in raw["offset_mapping"] if end > start),
+        )
+        checks.equal(
+            f"{name}: trimming leaves the token ids alone",
+            [token["token_id"] for token in tokens],
+            [
+                token_id
+                for token_id, (start, end) in zip(raw["input_ids"], raw["offset_mapping"])
+                if end > start
+            ],
+        )
+        checks.check(
+            f"{name}: no offset begins on whitespace unless the token is all whitespace",
+            all(
+                not text[token["start"]].isspace()
+                or text[token["start"]:token["end"]].isspace()
+                for token in tokens
+            ),
+        )
+        checks.check(
+            f"{name}: whitespace-only tokens keep their offsets",
+            all(
+                (token["start"], token["end"]) == (int(start), int(end))
+                for token, (start, end) in zip(
+                    tokens,
+                    [pair for pair in raw["offset_mapping"] if pair[1] > pair[0]],
+                )
+                if text[int(start):int(end)].isspace()
+            ),
+        )
+        checks.equal(
+            f"{name}: ends are untouched",
+            [token["end"] for token in tokens],
+            [int(end) for start, end in raw["offset_mapping"] if end > start],
+        )
+
+    byte_level = tokenizers["gpt2"]
+    untrimmed = byte_level(
+        text, add_special_tokens=False, return_offsets_mapping=True, truncation=False
+    )["offset_mapping"]
+
+    checks.check(
+        "the byte-level tokenizer reports untrimmed offsets to begin with",
+        any(end > start and text[start].isspace() for start, end in untrimmed),
+    )
+
+    start = text.index("alcohol")
+    entity = {"start": start, "end": start + len("alcohol"), "label": "DISEASE"}
+    labelled = build_iob2_labels(
+        tokenize_document(text, byte_level), [entity | {"text": "alcohol"}], "DISEASE"
+    )
+    opening = [token for token in labelled if token["label"] == "B-DISEASE"]
+
+    checks.equal("the entity opens exactly one span", len(opening), 1)
+    checks.equal(
+        "the opening token starts where the entity starts", opening[0]["start"], entity["start"]
+    )
+
+
 def verify_windowing(checks: Checks, tokenizer) -> None:
     sentences = split_into_sentences(TEXT, "es")
     tokens = tokenize_document(TEXT, tokenizer)
@@ -408,6 +482,7 @@ def main() -> int:
 
     verify_overlaps(checks)
     verify_segmentation(checks, tokenizers["bert"])
+    verify_offset_trimming(checks, tokenizers)
     verify_windowing(checks, tokenizers["bert"])
     verify_tagging(checks, tokenizers["bert"])
     verify_rows(checks, tokenizers)

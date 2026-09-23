@@ -8,7 +8,9 @@ Every library stage of `bsc/NER-API` is migrated: `core.prepare_dataset`, the `E
 `build_model`, `train`, `ner.train_model`, `ner.search_hyperparameters`,
 `ner.predict_entities`. The restructure into `lab.core` + `lab.ner` (D82–D90) and the
 integration of `bsc/nlp4bia-linking` as `lab.nel` (D91–D95) both landed on 2026-09-17.
-Verification stands at 878 checks across eleven scripts, all passing; see
+Verification stands at 904 checks across eleven scripts, all passing, plus one deliberate
+skip — the NER-API equivalence no longer applies to byte-level tokenizers, whose token
+offsets `tokenize_document` trims and NER-API's `DataLoader` does not; see
 [`verification/`](../../verification/).
 
 What remains of NER-API is not library surface — `01b_analyze_hpo_trials.py`,
@@ -64,6 +66,13 @@ Nothing here blocks the next stage. Each is decided when the stage that needs it
 - **Q18 — The umbrella name.** `lab` was chosen as a placeholder and is now the directory
   `src/lab`, the distribution name, the CLI command and every import in the docs. Renaming
   is a find-and-replace, cheapest before anyone depends on it. Supervisor's call.
+- **Q19 — Leading punctuation in decoded spans.** EuroBERT's Llama-3 pre-tokenizer regex
+  attaches one preceding punctuation character to a word, so a single token covers
+  `+cocaína` and the decoded span opens on the `+`. A few dozen spans, mostly drug mentions.
+  Unlike leading whitespace this is not safely trimmable: a gold span may legitimately begin
+  with punctuation, so trimming relocates the errors rather than removing them. Decide by
+  counting gold spans that start on punctuation against predictions carrying a spurious one.
+  Trimming would be a no-op for tokenizers whose punctuation is already its own token.
 
 *Closed:* Q1–Q9 during the migration (scope, cluster scripts → D10, task naming → D48,
 Python floor → D17, public API → D65); Q17 (`lab.core` loading torch — the tokenizer import

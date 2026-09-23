@@ -32,6 +32,13 @@ def tokenize_document(text: str, tokenizer: PreTrainedTokenizerBase) -> list[dic
     Tokenizing the document once gives every downstream step the same token
     boundaries, so window sizes and entity alignment can never disagree. No
     special tokens are added; they are inserted per window by `build_row`.
+
+    Each token's start is trimmed past any leading whitespace, so no offset
+    begins on whitespace unless the token is whitespace throughout. Byte-level
+    tokenizers attach the preceding space to the token and report a trimmed
+    offset only when their post-processor is configured to, so normalizing here
+    leaves windowing, sentence assignment and span decoding independent of that
+    configuration.
     """
     encoded = tokenizer(
         text,
@@ -48,7 +55,7 @@ def tokenize_document(text: str, tokenizer: PreTrainedTokenizerBase) -> list[dic
         {
             "token_id": int(token_id),
             "token": str(token_text),
-            "start": int(start),
+            "start": _trimmed_start(text, int(start), int(end)),
             "end": int(end),
             "word_id": word_id,
         }
@@ -155,3 +162,12 @@ def merge_ranges(first: dict, second: dict, text: str) -> dict:
         "token_start": first["token_start"],
         "token_end": second["token_end"],
     }
+
+
+def _trimmed_start(text: str, start: int, end: int) -> int:
+    trimmed = start
+
+    while trimmed < end and text[trimmed].isspace():
+        trimmed += 1
+
+    return start if trimmed == end else trimmed

@@ -82,7 +82,7 @@ def verify_helpers(checks: Checks) -> None:
     )
 
 
-def verify_reconstruction(checks: Checks, tokenizer) -> None:
+def verify_reconstruction(checks: Checks, tokenizer, name: str) -> None:
     from lab.ner.encoding import Encoder
 
     corpus = synthetic_corpus(10)
@@ -91,9 +91,9 @@ def verify_reconstruction(checks: Checks, tokenizer) -> None:
 
     gold = gold_spans(rows, tokenizer, encoder.id2label)
 
-    checks.check("gold spans are recovered", len(gold) > 0)
+    checks.check(f"{name}: gold spans are recovered", len(gold) > 0)
     checks.equal(
-        "recovered spans match the corpus entity count",
+        f"{name}: recovered spans match the corpus entity count",
         len(gold),
         int(corpus["n_entities"].sum()),
     )
@@ -104,38 +104,38 @@ def verify_reconstruction(checks: Checks, tokenizer) -> None:
         zip(corpus_spans["filename"], corpus_spans["start_span"], corpus_spans["end_span"])
     )
 
-    checks.equal("recovered offsets equal the annotated ones", recovered, annotated)
+    checks.equal(f"{name}: recovered offsets equal the annotated ones", recovered, annotated)
 
     perfect = one_hot([[max(int(label), 0) for label in row] for row in rows["labels"]])
     predicted = predicted_spans(rows, perfect, tokenizer, encoder.id2label)
 
-    checks.frames_equal("perfect predictions reproduce the gold spans", predicted, gold)
+    checks.frames_equal(f"{name}: perfect predictions reproduce the gold spans", predicted, gold)
 
     metrics = span_metrics(gold, predicted, id2label=encoder.id2label)
-    checks.equal("perfect predictions score 1.0 strict", metrics["span_strict_f1"], 1.0)
-    checks.equal("nothing is missed", metrics["span_strict_missed"], 0)
-    checks.equal("nothing is spurious", metrics["span_strict_spurious"], 0)
-    checks.equal("perfect predictions score 1.0 on characters", metrics["char_f1"], 1.0)
-    checks.equal("no character is missed", metrics["char_missed"], 0)
+    checks.equal(f"{name}: perfect predictions score 1.0 strict", metrics["span_strict_f1"], 1.0)
+    checks.equal(f"{name}: nothing is missed", metrics["span_strict_missed"], 0)
+    checks.equal(f"{name}: nothing is spurious", metrics["span_strict_spurious"], 0)
+    checks.equal(f"{name}: perfect predictions score 1.0 on characters", metrics["char_f1"], 1.0)
+    checks.equal(f"{name}: no character is missed", metrics["char_missed"], 0)
 
     empty = np.zeros((len(rows), max(len(row) for row in rows["labels"]), 3), dtype=np.float32)
     empty[:, :, 0] = 10.0
 
     none_predicted = predicted_spans(rows, empty, tokenizer, encoder.id2label)
-    checks.equal("predicting all O gives no spans", len(none_predicted), 0)
+    checks.equal(f"{name}: predicting all O gives no spans", len(none_predicted), 0)
 
     empty_metrics = span_metrics(gold, none_predicted, id2label=encoder.id2label)
-    checks.equal("scoring nothing gives zero F1", empty_metrics["span_strict_f1"], 0.0)
-    checks.equal("every gold span is missed", empty_metrics["span_strict_missed"], len(gold))
-    checks.equal("scoring nothing gives zero character F1", empty_metrics["char_f1"], 0.0)
+    checks.equal(f"{name}: scoring nothing gives zero F1", empty_metrics["span_strict_f1"], 0.0)
+    checks.equal(f"{name}: every gold span is missed", empty_metrics["span_strict_missed"], len(gold))
+    checks.equal(f"{name}: scoring nothing gives zero character F1", empty_metrics["char_f1"], 0.0)
     checks.equal(
-        "every gold character is missed",
+        f"{name}: every gold character is missed",
         empty_metrics["char_missed"],
         int((gold["end_span"] - gold["start_span"]).sum()),
     )
 
     checks.raises(
-        "a prediction/row length mismatch raises",
+        f"{name}: a prediction/row length mismatch raises",
         ValueError,
         predicted_spans,
         rows,
@@ -144,7 +144,7 @@ def verify_reconstruction(checks: Checks, tokenizer) -> None:
         encoder.id2label,
     )
     checks.raises(
-        "missing columns raise",
+        f"{name}: missing columns raise",
         ValueError,
         gold_spans,
         rows.drop(columns=["word_ids"]),
@@ -156,11 +156,11 @@ def verify_reconstruction(checks: Checks, tokenizer) -> None:
         rows, perfect, tokenizer, encoder.id2label, include_confusion=True
     )
 
-    checks.equal("span and token metrics agree at perfection", all_metrics["token_micro_f1"], 1.0)
-    checks.equal("token accuracy is perfect too", all_metrics["token_accuracy"], 1.0)
-    checks.check("per-entity token metrics appear", "token_entity_DISEASE_f1" in all_metrics)
-    checks.check("the confusion matrix appears", "confusion_gold_O_pred_O" in all_metrics)
-    checks.check("per-tag token metrics appear", "token_tag_B-DISEASE_f1" in all_metrics)
+    checks.equal(f"{name}: span and token metrics agree at perfection", all_metrics["token_micro_f1"], 1.0)
+    checks.equal(f"{name}: token accuracy is perfect too", all_metrics["token_accuracy"], 1.0)
+    checks.check(f"{name}: per-entity token metrics appear", "token_entity_DISEASE_f1" in all_metrics)
+    checks.check(f"{name}: the confusion matrix appears", "confusion_gold_O_pred_O" in all_metrics)
+    checks.check(f"{name}: per-tag token metrics appear", "token_tag_B-DISEASE_f1" in all_metrics)
 
 
 def verify_token_metrics(checks: Checks) -> None:
@@ -352,7 +352,8 @@ def main() -> int:
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 
     verify_helpers(checks)
-    verify_reconstruction(checks, tokenizer)
+    verify_reconstruction(checks, tokenizer, "bert")
+    verify_reconstruction(checks, AutoTokenizer.from_pretrained("gpt2"), "gpt2")
     verify_token_metrics(checks)
     verify_character_metrics(checks)
     verify_against_ner_api(checks, tokenizer)

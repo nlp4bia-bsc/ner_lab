@@ -41,8 +41,10 @@ cleanly when it is missing:
 
 - **Real corpora** — `NER_LAB_SAMPLES`, defaulting to `~/bsc/NER-API/data_samples`.
 - **NER-API equivalence** — `NER_API_ROOT`, defaulting to `~/bsc/NER-API`. Runs the old
-  `DataLoader` and the new `Encoder` over the same 60 documents for both tokenizers and both
-  window strategies, and asserts the resulting frames are identical.
+  `DataLoader` and the new `Encoder` over the same 60 documents for both window strategies,
+  and asserts the resulting frames are identical. Byte-level tokenizers are skipped by
+  design: `tokenize_document` trims the leading space out of each token's offset and NER-API
+  does not, so sentence assignment and windowing legitimately differ.
 - **nlp4bia-linking equivalence** — `NLP4BIA_LINKING_ROOT`, defaulting to
   `~/bsc/nlp4bia-linking`. Runs every matcher, the sparse retrievers, RRF, the metrics, the
   graph distances and the readers from both packages over the same synthetic gazetteer and
