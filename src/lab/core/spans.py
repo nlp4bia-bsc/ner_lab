@@ -56,11 +56,15 @@ def spans_from_corpus(
     Labels are taken verbatim and overlaps are left as annotated: this is the
     gold as distributed, not as an overlap policy would rewrite it. Span text is
     re-derived from the document rather than trusted from the entity.
+
+    A corpus whose entities carry gold codes adds a `code` column, missing on
+    the uncoded rows.
     """
     if not isinstance(corpus, pd.DataFrame):
         corpus = pd.read_parquet(corpus, columns=["doc_id", "text", "entities_json"])
 
     rows: list[dict[str, Any]] = []
+    has_codes = False
 
     for document in corpus.itertuples(index=False):
         text = str(document.text)
@@ -73,6 +77,7 @@ def spans_from_corpus(
                 continue
 
             start, end = int(entity["start"]), int(entity["end"])
+            has_codes = has_codes or "code" in entity
             rows.append(
                 {
                     "filename": str(document.doc_id),
@@ -80,14 +85,17 @@ def spans_from_corpus(
                     "start_span": start,
                     "end_span": end,
                     "text": text[start:end],
+                    "code": entity.get("code"),
                 }
             )
+
+    columns = [*SPAN_COLUMNS, "code"] if has_codes else SPAN_COLUMNS
 
     if not rows:
         return pd.DataFrame(columns=SPAN_COLUMNS)
 
     return (
-        pd.DataFrame(rows, columns=SPAN_COLUMNS)
+        pd.DataFrame(rows, columns=columns)
         .sort_values(["filename", "start_span", "end_span"])
         .reset_index(drop=True)
     )

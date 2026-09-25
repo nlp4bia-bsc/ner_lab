@@ -27,6 +27,7 @@ result.metrics      # recall@k, MRR and coverage, when the input carried gold co
 | `top_k` | `25` | Candidates kept per mention. The first one is the linked code. |
 | `k_values` | `(1, 5, 25)` | The `k` in `recall@k`. Each must lie between 1 and `top_k`. |
 | `hierarchy` | `None` | A pickled NetworkX graph of the ontology, parent to child. Adds exact / narrow / broad / unrelated proportions to the metrics. |
+| `keep_gold` | `False` | Complete instead of evaluate: spans with a gold code keep it and only the others are linked. See [completing a corpus](#completing-a-corpus). |
 
 **Returns** a `LinkingResult` with `spans`, `metrics`, `manifest` and `paths`.
 
@@ -68,13 +69,39 @@ Predictions from [`predict_entities`](../ner/predict-entities.md) link as they a
 they carry is NER's confidence and is preserved untouched beside `code_score`. A table that was
 linked before links again: `gold_code` stays gold and the four columns are written afresh.
 
+Gold from a corpus comes through [`prepare_dataset`'s `codes`](../core/prepare-dataset.md#gold-codes):
+`lab.core.spans_from_corpus` turns the corpus into a span table whose `code` column is the
+annotated gold, `NO_CODE` included.
+
+```python
+from lab.core import spans_from_corpus
+
+spans = spans_from_corpus("assets/splits/symptemist_train/documents.parquet")
+result = link_entities(spans, "symptemist_gazetter_snomed_ES_v2.tsv", "assets/linking/symptemist")
+```
+
+## Completing a corpus
+
+By default every span is linked and any gold code is only scored against. With
+`keep_gold=True` the gold is kept instead: a span with a gold code carries it as its `code`,
+only the uncoded spans are linked, and a fifth column says which is which:
+
+| Column | Meaning |
+|---|---|
+| `code_source` | `gold` for a code kept from the input, `predicted` for one this run linked. |
+
+`code_term`, `code_score` and `candidates_json` are empty on the gold rows. Nothing is scored,
+since no linked span has a gold code to compare with, and the manifest records `keep_gold`,
+`n_kept_gold` and `n_linked`. `gold_code` stays on the output, so a completed table fed back
+in evaluates against its original gold, never against its own predictions.
+
 ## What it writes
 
 ```
 <output_dir>/
     predictions.tsv            the linked span table
     linking_metrics.json       method, recall@k, MRR, coverage, mean candidates — when there was gold
-    linking_manifest.json      inputs and their sha256, method, model, top_k, what was linked
+    linking_manifest.json      inputs and their sha256, method, model, top_k, keep_gold, what was linked
 ```
 
 ## From YAML

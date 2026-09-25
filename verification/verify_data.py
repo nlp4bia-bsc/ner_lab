@@ -20,18 +20,23 @@ from lab.core import (
     LABEL_ALIASES,
     assign_partitions,
     build_corpus,
+    count_codes,
     count_labels,
     create_split,
     document_fingerprints,
+    is_usable_code,
     normalize_annotation_labels,
     normalize_label,
     prepare_dataset,
     read_ann,
     read_annotations,
+    read_codes,
     read_corpus,
     read_split,
+    resolve_codes,
     resolve_conflicts,
     resolve_mismatch,
+    spans_from_corpus,
     split_documents,
     validate_assignments,
     validate_corpus,
@@ -831,6 +836,178 @@ def verify_prepare_dataset(checks: Checks, workspace: Path) -> None:
     )
 
 
+def code_rows(annotations: pd.DataFrame, codes: list[str]) -> pd.DataFrame:
+    """A linking TSV's shape: SympTEMIST's `span_ini`/`span_end`, one code per annotation."""
+    return pd.DataFrame(
+        {
+            "filename": annotations["filename"].to_numpy()[: len(codes)],
+            "label": annotations["label"].to_numpy()[: len(codes)],
+            "span_ini": annotations["start_span"].to_numpy()[: len(codes)],
+            "span_end": annotations["end_span"].to_numpy()[: len(codes)],
+            "text": annotations["text"].to_numpy()[: len(codes)],
+            "code": codes,
+            "sem_rel": "EXACT",
+        }
+    )
+
+
+def verify_codes(checks: Checks, workspace: Path) -> None:
+    for code in ["246658005", "60728008+301404009", "NO_CODE", "166165005+NO_CODE", "E11.9", "HP:0001250"]:
+        checks.check(f"usable code {code}", is_usable_code(code))
+
+    for code in ["1.66753E+16", "N+O", "", "12+", "+12"]:
+        checks.check(f"unusable code {code!r}", not is_usable_code(code))
+
+    documents, annotations = synthetic_documents()
+    annotations = annotations.sort_values(["filename", "start_span"]).reset_index(drop=True)
+    written = ["84114007", "60728008+301404009", "NO_CODE", "1.66753E+16", "N+O"]
+    codes = code_rows(annotations, written)
+    codes = pd.concat([codes, codes.head(1)], ignore_index=True)
+    codes_path = workspace / "codes.tsv"
+    codes.to_csv(codes_path, sep="\t", index=False)
+
+    read = read_codes(codes_path)
+
+    checks.equal("read_codes takes span_ini/span_end", list(read.columns), ["filename", "start_span", "end_span", "code"])
+    checks.equal("read_codes filters nothing", len(read), len(codes))
+
+    plain = build_corpus(documents, annotations)
+    coded = build_corpus(documents, annotations, codes=codes_path)
+    entities = [entity for entities_json in coded["entities_json"] for entity in json.loads(entities_json)]
+    by_span = {(entity["start"], entity["end"]): entity for entity in entities_of(coded, annotations.at[0, "filename"])}
+
+    checks.equal(
+        "usable codes attach as written, unusable ones leave the entity uncoded",
+        [entity.get("code") for entity in entities[: len(written)]],
+        ["84114007", "60728008+301404009", "NO_CODE", None, None],
+    )
+    checks.equal("an identical duplicate row counts once", sum("code" in entity for entity in entities), 3)
+    checks.check(
+        "an uncoded entity has no code key",
+        all(set(entity) == {"id", "start", "end", "label", "text"} for entity in entities[3:]),
+    )
+    checks.equal(
+        "the first entity carries its code",
+        by_span[(int(annotations.at[0, "start_span"]), int(annotations.at[0, "end_span"]))].get("code"),
+        "84114007",
+    )
+    checks.check(
+        "a corpus without codes is unchanged",
+        document_fingerprints(build_corpus(documents, annotations)).equals(document_fingerprints(plain)),
+    )
+    checks.check("a corpus without codes has no code key", '"code"' not in "".join(plain["entities_json"]))
+
+    unmatched = pd.concat([code_rows(annotations, ["84114007"]).assign(span_ini=9000, span_end=9005)])
+    conflicting = pd.concat(
+        [code_rows(annotations, ["84114007"]), code_rows(annotations, ["22298006"])], ignore_index=True
+    )
+
+    checks.raises(
+        "a row naming no span raises by default", ValueError,
+        resolve_codes, annotations, unmatched, match="name no annotated span",
+    )
+    checks.raises(
+        "two codes for one span raise by default", ValueError,
+        resolve_codes, annotations, conflicting, match="carry different codes",
+    )
+    checks.raises("unknown code policy raises", ValueError, resolve_codes, annotations, unmatched, "keep")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        resolved, report = resolve_codes(annotations, pd.concat([unmatched, conflicting]), "drop")
+
+    span_name = f"{annotations.at[0, 'filename']}[{annotations.at[0, 'start_span']}:{annotations.at[0, 'end_span']}]"
+
+    checks.check("drop warns", any("on_code_mismatch='drop'" in str(w.message) for w in caught))
+    checks.equal("drop reports the conflicting span", report.dropped_conflicting, [span_name])
+    checks.equal("drop reports the unmatched row", len(report.dropped_unmatched), 1)
+    checks.equal("drop leaves the conflicting span uncoded", int(resolved["code"].notna().sum()), 0)
+    checks.equal("resolve_codes keeps every annotation", len(resolved), len(annotations))
+
+    orphan_codes = code_rows(annotations, ["84114007"])
+    orphan_document = str(annotations.at[0, "filename"])
+    drifted = annotations.copy()
+    drifted.loc[0, "text"] = "nope"
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        dropped = build_corpus(documents, drifted, on_conflict="drop", codes=orphan_codes)
+
+    checks.check(
+        "codes of a document another policy drops go with it",
+        orphan_document not in set(dropped["doc_id"]),
+    )
+
+    broken = coded.copy()
+    first = json.loads(broken.at[0, "entities_json"])
+    first[0]["code"] = 84114007
+    broken.loc[0, "entities_json"] = json.dumps(first)
+
+    checks.raises("validate_corpus rejects a non-string code", ValueError, validate_corpus, broken, match="invalid code")
+    first[0]["code"] = " "
+    broken.loc[0, "entities_json"] = json.dumps(first)
+    checks.raises("validate_corpus rejects an empty code", ValueError, validate_corpus, broken, match="invalid code")
+
+    spans = spans_from_corpus(coded)
+
+    checks.equal("spans_from_corpus adds a code column", list(spans.columns)[-1], "code")
+    checks.equal("spans_from_corpus carries every code", int(spans["code"].notna().sum()), 3)
+    checks.check("spans_from_corpus adds no code column without codes", "code" not in spans_from_corpus(plain).columns)
+
+    counts = count_codes(coded)
+
+    checks.equal(
+        "count_codes",
+        {key: value for key, value in counts.items() if key != "n_entities_with_code_by_label"},
+        {"has_codes": True, "n_entities_with_code": 3, "n_no_code": 1, "n_composite_codes": 1, "n_unique_codes": 3},
+    )
+    checks.equal("count_codes without codes", count_codes(plain)["has_codes"], False)
+
+    txt_dir, ann_dir = write_brat(workspace / "coded_brat", documents, annotations)
+    prepared = prepare_dataset(
+        workspace / "coded_out", documents=txt_dir, annotations=ann_dir, codes=codes_path, split=False
+    )
+    manifest = prepared.source_manifest
+
+    checks.equal("manifest records the codes file", manifest["codes"], str(codes_path))
+    checks.check("manifest records the codes sha256", bool(manifest["codes_sha256"]))
+    checks.equal("manifest counts code rows", manifest["n_code_rows"], len(codes))
+    checks.equal("manifest counts unusable codes", manifest["n_unusable_codes"], 2)
+    checks.equal("manifest counts coded entities", manifest["n_entities_with_code"], 3)
+    checks.equal("manifest has_codes", manifest["has_codes"], True)
+
+    reread = prepare_dataset(
+        workspace / "coded_again", source_parquet=prepared.corpus_path, dataset_name="again", split=False
+    )
+
+    checks.equal("a coded source_parquet reports its codes", reread.source_manifest["n_entities_with_code"], 3)
+    checks.equal("a source_parquet records no codes file", reread.source_manifest["n_code_rows"], None)
+    checks.raises(
+        "codes with source_parquet raises", ValueError, prepare_dataset,
+        workspace / "x", source_parquet=prepared.corpus_path, codes=codes_path,
+    )
+
+    symptemist = Path(__file__).resolve().parent.parent / "examples" / "symptemist-complete_240208" / "symptemist_train"
+
+    if not symptemist.is_dir():
+        checks.skip("SympTEMIST gold codes", f"{symptemist} not found")
+        return
+
+    real = prepare_dataset(
+        workspace / "symptemist",
+        documents=symptemist / "subtask1-ner" / "txt",
+        annotations=symptemist / "subtask1-ner" / "brat",
+        codes=symptemist / "subtask2-linking" / "symptemist_tsv_train_subtask2_complete+COMPOSITE.tsv",
+        split=False,
+    ).source_manifest
+
+    checks.equal(
+        "SympTEMIST train codes",
+        [real[key] for key in ("n_code_rows", "n_unusable_codes", "n_entities", "n_entities_with_code", "n_no_code")],
+        [8980, 8, 9092, 8973, 160],
+    )
+
+
 def verify_real_corpus(checks: Checks, workspace: Path) -> None:
     root = samples_root()
 
@@ -877,6 +1054,7 @@ def main() -> int:
         verify_stratification(checks)
         verify_split(checks, workspace)
         verify_prepare_dataset(checks, workspace)
+        verify_codes(checks, workspace)
         verify_real_corpus(checks, workspace)
 
     return checks.report()

@@ -24,6 +24,7 @@ from lab.nel.schemas import GazetteerEntry, LinkedEntity, MatchCandidate, Mentio
 
 GOLD_COLUMN = "gold_code"
 LINKED_COLUMNS = ["code", "code_term", "code_score", "candidates_json"]
+SOURCE_COLUMN = "code_source"
 GAZETTEER_COLUMNS = ["term", "code"]
 
 PREDICTIONS_FILENAME = "predictions.tsv"
@@ -64,6 +65,7 @@ def link_entities(
     top_k: int = 25,
     k_values: Sequence[int] = (1, 5, 25),
     hierarchy: str | Path | None = None,
+    keep_gold: bool = False,
 ) -> LinkingResult:
     """
     Link every span to a gazetteer code and write the result as a span table.
@@ -80,6 +82,10 @@ def link_entities(
 
     Appends `code`, `code_term`, `code_score` and `candidates_json` to the input
     columns, so the result is still a span table.
+
+    `keep_gold=True` completes instead of evaluating: spans with a gold code
+    keep it as their `code`, only the others are linked, `code_source` says
+    `gold` or `predicted`, and nothing is scored.
     """
     _validate(method, base_model, top_k, k_values)
 
@@ -90,18 +96,24 @@ def link_entities(
     gazetteer_frame = read_gazetteer(gazetteer)
     entries = gazetteer_entries(gazetteer_frame)
     mentions = mentions_from_spans(span_frame)
+    uncoded = [mention.code is None for mention in mentions]
+    to_link = [mention for mention, keep in zip(mentions, uncoded) if keep] if keep_gold else mentions
 
     generator = build_candidate_generator(
         method, entries, gazetteer_frame, base_model, top_k, method_kwargs or {}
     )
     reranker_model = build_reranker(reranker, reranker_kwargs or {})
     pipeline = EntityLinkingPipeline(generator, reranker=reranker_model, top_k_candidates=top_k)
-    linked = pipeline.fit().link_mentions(mentions)
+    linked = pipeline.fit().link_mentions(to_link) if to_link else []
 
-    result = linked_frame(span_frame, linked)
+    if keep_gold:
+        result = completed_frame(span_frame, uncoded, linked)
+        metrics = None
+    else:
+        result = linked_frame(span_frame, linked)
+        metrics = score_linking(result, linked, k_values, hierarchy)
+
     paths = {"predictions": write_linked(result, output_dir / PREDICTIONS_FILENAME)}
-
-    metrics = score_linking(result, linked, k_values, hierarchy)
 
     if metrics is not None:
         metrics = {"method": run_method(method, reranker), **metrics}
@@ -114,7 +126,9 @@ def link_entities(
         "gazetteer_sha256": _source_sha256(gazetteer),
         "n_gazetteer_entries": int(len(entries)),
         "n_mentions": int(len(mentions)),
-        "n_linked": int(result["code"].notna().sum()),
+        "n_linked": sum(entity.predicted_code is not None for entity in linked),
+        "keep_gold": keep_gold,
+        "n_kept_gold": int(len(mentions) - len(to_link)),
         "method": method,
         "base_model": base_model,
         "method_kwargs": method_kwargs or {},
@@ -147,7 +161,8 @@ def read_spans(spans: pd.DataFrame | str | Path) -> pd.DataFrame:
         raise ValueError(f"Span table is missing columns {missing}. Required: {SPAN_COLUMNS}")
 
     if GOLD_COLUMN in frame.columns:
-        frame = frame.drop(columns=[column for column in LINKED_COLUMNS if column in frame.columns])
+        linked_columns = [*LINKED_COLUMNS, SOURCE_COLUMN]
+        frame = frame.drop(columns=[column for column in linked_columns if column in frame.columns])
     elif "code" in frame.columns:
         frame = frame.rename(columns={"code": GOLD_COLUMN})
 
@@ -193,7 +208,7 @@ def gazetteer_entries(gazetteer: pd.DataFrame) -> list[GazetteerEntry]:
 
 def mentions_from_spans(spans: pd.DataFrame) -> list[MentionAnnotation]:
     """Turn span rows into the mention records the pipeline links."""
-    gold = spans[GOLD_COLUMN].map(_optional_str) if GOLD_COLUMN in spans.columns else None
+    gold = [_optional_str(value) for value in spans[GOLD_COLUMN]] if GOLD_COLUMN in spans.columns else None
 
     return [
         MentionAnnotation(
@@ -202,7 +217,7 @@ def mentions_from_spans(spans: pd.DataFrame) -> list[MentionAnnotation]:
             start_span=int(row.start_span),
             end_span=int(row.end_span),
             text=str(row.text),
-            code=None if gold is None else gold.iloc[index],
+            code=None if gold is None else gold[index],
         )
         for index, row in enumerate(spans.itertuples(index=False))
     ]
@@ -301,6 +316,27 @@ def linked_frame(spans: pd.DataFrame, linked: list[LinkedEntity]) -> pd.DataFram
         json.dumps([candidate_record(candidate) for candidate in entity.candidates], ensure_ascii=False)
         for entity in linked
     ]
+
+    return result
+
+
+def completed_frame(
+    spans: pd.DataFrame,
+    uncoded: list[bool],
+    linked: list[LinkedEntity],
+) -> pd.DataFrame:
+    """Gold codes where the spans carry them, the linking columns everywhere else."""
+    result = spans.copy()
+    result[LINKED_COLUMNS] = None
+
+    if linked:
+        result.loc[uncoded, LINKED_COLUMNS] = linked_frame(spans.loc[uncoded], linked)[LINKED_COLUMNS]
+
+    if GOLD_COLUMN in spans.columns:
+        coded = [not keep for keep in uncoded]
+        result.loc[coded, "code"] = spans.loc[coded, GOLD_COLUMN].map(_optional_str)
+
+    result[SOURCE_COLUMN] = ["predicted" if keep else "gold" for keep in uncoded]
 
     return result
 

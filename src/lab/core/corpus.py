@@ -11,7 +11,7 @@ from typing import Literal
 
 import pandas as pd
 
-from lab.core.brat import read_annotations, resolve_documents
+from lab.core.brat import NO_CODE, is_usable_code, read_annotations, read_codes, resolve_documents
 from lab.core.stratification import parse_document_label_counts
 
 DOCUMENT_COLUMNS = ["doc_id", "text", "entities_json", "n_entities"]
@@ -19,6 +19,10 @@ DOCUMENT_COLUMNS = ["doc_id", "text", "entities_json", "n_entities"]
 MismatchPolicy = Literal["error", "documents", "annotations"]
 
 ConflictPolicy = Literal["raise", "rewrite", "drop"]
+
+CodeMismatchPolicy = Literal["raise", "drop"]
+
+SPAN_KEY = ["filename", "start_span", "end_span"]
 
 DOCUMENT_DTYPES = {
     "doc_id": "string",
@@ -39,6 +43,103 @@ class SourceConflict:
     rewritten_documents: list[str] = field(default_factory=list)
     n_rewritten_entities: int = 0
     dropped_documents: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class CodeResolution:
+    n_rows: int = 0
+    n_unusable: int = 0
+    dropped_unmatched: list[str] = field(default_factory=list)
+    dropped_conflicting: list[str] = field(default_factory=list)
+
+
+def resolve_codes(
+    annotations: pd.DataFrame,
+    codes: pd.DataFrame | str | Path,
+    on_code_mismatch: CodeMismatchPolicy = "raise",
+) -> tuple[pd.DataFrame, CodeResolution]:
+    """
+    Attach gold codes to annotations, joined on `(filename, start_span, end_span)`.
+
+    Unusable codes (see `is_usable_code`) are skipped and identical rows count
+    once, leaving the entity uncoded. A code row naming no annotated span, or
+    two rows giving one span different codes, raises by default;
+    `on_code_mismatch="drop"` skips them instead, leaving those spans uncoded.
+
+    Returns the annotations with a `code` column, missing where uncoded. Call it
+    before `resolve_mismatch` and `resolve_conflicts`, so rows of a document
+    they drop go with it.
+    """
+    if on_code_mismatch not in ("raise", "drop"):
+        raise ValueError(
+            f"Unknown on_code_mismatch policy: {on_code_mismatch!r}. Expected 'raise' or 'drop'."
+        )
+
+    raw = read_codes(codes)
+    usable = raw.loc[raw["code"].map(is_usable_code)].drop_duplicates()
+
+    keys = pd.MultiIndex.from_frame(usable[SPAN_KEY])
+    annotated = pd.MultiIndex.from_frame(annotations[SPAN_KEY].astype({"start_span": int, "end_span": int}))
+    unmatched = ~keys.isin(annotated)
+    conflicting = keys.duplicated(keep=False)
+
+    unmatched_names = _span_names(usable.loc[unmatched])
+    conflicting_names = _span_names(usable.loc[conflicting & ~unmatched])
+
+    if unmatched_names or conflicting_names:
+        problems = []
+
+        if unmatched_names:
+            problems.append(
+                f"{len(unmatched_names)} code row(s) name no annotated span: {unmatched_names[:5]}"
+            )
+
+        if conflicting_names:
+            problems.append(
+                f"{len(conflicting_names)} span(s) carry different codes: {conflicting_names[:5]}"
+            )
+
+        if on_code_mismatch == "raise":
+            raise ValueError(
+                f"{'; '.join(problems)}. Pass on_code_mismatch='drop' to leave them uncoded."
+            )
+
+        warnings.warn(f"on_code_mismatch='drop' skipped {'; '.join(problems)}.", stacklevel=2)
+
+    attached = usable.loc[~unmatched & ~conflicting]
+    resolved = annotations.drop(columns="code", errors="ignore").merge(attached, on=SPAN_KEY, how="left")
+
+    return resolved, CodeResolution(
+        n_rows=len(raw),
+        n_unusable=int(len(raw) - raw["code"].map(is_usable_code).sum()),
+        dropped_unmatched=unmatched_names,
+        dropped_conflicting=conflicting_names,
+    )
+
+
+def count_codes(documents_df: pd.DataFrame) -> dict[str, object]:
+    """How many entities carry a gold code, overall and by label, and what those codes look like."""
+    by_label: dict[str, int] = {}
+    codes: list[str] = []
+
+    for entities_json in documents_df["entities_json"]:
+        for entity in json.loads(entities_json) if entities_json else []:
+            if "code" in entity:
+                codes.append(entity["code"])
+                by_label[entity["label"]] = by_label.get(entity["label"], 0) + 1
+
+    return {
+        "has_codes": bool(codes),
+        "n_entities_with_code": len(codes),
+        "n_entities_with_code_by_label": dict(sorted(by_label.items())),
+        "n_no_code": sum(code == NO_CODE for code in codes),
+        "n_composite_codes": sum("+" in code for code in codes),
+        "n_unique_codes": len(set(codes)),
+    }
+
+
+def _span_names(rows: pd.DataFrame) -> list[str]:
+    return sorted({f"{row.filename}[{row.start_span}:{row.end_span}]" for row in rows.itertuples(index=False)})
 
 
 def resolve_mismatch(
@@ -208,13 +309,15 @@ def build_corpus(
     normalize_labels: bool = False,
     on_mismatch: MismatchPolicy = "error",
     on_conflict: ConflictPolicy = "raise",
+    codes: pd.DataFrame | str | Path | None = None,
+    on_code_mismatch: CodeMismatchPolicy = "raise",
     validate: bool = True,
 ) -> pd.DataFrame:
     """
     Build the canonical corpus DataFrame from documents and their annotations.
 
     `entities_json` holds a JSON list of `{id, start, end, label, text}` per
-    document. Entity offsets are round-trip validated against the document text,
+    document, plus `code` on the entities that carry one. Entity offsets are round-trip validated against the document text,
     so an offset bug surfaces here rather than as a mislabelled token later.
     Overlapping entities are preserved as annotated; resolving them is a
     modelling choice made at encoding time.
@@ -230,9 +333,16 @@ def build_corpus(
     text as authoritative, or `on_conflict="drop"` to drop the documents that
     carry a conflict. Call either resolver directly to learn what a policy
     dropped or rewrote.
+
+    `codes` is a linking TSV whose gold codes are added to the entities they
+    name, as a `code` field; see `resolve_codes` for `on_code_mismatch`.
     """
     documents_dict = resolve_documents(documents)
     annotations_df = read_annotations(annotations, normalize_labels=normalize_labels)
+
+    if codes is not None:
+        annotations_df, _ = resolve_codes(annotations_df, codes, on_code_mismatch)
+
     documents_dict, annotations_df, _ = resolve_mismatch(
         documents_dict, annotations_df, on_mismatch
     )
@@ -269,7 +379,8 @@ def validate_corpus(documents_df: pd.DataFrame) -> pd.DataFrame:
     Validate a corpus DataFrame and return it reduced to the canonical columns.
 
     Checks unique non-null `doc_id`, non-empty text, non-negative `n_entities`,
-    and that every entity's offsets round-trip against its document text.
+    that every entity's offsets round-trip against its document text, and that
+    any `code` an entity carries is a non-empty string.
     """
     missing = set(DOCUMENT_COLUMNS) - set(documents_df.columns)
 
@@ -334,6 +445,7 @@ def _build_entities(
     document_annotations: pd.DataFrame,
 ) -> list[dict[str, object]]:
     entities: list[dict[str, object]] = []
+    has_codes = "code" in document_annotations.columns
 
     sorted_rows = sorted(
         document_annotations.itertuples(index=False),
@@ -350,15 +462,18 @@ def _build_entities(
                 f"expected {row.text!r} at [{start}:{end}], got {mention!r}."
             )
 
-        entities.append(
-            {
-                "id": f"T{index}",
-                "start": start,
-                "end": end,
-                "label": str(row.label),
-                "text": mention,
-            }
-        )
+        entity: dict[str, object] = {
+            "id": f"T{index}",
+            "start": start,
+            "end": end,
+            "label": str(row.label),
+            "text": mention,
+        }
+
+        if has_codes and pd.notna(row.code):
+            entity["code"] = str(row.code)
+
+        entities.append(entity)
 
     return entities
 
@@ -384,6 +499,14 @@ def _validate_entities(doc_id: str, text: str, entities_json: str) -> None:
             raise ValueError(
                 f"Entity {name} in document {doc_id!r} has invalid offsets "
                 f"start={start!r}, end={end!r} (document has {len(text)} characters)."
+            )
+
+        code = entity.get("code")
+
+        if "code" in entity and (not isinstance(code, str) or not code.strip()):
+            raise ValueError(
+                f"Entity {name} in document {doc_id!r} has an invalid code {code!r}; "
+                "a code is a non-empty string, and an uncoded entity has no `code` key."
             )
 
         mention = entity.get("text")

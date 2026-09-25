@@ -28,11 +28,12 @@ train = read_corpus(split.paths["train"])
 ## Reading annotations
 
 ```python
-from lab.core import read_annotations, read_ann, read_annotation_tsv, resolve_documents
+from lab.core import read_annotations, read_ann, read_annotation_tsv, read_codes, resolve_documents
 
 read_annotations(annotations, normalize_labels=False) -> DataFrame
 read_ann(path, pattern="*.ann", normalize_labels=False) -> DataFrame
 read_annotation_tsv(path, normalize_labels=False) -> DataFrame
+read_codes(codes) -> DataFrame
 resolve_documents(documents, pattern="*.txt", encoding="utf-8") -> dict[str, str]
 ```
 
@@ -41,6 +42,11 @@ directory of `.ann` files all come back as the canonical annotation frame
 `filename | label | start_span | end_span | text`, offsets zero-based with an exclusive end.
 The other two are what it dispatches to. A discontinuous BRAT annotation becomes one row per
 fragment.
+
+`read_codes` reads a linking TSV into `filename | start_span | end_span | code`, matching
+columns by name and accepting `span_ini`/`span_end`; it filters nothing.
+`is_usable_code(code)` is the courtesy check `resolve_codes` applies (see
+[gold codes](prepare-dataset.md#gold-codes)).
 
 `resolve_documents` is the document-side counterpart: a directory of `.txt` files or an
 existing `{name: text}` mapping, returned as the mapping `build_corpus` consumes.
@@ -58,6 +64,8 @@ build_corpus(
     normalize_labels=False,
     on_mismatch="error",
     on_conflict="raise",
+    codes=None,
+    on_code_mismatch="raise",
     validate=True,
 ) -> DataFrame
 ```
@@ -69,10 +77,13 @@ build_corpus(
 | `normalize_labels` | `False` | Map labels through `LABEL_ALIASES`. Source strings are kept verbatim otherwise. |
 | `on_mismatch` | `"error"` | When the two sets name different files: `"error"`, `"documents"` (the document set wins), `"annotations"` (the annotation set wins). |
 | `on_conflict` | `"raise"` | When an annotation's text is not what its offsets select: `"raise"`, `"rewrite"` (take the document text), `"drop"` (drop the document). |
+| `codes` | `None` | A linking TSV or DataFrame of gold codes, added to the entities it names. |
+| `on_code_mismatch` | `"raise"` | When a code row names no span, or one span gets two codes: `"raise"`, `"drop"` (leave them uncoded). |
 | `validate` | `True` | Run `validate_corpus` on the result. Off only for a corpus you trust. |
 
 Returns the canonical corpus, one row per document — `doc_id | text | entities_json |
-n_entities`, with `entities_json` a JSON list of `{id, start, end, label, text}`. Every
+n_entities`, with `entities_json` a JSON list of `{id, start, end, label, text}`, plus
+`code` on each entity that carries a gold one. Every
 entity's offsets are round-tripped against its document text on the way in, so an offset bug
 surfaces here rather than as a mislabelled token later. Overlapping entities are preserved
 as annotated; resolving them is a modelling choice made at encoding time.
@@ -89,15 +100,26 @@ documents, annotations, conflict = resolve_conflicts(documents, annotations, on_
 conflict.rewritten_documents, conflict.n_rewritten_entities, conflict.dropped_documents
 ```
 
-`build_corpus` calls both in that order and discards the reports. The policies themselves are
+Codes have a resolver of their own, called before the other two so that a dropped document
+takes its codes with it:
+
+```python
+from lab.core import resolve_codes
+
+annotations, codes = resolve_codes(annotations, "linking.tsv", on_code_mismatch="drop")
+codes.n_rows, codes.n_unusable, codes.dropped_unmatched, codes.dropped_conflicting
+```
+
+`build_corpus` calls all three and discards the reports. The policies themselves are
 described in [prepare-dataset.md](prepare-dataset.md#disagreeing-sources).
 
 Around the corpus frame:
 
 | Call | Does |
 |---|---|
-| `validate_corpus(df)` | Check the schema, unique `doc_id`, non-empty text and every entity's offsets; return the frame reduced to the canonical columns. |
+| `validate_corpus(df)` | Check the schema, unique `doc_id`, non-empty text, every entity's offsets and that any `code` is a non-empty string; return the frame reduced to the canonical columns. |
 | `count_labels(df)` | `{label: count}` over the corpus as annotated. |
+| `count_codes(df)` | How many entities carry a gold code, overall and by label, with `NO_CODE`, composite and unique counts. |
 | `document_fingerprints(df)` | A stable sha256 per document over the canonical columns — what the split manifest records. |
 | `read_corpus(path, validate=True)` | Read a corpus parquet, validated by default. |
 | `write_corpus(df, path, compression="zstd")` | Write one, creating parent directories. Returns the path. |
@@ -217,7 +239,8 @@ the result. Keys are `char_precision`, `char_recall`, `char_f1`, `char_correct`,
 duplicate spans and keeping the highest-scoring copy when they carry a `score`.
 `spans_from_corpus(corpus, label=None)` goes the other way — a corpus frame or parquet to
 a span table, one row per entity as annotated, overlaps intact, optionally one label only;
-it is how the gold for scoring comes out of a corpus.
+it is how the gold for scoring comes out of a corpus. A corpus with gold codes adds a `code`
+column, which `nel.link_entities` reads as the linking gold.
 
 ---
 

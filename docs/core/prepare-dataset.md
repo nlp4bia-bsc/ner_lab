@@ -9,11 +9,13 @@ prepare_dataset(
     output_dir,
     documents=None,
     annotations=None,
+    codes=None,
     source_parquet=None,
     dataset_name=None,
     normalize_labels=False,
     on_mismatch="error",
     on_conflict="raise",
+    on_code_mismatch="raise",
     split=True,
     validation_size=0.2,
     kfolds=None,
@@ -34,11 +36,13 @@ prepare_dataset(
 | `output_dir` | *required* | Root directory. Output goes to `<output_dir>/<dataset_name>/<split_descriptor>/`. |
 | `documents` | `None` | Directory of `.txt` files, or a `{name: text}` mapping. Requires `annotations`. |
 | `annotations` | `None` | A DataFrame, a `.tsv` file, a single `.ann` file, or a directory of `.ann` files. Only valid with `documents`. |
+| `codes` | `None` | A linking TSV (or DataFrame) of gold codes, added to the entities it names. Only valid with `documents`. See [gold codes](#gold-codes). |
 | `source_parquet` | `None` | An existing canonical parquet, skipping conversion. Mutually exclusive with `documents`. |
 | `dataset_name` | derived | Overrides the derived name (from a sibling `metadata.json`, else the documents directory, else the parquet stem). |
 | `normalize_labels` | `False` | Labels are stored exactly as the source annotations write them. Set `True` to map them through `lab.core.LABEL_ALIASES` onto `DISEASE`/`PROCEDURE`/`SYMPTOM`/`MEDICATION`, ignoring case and accents. |
 | `on_mismatch` | `"error"` | What to do when the document set and the annotation set name different files. See below. |
 | `on_conflict` | `"raise"` | What to do when an annotation's text disagrees with the document it points into. See below. |
+| `on_code_mismatch` | `"raise"` | What to do when a `codes` row names no annotated span, or two rows give one span different codes. See [gold codes](#gold-codes). |
 | `split` | `True` | Set `False` to write only the canonical corpus. |
 | `validation_size` | `0.2` | Validation fraction for a plain train/validation split. Ignored when `kfolds` is set. |
 | `kfolds` | `None` | Number of fixed-holdout cross-validation folds. Minimum 2. |
@@ -63,7 +67,7 @@ raises.
 ```
 <output_dir>/<dataset_name>/
     documents.parquet             canonical corpus
-    source_manifest.json          source paths, sha256, label inventory, upstream metadata
+    source_manifest.json          source paths, sha256, label and code inventory, upstream metadata
     <split_descriptor>/
         split_assignments.parquet  source of truth for the split
         split_balance_report.parquet / .tsv
@@ -111,6 +115,66 @@ missing. `"rewrite"` and `"drop"` both warn once, naming the affected documents.
 `lab.core.resolve_mismatch` and
 `lab.core.resolve_conflicts` are the same resolvers, callable directly, and each returns
 a report of what it dropped or rewrote.
+
+## Gold codes
+
+Corpora annotated for linking ship their codes beside the BRAT, as a TSV — SympTEMIST's
+`subtask2-linking/*.tsv`, for instance. Pass the one you treat as gold as `codes`:
+
+```python
+prepare_dataset(
+    "assets/splits",
+    documents="symptemist_train/subtask1-ner/txt",
+    annotations="symptemist_train/subtask1-ner/brat",
+    codes="symptemist_train/subtask2-linking/symptemist_tsv_train_subtask2_complete+COMPOSITE.tsv",
+)
+```
+
+Columns are matched by name: `filename`, `start_span` (or `span_ini`), `end_span` (or
+`span_end`) and `code`; the rest are ignored. Each row is joined to the entity with the same
+`(filename, start, end)`, and the code lands on it as written, so the entity reads
+`{id, start, end, label, text, code}`. Composite codes stay `+`-joined, and `NO_CODE` is kept
+as a code: it says no concept applies, which is not the same as a mention nobody coded. An
+entity without a code has no `code` key, and a corpus prepared without `codes` is exactly what
+it was before, so its splits still reuse.
+
+Checking codes is the corpus's job, so only obvious spreadsheet damage is filtered: a code in
+scientific notation (`1.66753E+16`), or one with a `+`-part that is empty or carries no digit
+and is not `NO_CODE`. Such a row is skipped and its entity stays uncoded. Identical rows count
+once.
+
+`on_code_mismatch` covers the TSV disagreeing with the BRAT:
+
+| Value | Behaviour |
+|---|---|
+| `"raise"` | Raise when a row names no annotated span, or when two rows give one span different codes. The default. |
+| `"drop"` | Skip those rows with a warning; a span with conflicting codes stays uncoded. |
+
+Rows for a document that `on_mismatch` or `on_conflict` drops go with it. The codes are
+recorded in `source_manifest.json`, counted from the corpus itself, so a coded
+`source_parquet` reports them too:
+
+```json
+"codes": "symptemist_tsv_train_subtask2_complete+COMPOSITE.tsv",
+"codes_sha256": "…",
+"on_code_mismatch": "raise",
+"n_code_rows": 8980,
+"n_unusable_codes": 8,
+"dropped_unmatched_codes": [],
+"dropped_conflicting_codes": [],
+"has_codes": true,
+"n_entities_with_code": 8973,
+"n_entities_with_code_by_label": {"SINTOMA": 8973},
+"n_no_code": 160,
+"n_composite_codes": 697,
+"n_unique_codes": 3420
+```
+
+`n_unique_codes` counts distinct codes as written, so a composite counts as one. An entity
+annotated twice on the same span gets the code on both copies, which is why
+`n_entities_with_code` can exceed the usable rows. `lab.core.count_codes(corpus)` returns the
+same counts for any corpus, and `lab.core.spans_from_corpus` carries the codes into a `code`
+column, which `nel.link_entities` reads as gold.
 
 ## Label normalization
 
@@ -191,6 +255,16 @@ holdout_fold: 0
 
 ```bash
 lab run prepare.yaml
+```
+
+With gold codes:
+
+```yaml
+task: core.prepare_dataset
+documents: symptemist_train/subtask1-ner/txt
+annotations: symptemist_train/subtask1-ner/brat
+codes: symptemist_train/subtask2-linking/symptemist_tsv_train_subtask2_complete+COMPOSITE.tsv
+output_dir: assets/splits
 ```
 
 Every key is a parameter of `prepare_dataset`, statistics included:

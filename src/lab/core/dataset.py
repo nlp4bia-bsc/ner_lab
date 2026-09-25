@@ -10,12 +10,16 @@ import pandas as pd
 
 from lab.core.brat import read_annotations, resolve_documents
 from lab.core.corpus import (
+    CodeMismatchPolicy,
+    CodeResolution,
     ConflictPolicy,
     MismatchPolicy,
     SourceConflict,
     SourceMismatch,
     build_corpus,
+    count_codes,
     count_labels,
+    resolve_codes,
     resolve_conflicts,
     resolve_mismatch,
 )
@@ -108,11 +112,13 @@ def prepare_dataset(
     output_dir: str | Path,
     documents: str | Path | None = None,
     annotations: pd.DataFrame | str | Path | None = None,
+    codes: pd.DataFrame | str | Path | None = None,
     source_parquet: str | Path | None = None,
     dataset_name: str | None = None,
     normalize_labels: bool = False,
     on_mismatch: MismatchPolicy = "error",
     on_conflict: ConflictPolicy = "raise",
+    on_code_mismatch: CodeMismatchPolicy = "raise",
     split: bool = True,
     validation_size: float = 0.2,
     kfolds: int | None = None,
@@ -145,11 +151,18 @@ def prepare_dataset(
     conflict. What each policy dropped or rewrote is recorded in
     `source_manifest.json`.
 
+    `codes` is a linking TSV of gold codes (`filename`, `start_span`/`span_ini`,
+    `end_span`/`span_end`, `code`), added to the entities it names. Unusable
+    codes are skipped. A row naming no annotated span, or two rows giving one
+    span different codes, raises by default; set `on_code_mismatch="drop"` to
+    leave those spans uncoded. The manifest counts the codes the corpus carries,
+    whether they came from `codes` or from `source_parquet`.
+
     `stats="text"` also writes `text_stats.{json,parquet}` beside the corpus, and
     `stats="both"` adds `annotation_stats.*`; both need `base_model`, and text
     stats need `language`. `normalize_labels` applies to the annotation stats too.
     """
-    _validate_inputs(documents, annotations, source_parquet, kfolds, holdout_fold)
+    _validate_inputs(documents, annotations, codes, source_parquet, kfolds, holdout_fold)
     _validate_stats(stats, base_model, language)
 
     metadata = read_dataset_metadata(source_parquet) if source_parquet is not None else None
@@ -162,15 +175,19 @@ def prepare_dataset(
 
     mismatch: SourceMismatch | None = None
     conflict: SourceConflict | None = None
+    code_resolution: CodeResolution | None = None
 
     if source_parquet is not None:
         corpus_path = Path(source_parquet)
         corpus = read_corpus(corpus_path)
     else:
+        annotations_df = read_annotations(annotations, normalize_labels=normalize_labels)
+
+        if codes is not None:
+            annotations_df, code_resolution = resolve_codes(annotations_df, codes, on_code_mismatch)
+
         documents_dict, annotations_df, mismatch = resolve_mismatch(
-            resolve_documents(documents),
-            read_annotations(annotations, normalize_labels=normalize_labels),
-            on_mismatch,
+            resolve_documents(documents), annotations_df, on_mismatch
         )
         documents_dict, annotations_df, conflict = resolve_conflicts(
             documents_dict, annotations_df, on_conflict
@@ -201,6 +218,18 @@ def prepare_dataset(
         "n_documents": len(corpus),
         "n_entities": int(corpus["n_entities"].sum()),
         "n_entities_by_label": count_labels(corpus),
+        "codes": str(codes) if isinstance(codes, (str, Path)) else None,
+        "codes_sha256": file_sha256(codes) if isinstance(codes, (str, Path)) else None,
+        "on_code_mismatch": on_code_mismatch if code_resolution is not None else None,
+        "n_code_rows": code_resolution.n_rows if code_resolution is not None else None,
+        "n_unusable_codes": code_resolution.n_unusable if code_resolution is not None else None,
+        "dropped_unmatched_codes": (
+            code_resolution.dropped_unmatched if code_resolution is not None else None
+        ),
+        "dropped_conflicting_codes": (
+            code_resolution.dropped_conflicting if code_resolution is not None else None
+        ),
+        **count_codes(corpus),
         "upstream_metadata": _upstream_metadata(source_parquet, metadata),
     }
     write_manifest(source_manifest, dataset_root / SOURCE_MANIFEST_FILENAME)
@@ -257,6 +286,7 @@ def prepare_dataset(
 def _validate_inputs(
     documents: str | Path | None,
     annotations: pd.DataFrame | str | Path | None,
+    codes: pd.DataFrame | str | Path | None,
     source_parquet: str | Path | None,
     kfolds: int | None,
     holdout_fold: int,
@@ -269,6 +299,9 @@ def _validate_inputs(
 
     if source_parquet is not None and annotations is not None:
         raise ValueError("annotations only applies to documents input.")
+
+    if source_parquet is not None and codes is not None:
+        raise ValueError("codes only applies to documents input.")
 
     if kfolds is not None and kfolds < 2:
         raise ValueError("kfolds must be at least 2; omit it for a train/validation split.")

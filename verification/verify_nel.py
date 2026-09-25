@@ -355,6 +355,20 @@ def verify_link_entities(checks: Checks) -> None:
         partial_result = link_entities(partial, GAZETTEER, root / "partial", method="string_match", top_k=3, k_values=(1,))
         checks.equal("only rows with a gold code are scored", (partial_result.metrics["n_evaluated_rows"], partial_result.metrics["n_rows_without_gold"]), (len(MENTIONS) - 5, 5))
 
+        partial.loc[partial.index[5], "code"] = "NO_CODE"
+        completed = link_entities(partial, GAZETTEER, root / "completed", method="string_match", top_k=3, k_values=(1,), keep_gold=True)
+        gold_rows = completed.spans.index[5:]
+        checks.equal("completion keeps gold codes as written, NO_CODE included", completed.spans.loc[gold_rows, "code"].tolist(), partial.loc[gold_rows, "code"].tolist())
+        checks.equal("completion marks each row's source", completed.spans["code_source"].tolist(), ["predicted"] * 5 + ["gold"] * (len(MENTIONS) - 5))
+        checks.equal("completion links only the uncoded rows", completed.spans.loc[completed.spans.index[:5], "code"].tolist(), partial_result.spans.loc[partial_result.spans.index[:5], "code"].tolist())
+        checks.check("completion leaves the linking columns of gold rows empty", completed.spans.loc[gold_rows, ["code_term", "code_score", "candidates_json"]].isna().all().all())
+        checks.equal("completion scores nothing and writes no metrics file", (completed.metrics, sorted(p.name for p in (root / "completed").iterdir())), (None, ["linking_manifest.json", "predictions.tsv"]))
+        checks.equal("the manifest counts kept and linked rows", (completed.manifest["keep_gold"], completed.manifest["n_kept_gold"], completed.manifest["n_linked"]), (True, len(MENTIONS) - 5, 5))
+        rescored = link_entities(completed.spans, GAZETTEER, root / "rescored", method="string_match", top_k=3, k_values=(1,))
+        checks.equal("a completed table evaluates against its original gold only", (rescored.metrics["n_evaluated_rows"], "code_source" in rescored.spans.columns), (len(MENTIONS) - 5, False))
+        all_gold = link_entities(MENTIONS, GAZETTEER, root / "all_gold", method="string_match", top_k=3, k_values=(1,), keep_gold=True)
+        checks.equal("completion with every row coded links nothing", (all_gold.manifest["n_linked"], set(all_gold.spans["code_source"])), (0, {"gold"}))
+
         graph = nx.DiGraph()
         graph.add_edges_from([("84114007", "42399005"), ("22298006", "57054005"), ("73211009", "44054006"), ("42399005", "14669001"), ("271737000", "87522002")])
         hierarchy = root / "hierarchy.pkl"

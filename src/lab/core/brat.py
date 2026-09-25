@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -9,6 +10,11 @@ import pandas as pd
 from lab.core.labels import normalize_annotation_labels
 
 ANNOTATION_COLUMNS = ["filename", "label", "start_span", "end_span", "text"]
+CODE_COLUMNS = ["filename", "start_span", "end_span", "code"]
+CODE_SPAN_ALIASES = {"span_ini": "start_span", "span_end": "end_span"}
+NO_CODE = "NO_CODE"
+
+_SCIENTIFIC_NOTATION = re.compile(r"\d(\.\d+)?[eE][+-]?\d+")
 
 
 def resolve_documents(
@@ -44,10 +50,11 @@ def read_annotations(
     single .ann file, or a directory of .ann files.
 
     Labels are read verbatim. Set `normalize_labels=True` to map them through
-    `LABEL_ALIASES` onto this library's clinical vocabulary.
+    `LABEL_ALIASES` onto this library's clinical vocabulary. A DataFrame keeps
+    the `code` column `resolve_codes` adds; files never carry one.
     """
     if isinstance(annotations, pd.DataFrame):
-        return _canonicalize_annotations(annotations, normalize_labels)
+        return _canonicalize_annotations(annotations, normalize_labels, keep_code=True)
 
     annotations_path = Path(annotations)
 
@@ -72,6 +79,50 @@ def read_annotation_tsv(path: str | Path, normalize_labels: bool = False) -> pd.
     _require_columns(annotations, ANNOTATION_COLUMNS, f"annotations TSV {path}")
 
     return _canonicalize_annotations(annotations, normalize_labels)
+
+
+def read_codes(codes: pd.DataFrame | str | Path) -> pd.DataFrame:
+    """
+    Read gold codes from a linking TSV, or a DataFrame shaped like one.
+
+    Columns are matched by name; `span_ini`/`span_end` are accepted for
+    `start_span`/`end_span`. Composite codes stay `+`-joined as written, and no
+    row is filtered here: see `is_usable_code`.
+    """
+    if isinstance(codes, pd.DataFrame):
+        frame = codes.copy()
+    else:
+        codes_path = Path(codes)
+
+        if not codes_path.is_file():
+            raise FileNotFoundError(f"Codes file does not exist: {codes_path}")
+
+        frame = pd.read_csv(codes_path, sep="\t", dtype=str, keep_default_na=False)
+
+    frame = frame.rename(columns=CODE_SPAN_ALIASES)
+    _require_columns(frame, CODE_COLUMNS, "codes")
+
+    canonical = frame[CODE_COLUMNS].copy()
+    canonical["filename"] = canonical["filename"].astype(str)
+    canonical["start_span"] = canonical["start_span"].astype(int)
+    canonical["end_span"] = canonical["end_span"].astype(int)
+    canonical["code"] = canonical["code"].astype(str).str.strip()
+
+    return canonical.reset_index(drop=True)
+
+
+def is_usable_code(code: str) -> bool:
+    """
+    False for the obvious spreadsheet damage: scientific notation, or a
+    `+`-part that is empty or carries no digit and is not `NO_CODE`.
+    """
+    if _SCIENTIFIC_NOTATION.fullmatch(code):
+        return False
+
+    return all(
+        part == NO_CODE or any(character.isdigit() for character in part)
+        for part in code.split("+")
+    )
 
 
 def read_ann(
@@ -186,10 +237,12 @@ def _split_discontinuous_text(
 def _canonicalize_annotations(
     annotations: pd.DataFrame,
     normalize_labels: bool = False,
+    keep_code: bool = False,
 ) -> pd.DataFrame:
     _require_columns(annotations, ANNOTATION_COLUMNS, "annotations")
 
-    canonical = annotations[ANNOTATION_COLUMNS].copy()
+    columns = [*ANNOTATION_COLUMNS, "code"] if keep_code and "code" in annotations.columns else ANNOTATION_COLUMNS
+    canonical = annotations[columns].copy()
     canonical["filename"] = canonical["filename"].astype(str)
     canonical["label"] = canonical["label"].astype(str)
     canonical["start_span"] = canonical["start_span"].astype(int)
