@@ -5,6 +5,7 @@ from __future__ import annotations
 TASKS: dict[str, tuple[str, str]] = {
     "build_representations": ("lab.selection.api", "build_representations"),
     "compare_methods": ("lab.selection.api", "compare_methods"),
+    "consensus_select_documents": ("lab.selection.api", "consensus_select_documents"),
     "select_documents": ("lab.selection.api", "select_documents"),
 }
 

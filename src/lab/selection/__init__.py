@@ -14,6 +14,7 @@ _EXPORTS: dict[str, str] = {
     "SelectionRun": "lab.selection.api",
     "build_representations": "lab.selection.api",
     "compare_methods": "lab.selection.api",
+    "consensus_select_documents": "lab.selection.api",
     "select_documents": "lab.selection.api",
     "selection_history": "lab.selection.api",
     "validate_selection_input": "lab.selection.api",

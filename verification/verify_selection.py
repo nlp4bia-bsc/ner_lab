@@ -21,6 +21,7 @@ from lab.core import read_corpus, write_corpus
 from lab.selection.api import (
     build_representations,
     compare_methods,
+    consensus_select_documents,
     select_documents,
     selection_history,
     validate_selection_input,
@@ -52,6 +53,7 @@ EXPECTED_COMMANDS = (
     "select",
     "history",
     "compare",
+    "consensus",
 )
 
 
@@ -536,6 +538,131 @@ def main() -> int:
             ),
         )
 
+
+        # ------------------------------------------------------------------
+        # Consensus workflow
+        # ------------------------------------------------------------------
+
+        consensus = consensus_select_documents(
+            corpus_path,
+            root / "consensus",
+            (
+                "kmedoids",
+                "kcenter",
+                "typiclust",
+            ),
+            3,
+            representations_path=representation_path,
+            random_state=13,
+        )
+
+        checks.equal(
+            "consensus returns one exact shared budget",
+            len(consensus.selected_doc_ids),
+            3,
+        )
+
+        checks.equal(
+            "consensus selected ids are unique",
+            len(set(consensus.selected_doc_ids)),
+            3,
+        )
+
+        consensus_ranking = pd.read_parquet(
+            consensus.ranking_path
+        )
+
+        checks.equal(
+            "consensus ranking covers the full candidate pool",
+            len(consensus_ranking),
+            12,
+        )
+
+        checks.equal(
+            "consensus has exactly three final selected rows",
+            int(consensus_ranking["selected"].sum()),
+            3,
+        )
+
+        checks.equal(
+            "consensus total binary votes equal methods times budget",
+            int(consensus_ranking["vote_count"].sum()),
+            9,
+        )
+
+        for method in (
+            "kmedoids",
+            "kcenter",
+            "typiclust",
+        ):
+            prefix = method.replace("-", "_")
+
+            checks.equal(
+                f"consensus {method} casts exactly three top-batch votes",
+                int(
+                    consensus_ranking[
+                        f"{prefix}__vote"
+                    ].sum()
+                ),
+                3,
+            )
+
+            checks.check(
+                f"consensus {method} exposes finite scores for every document",
+                bool(
+                    np.isfinite(
+                        consensus_ranking[
+                            f"{prefix}__score"
+                        ].to_numpy(dtype=float)
+                    ).all()
+                ),
+            )
+
+            checks.equal(
+                f"consensus {method} gives a complete unique ranking",
+                consensus_ranking[
+                    f"{prefix}__rank"
+                ].nunique(),
+                12,
+            )
+
+        consensus_second = consensus_select_documents(
+            corpus_path,
+            root / "consensus_round_2",
+            (
+                "kmedoids",
+                "kcenter",
+                "typiclust",
+            ),
+            3,
+            selected=[consensus.history_path],
+            representations_path=representation_path,
+            random_state=13,
+        )
+
+        checks.equal(
+            "consensus active-learning rounds are disjoint",
+            set(consensus.selected_doc_ids)
+            & set(consensus_second.selected_doc_ids),
+            set(),
+        )
+
+        consensus_history = selection_history(
+            consensus_second.history_path
+        )
+
+        checks.equal(
+            "consensus history accumulates both rounds",
+            len(consensus_history),
+            6,
+        )
+
+        checks.equal(
+            "consensus second run is inferred as round two",
+            consensus_second.round_number,
+            2,
+        )
+
         # ------------------------------------------------------------------
         # CLI: global selection command catalogue
         # ------------------------------------------------------------------
@@ -685,6 +812,12 @@ def main() -> int:
         checks.check(
             "task registry exposes selection.compare_methods",
             "selection.compare_methods"
+            in tasks_result.stdout,
+        )
+
+        checks.check(
+            "task registry exposes selection.consensus_select_documents",
+            "selection.consensus_select_documents"
             in tasks_result.stdout,
         )
 

@@ -422,6 +422,162 @@ def selection_compare(
     typer.echo(path)
 
 
+
+@selection_app.command("consensus")
+def selection_consensus(
+    input_path: Path = typer.Option(
+        ...,
+        "--input",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="Canonical lab Parquet containing the full document pool.",
+    ),
+    method: list[str] = typer.Option(
+        ...,
+        "--method",
+        help="Method contributing to the consensus. Repeat at least twice.",
+    ),
+    n_select: int = typer.Option(
+        ...,
+        "--n",
+        min=1,
+        help="Exact FINAL number of NEW consensus documents to select.",
+    ),
+    output_dir: Path = typer.Option(
+        ...,
+        "--output-dir",
+        help=(
+            "Directory for consensus selected.parquet, ranking.parquet, "
+            "history.parquet and manifest.json."
+        ),
+    ),
+    selected: list[Path] = typer.Option(
+        [],
+        "--selected",
+        help=(
+            "Previous canonical selected.parquet or selection history/ranking "
+            "Parquet. Repeat to union several previous selections."
+        ),
+    ),
+    representation: Optional[str] = typer.Option(
+        None,
+        "--representation",
+        help="Shared representation computed for compatible methods.",
+    ),
+    representations_path: Optional[Path] = typer.Option(
+        None,
+        "--representations",
+        exists=True,
+        dir_okay=False,
+        help="Shared precomputed doc_id | embedding Parquet.",
+    ),
+    scores_path: Optional[Path] = typer.Option(
+        None,
+        "--scores",
+        exists=True,
+        dir_okay=False,
+        help="Shared doc_id | score Parquet for model-based methods.",
+    ),
+    probabilities_path: Optional[Path] = typer.Option(
+        None,
+        "--probabilities",
+        exists=True,
+        dir_okay=False,
+        help=(
+            "Shared doc_id | probabilities Parquet for methods such as "
+            "PATRON and DEUCE."
+        ),
+    ),
+    seed: int = typer.Option(
+        13,
+        "--seed",
+        "--random-state",
+        help="Shared random seed recorded in the run manifest.",
+    ),
+    round_number: Optional[int] = typer.Option(
+        None,
+        "--round",
+        min=1,
+        help="Annotation round. Inferred from previous history when omitted.",
+    ),
+    method_weight: list[str] = typer.Option(
+        [],
+        "--method-weight",
+        metavar="METHOD=WEIGHT",
+        help=(
+            "Optional positive vote weight for one participating method. "
+            "Repeat as needed; unspecified methods have weight 1."
+        ),
+    ),
+    method_param: list[str] = typer.Option(
+        [],
+        "--method-param",
+        metavar="KEY=VALUE",
+        help="Parameter applied to each compatible method.",
+    ),
+    representation_param: list[str] = typer.Option(
+        [],
+        "--representation-param",
+        metavar="KEY=VALUE",
+        help="Shared representation parameter.",
+    ),
+) -> None:
+    """Select one exact batch by majority voting across several methods.
+
+    Every participating selector independently chooses N documents and produces
+    one score for every remaining candidate. The final batch is NOT N per method:
+    it contains exactly N documents total.
+
+    Primary ordering is weighted majority vote. Ties are resolved with a
+    weighted Borda-style fusion of the full candidate rankings, so every method
+    contributes information for every document.
+
+    Previous selections supplied through --selected are excluded and are passed
+    to conditional methods, enabling iterative active-learning rounds.
+    """
+    from lab.selection.api import consensus_select_documents
+
+    weights = _parse_key_values(
+        method_weight,
+        "--method-weight",
+    )
+
+    run = consensus_select_documents(
+        input_path,
+        output_dir,
+        method,
+        n_select,
+        selected=selected or None,
+        representation=representation,
+        representations_path=representations_path,
+        scores_path=scores_path,
+        probabilities_path=probabilities_path,
+        random_state=seed,
+        round_number=round_number,
+        method_params=_parse_key_values(
+            method_param,
+            "--method-param",
+        ),
+        representation_params=_parse_key_values(
+            representation_param,
+            "--representation-param",
+        ),
+        method_weights=weights or None,
+    )
+
+    typer.echo(f"round: {run.round_number}")
+    typer.echo(f"consensus selected: {len(run.selected_doc_ids)}")
+    for rank, doc_id in enumerate(
+        run.selected_doc_ids,
+        start=1,
+    ):
+        typer.echo(f"  {rank:02d}. {doc_id}")
+    typer.echo(f"selected parquet: {run.selected_path}")
+    typer.echo(f"ranking parquet: {run.ranking_path}")
+    typer.echo(f"history parquet: {run.history_path}")
+    typer.echo(f"manifest: {run.manifest_path}")
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Console-script entry point preserving the existing integer-return convention."""
     command = typer.main.get_command(app)
