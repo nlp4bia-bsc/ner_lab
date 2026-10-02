@@ -1,0 +1,182 @@
+{
+  "artifact": "ner_error_analysis",
+  "schema_version": "2.0.0",
+  "run_id": "fold_03",
+  "official_evaluator": "lab.ner.evaluation.span_metrics",
+  "official_metrics": {
+    "span_strict_precision": 0.6631,
+    "span_strict_recall": 0.7227,
+    "span_strict_f1": 0.6916,
+    "span_strict_correct": 185,
+    "span_strict_incorrect": 10,
+    "span_strict_partial": 0,
+    "span_strict_missed": 61,
+    "span_strict_spurious": 84,
+    "span_exact_precision": 0.6631,
+    "span_exact_recall": 0.7227,
+    "span_exact_f1": 0.6916,
+    "span_exact_correct": 185,
+    "span_exact_incorrect": 10,
+    "span_exact_partial": 0,
+    "span_exact_missed": 61,
+    "span_exact_spurious": 84,
+    "span_partial_precision": 0.681,
+    "span_partial_recall": 0.7422,
+    "span_partial_f1": 0.7103,
+    "span_partial_correct": 185,
+    "span_partial_incorrect": 0,
+    "span_partial_partial": 10,
+    "span_partial_missed": 61,
+    "span_partial_spurious": 84,
+    "span_type_precision": 0.6989,
+    "span_type_recall": 0.7617,
+    "span_type_f1": 0.729,
+    "span_type_correct": 195,
+    "span_type_incorrect": 0,
+    "span_type_partial": 0,
+    "span_type_missed": 61,
+    "span_type_spurious": 84,
+    "char_precision": 0.7133,
+    "char_recall": 0.7799,
+    "char_f1": 0.7451,
+    "char_correct": 1478,
+    "char_missed": 417,
+    "char_spurious": 594
+  },
+  "labels": [
+    "Alcohol"
+  ],
+  "multiclass": false,
+  "inputs": {
+    "predictions": {
+      "kind": "file",
+      "path": "assets/predictions.tsv",
+      "sha256": "ca4073a0bef63f43a0e3f39dd7be2a1b666c5b72bd08bc054dafb50d1a5ba3fd"
+    },
+    "gold": {
+      "kind": "file",
+      "path": "assets/gold.tsv",
+      "sha256": "d9c50a2c381afdb08722f3e3f9f9aef2c2f34093aee4ff6e1eb99d510e2b2c5b"
+    },
+    "training": {
+      "kind": "file",
+      "path": "assets/fold_03.parquet",
+      "sha256": "165dc7fc3503093d46b43e0c33a5f3ffb1b1a644b6181ba0ed3ab57af460d1ec"
+    }
+  },
+  "counts": {
+    "gold_entities": 256,
+    "predicted_entities": 279,
+    "training_entities": 1519,
+    "gold_duplicates": 10,
+    "prediction_duplicates": 0,
+    "training_duplicates": 17
+  },
+  "generalization": {
+    "classes": [
+      "SEEN",
+      "FEW_SHOT",
+      "ZERO_SHOT"
+    ],
+    "seen_definition": "raw mention surface occurs exactly in training",
+    "few_shot_definition": "not exact-seen and nearest normalized Levenshtein similarity >= 0.8",
+    "zero_shot_definition": "not exact-seen and nearest normalized Levenshtein similarity < 0.8, or no training neighbour",
+    "levenshtein_threshold": 0.8,
+    "similarity_backend": "rapidfuzz.Levenshtein.normalized_similarity",
+    "normalization": {
+      "unicode_form": "NFKC",
+      "strip": true,
+      "casefold": true,
+      "collapse_whitespace": true
+    },
+    "unique_training_mentions": 282,
+    "cache_hits": 2994
+  },
+  "diagnostics": {
+    "strict_pairing": "diagnostic FP/FN association never changes official STRICT credit",
+    "error_types": [
+      "CORRECT",
+      "MISSED",
+      "SPURIOUS",
+      "LABEL_ERROR",
+      "BOUNDARY_ERROR",
+      "BOUNDARY_AND_LABEL_ERROR"
+    ],
+    "min_overlap_percentage": 40.0
+  },
+  "bootstrap": {
+    "samples": 2000,
+    "confidence": 0.95,
+    "seed": 13,
+    "unit": "document"
+  },
+  "visualization": {
+    "profile": "publication_svg_v2",
+    "vector_format": "SVG",
+    "color_palette": "Okabe-Ito",
+    "category_tick_rotation_degrees": 0,
+    "top_spine": false,
+    "right_spine": false,
+    "default_grid": false,
+    "support_annotations": true,
+    "bootstrap_ci_on_generalization_f1": true,
+    "uninformative_plots_are_omitted": true
+  },
+  "verbose": 1,
+  "outputs": {
+    "evaluation": "analysis/fold_03_v2/evaluation.parquet",
+    "tables": {
+      "overall_metrics": "analysis/fold_03_v2/tables/overall_metrics.parquet",
+      "metrics_by_generalization": "analysis/fold_03_v2/tables/metrics_by_generalization.parquet",
+      "gold_recall_by_generalization": "analysis/fold_03_v2/tables/gold_recall_by_generalization.parquet",
+      "generalization_error_profile": "analysis/fold_03_v2/tables/generalization_error_profile.parquet",
+      "metrics_by_similarity": "analysis/fold_03_v2/tables/metrics_by_similarity.parquet",
+      "metrics_by_training_frequency": "analysis/fold_03_v2/tables/metrics_by_training_frequency.parquet",
+      "metrics_by_label": "analysis/fold_03_v2/tables/metrics_by_label.parquet",
+      "metrics_by_label_generalization": "analysis/fold_03_v2/tables/metrics_by_label_generalization.parquet",
+      "metrics_by_entity_length": "analysis/fold_03_v2/tables/metrics_by_entity_length.parquet",
+      "metrics_by_acronym": "analysis/fold_03_v2/tables/metrics_by_acronym.parquet",
+      "metrics_by_overlap": "analysis/fold_03_v2/tables/metrics_by_overlap.parquet",
+      "metrics_by_nested": "analysis/fold_03_v2/tables/metrics_by_nested.parquet",
+      "error_taxonomy": "analysis/fold_03_v2/tables/error_taxonomy.parquet",
+      "error_type_pareto": "analysis/fold_03_v2/tables/error_type_pareto.parquet",
+      "boundary_errors": "analysis/fold_03_v2/tables/boundary_errors.parquet",
+      "boundary_summary": "analysis/fold_03_v2/tables/boundary_summary.parquet",
+      "label_confusion_counts": "analysis/fold_03_v2/tables/label_confusion_counts.parquet",
+      "label_confusion_normalized": "analysis/fold_03_v2/tables/label_confusion_normalized.parquet",
+      "label_confusion_extended": "analysis/fold_03_v2/tables/label_confusion_extended.parquet",
+      "document_metrics": "analysis/fold_03_v2/tables/document_metrics.parquet",
+      "dataset_shift_labels": "analysis/fold_03_v2/tables/dataset_shift_labels.parquet",
+      "dataset_shift_summary": "analysis/fold_03_v2/tables/dataset_shift_summary.parquet",
+      "oracle_error_budget": "analysis/fold_03_v2/tables/oracle_error_budget.parquet",
+      "confidence_by_error": "analysis/fold_03_v2/tables/confidence_by_error.parquet",
+      "confidence_summary": "analysis/fold_03_v2/tables/confidence_summary.parquet",
+      "confidence_threshold_sweep": "analysis/fold_03_v2/tables/confidence_threshold_sweep.parquet",
+      "error_pareto": "analysis/fold_03_v2/tables/error_pareto.parquet",
+      "error_intersections": "analysis/fold_03_v2/tables/error_intersections.parquet",
+      "bootstrap_intervals": "analysis/fold_03_v2/tables/bootstrap_intervals.parquet",
+      "gold_annotation_audit": "analysis/fold_03_v2/tables/gold_annotation_audit.parquet",
+      "prediction_annotation_audit": "analysis/fold_03_v2/tables/prediction_annotation_audit.parquet",
+      "training_annotation_audit": "analysis/fold_03_v2/tables/training_annotation_audit.parquet"
+    },
+    "figures": [
+      "analysis/fold_03_v2/figures/generalization_strict_prf.svg",
+      "analysis/fold_03_v2/figures/generalization_character_prf.svg",
+      "analysis/fold_03_v2/figures/generalization_error_profile.svg",
+      "analysis/fold_03_v2/figures/training_frequency_vs_strict_f1.svg",
+      "analysis/fold_03_v2/figures/entity_length_strict_f1.svg",
+      "analysis/fold_03_v2/figures/structural_effects_strict_f1.svg",
+      "analysis/fold_03_v2/figures/error_taxonomy.svg",
+      "analysis/fold_03_v2/figures/error_type_pareto.svg",
+      "analysis/fold_03_v2/figures/error_surface_pareto.svg",
+      "analysis/fold_03_v2/figures/span_start_delta.svg",
+      "analysis/fold_03_v2/figures/span_end_delta.svg",
+      "analysis/fold_03_v2/figures/boundary_absolute_delta.svg",
+      "analysis/fold_03_v2/figures/oracle_error_budget.svg",
+      "analysis/fold_03_v2/figures/dataset_shift_labels.svg",
+      "analysis/fold_03_v2/figures/document_performance_distribution.svg"
+    ],
+    "figure_captions": "analysis/fold_03_v2/captions.md",
+    "plot_manifest": "analysis/fold_03_v2/figures/plot_manifest.json"
+  }
+}

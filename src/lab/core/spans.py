@@ -6,10 +6,140 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 SPAN_COLUMNS = ["filename", "label", "start_span", "end_span", "text"]
 SCORED_SPAN_COLUMNS = [*SPAN_COLUMNS, "score"]
+
+# Common aliases produced by scorers/shared-task resources. Canonical names win
+# when both are present. Keeping this here makes span ingestion reusable by NER
+# evaluation, analysis and any future task that consumes span tables.
+SPAN_ALIASES = {
+    "doc_id": "filename",
+    "document_id": "filename",
+    "off0": "start_span",
+    "start": "start_span",
+    "off1": "end_span",
+    "end": "end_span",
+    "span": "text",
+    "entity_type": "label",
+    "type": "label",
+    "confidence": "score",
+}
+
+
+def validate_spans(
+    spans: pd.DataFrame,
+    *,
+    scored: bool | None = None,
+) -> pd.DataFrame:
+    """Validate a span table without deduplicating or reordering its rows.
+
+    Parameters
+    ----------
+    spans:
+        Input span frame. Canonical columns are ``filename | label |
+        start_span | end_span | text``. A small set of unambiguous aliases is
+        accepted when the canonical column is absent.
+    scored:
+        ``True`` requires a numeric ``score`` column in ``[0, 1]``;
+        ``False`` returns only the unscored canonical columns; ``None`` keeps
+        and validates ``score`` when it is present.
+
+    Notes
+    -----
+    This validator deliberately preserves duplicates. Duplicate removal is an
+    output-construction policy of :func:`span_dataframe`, whereas evaluation
+    and error analysis must be able to detect duplicate gold/prediction rows.
+    """
+    if not isinstance(spans, pd.DataFrame):
+        raise TypeError(f"Expected a pandas DataFrame, received {type(spans).__name__}.")
+
+    frame = spans.copy()
+    rename: dict[str, str] = {}
+
+    for source, target in SPAN_ALIASES.items():
+        if target not in frame.columns and source in frame.columns:
+            rename[source] = target
+
+    if rename:
+        frame = frame.rename(columns=rename)
+
+    missing = [column for column in SPAN_COLUMNS if column not in frame.columns]
+    if missing:
+        raise ValueError(
+            f"Span frame is missing columns {missing}. Required: {SPAN_COLUMNS}."
+        )
+
+    canonical = frame[SPAN_COLUMNS].copy()
+    canonical["filename"] = canonical["filename"].astype(str)
+    canonical["label"] = canonical["label"].astype(str)
+    canonical["text"] = canonical["text"].astype(str)
+
+    for column in ("start_span", "end_span"):
+        numeric = pd.to_numeric(canonical[column], errors="raise")
+        if numeric.isna().any() or not np.isfinite(numeric.to_numpy(dtype=float)).all():
+            raise ValueError(f"Span column {column!r} contains non-finite values.")
+        if not np.allclose(numeric.to_numpy(dtype=float), numeric.to_numpy(dtype=float).astype(np.int64)):
+            raise ValueError(f"Span column {column!r} must contain integer offsets.")
+        canonical[column] = numeric.astype("int64")
+
+    if not canonical.empty:
+        if (canonical["start_span"] < 0).any():
+            raise ValueError("Invalid spans detected: start_span < 0.")
+        if (canonical["end_span"] <= canonical["start_span"]).any():
+            raise ValueError("Invalid spans detected: end_span <= start_span.")
+
+    has_score = "score" in frame.columns
+    if scored is True and not has_score:
+        raise ValueError("A scored span frame requires a 'score' column.")
+
+    keep_score = has_score and scored is not False
+    if keep_score:
+        score = pd.to_numeric(frame["score"], errors="raise").astype("float64")
+        values = score.to_numpy(dtype=float)
+        if score.isna().any() or not np.isfinite(values).all():
+            raise ValueError("Prediction scores must be finite numeric values.")
+        if ((score < 0.0) | (score > 1.0)).any():
+            raise ValueError("Prediction scores must lie in the closed interval [0, 1].")
+        canonical["score"] = score.to_numpy()
+
+    return canonical.reset_index(drop=True)
+
+
+def read_spans(
+    value: pd.DataFrame | str | Path,
+    *,
+    scored: bool | None = None,
+) -> pd.DataFrame:
+    """Read canonical spans from a DataFrame, TSV or Parquet file.
+
+    The function is intentionally lossless with respect to row multiplicity:
+    duplicate annotations/predictions are preserved so downstream audits can
+    report them. Use :func:`span_dataframe` when constructing inference output
+    where window-level duplicates should be collapsed.
+    """
+    if isinstance(value, pd.DataFrame):
+        return validate_spans(value, scored=scored)
+
+    path = Path(value)
+    if not path.exists():
+        raise FileNotFoundError(f"Span input does not exist: {path}")
+    if not path.is_file():
+        raise ValueError(f"Expected a span file, received: {path}")
+
+    suffix = path.suffix.lower()
+    if suffix == ".parquet":
+        frame = pd.read_parquet(path)
+    elif suffix in {".tsv", ".txt"}:
+        frame = pd.read_csv(path, sep="\t", dtype=None, keep_default_na=False)
+    else:
+        raise ValueError(
+            f"Unsupported span input {path}. Expected .tsv or .parquet."
+        )
+
+    return validate_spans(frame, scored=scored)
 
 
 def span_dataframe(

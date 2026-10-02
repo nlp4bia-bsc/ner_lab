@@ -35,6 +35,8 @@ ner = [
     "optuna>=4.9.0",  # required by ray.tune.search.optuna
     "codecarbon>=3.2.9",
     "nvidia-ml-py>=12.0.0",  # imported as pynvml; the pynvml distribution is deprecated
+    "rapidfuzz>=3.0",
+    "matplotlib>=3.8",
 ]
 nel = [
     "lab[torch]",

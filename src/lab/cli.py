@@ -38,7 +38,27 @@ selection_app = typer.Typer(
         "options so each new batch excludes documents already chosen."
     ),
 )
+ner_app = typer.Typer(
+    name="ner",
+    no_args_is_help=True,
+    add_completion=False,
+    rich_markup_mode="rich",
+    help="Clinical Named Entity Recognition workflows and diagnostics.",
+)
+ner_analysis_app = typer.Typer(
+    name="analysis",
+    no_args_is_help=True,
+    add_completion=False,
+    rich_markup_mode="rich",
+    help=(
+        "Analyze NER predictions using the repository's canonical evaluator plus boundary, "
+        "label, lexical-generalization, confidence and publication diagnostics."
+    ),
+)
 app.add_typer(selection_app, name="selection")
+app.add_typer(ner_app, name="ner")
+ner_app.add_typer(ner_analysis_app, name="analysis")
+
 
 def load_config(path: str | Path) -> dict[str, Any]:
     with Path(path).open(encoding="utf-8") as file:
@@ -50,6 +70,7 @@ def load_config(path: str | Path) -> dict[str, Any]:
         )
 
     return config
+
 
 def _version_callback(value: bool) -> None:
     if value:
@@ -69,9 +90,16 @@ def root(
 ) -> None:
     """Top-level lab command."""
 
+
 @app.command("run")
 def run_command(
-    config: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True, help="YAML task configuration."),
+    config: Path = typer.Argument(
+        ...,
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="YAML task configuration.",
+    ),
     random_state: Optional[int] = typer.Option(
         None,
         "--random-state",
@@ -124,8 +152,15 @@ def _parse_key_values(values: Sequence[str], option_name: str) -> dict[str, Any]
         parsed[key] = yaml.safe_load(raw)
     return parsed
 
+
 def _yes_no(value: bool) -> str:
     return "yes" if value else "no"
+
+
+# ---------------------------------------------------------------------------
+# Selection CLI (existing functionality retained)
+# ---------------------------------------------------------------------------
+
 
 @selection_app.command("methods")
 def selection_methods() -> None:
@@ -145,7 +180,10 @@ def selection_methods() -> None:
         )
         for row in rows
     ]
-    widths = [max(len(headers[i]), *(len(str(row[i])) for row in values)) for i in range(len(headers))]
+    widths = [
+        max(len(headers[i]), *(len(str(row[i])) for row in values))
+        for i in range(len(headers))
+    ]
     typer.echo("  ".join(headers[i].ljust(widths[i]) for i in range(len(headers))))
     typer.echo("  ".join("-" * width for width in widths))
     for row in values:
@@ -180,6 +218,7 @@ def selection_method(
         for key, description in info.parameters.items():
             typer.echo(f"  {key}: {description}")
 
+
 @selection_app.command("representations")
 def selection_representations() -> None:
     """List document representations available to representation-based selectors."""
@@ -188,12 +227,16 @@ def selection_representations() -> None:
     rows = list_representations()
     headers = ("Representation", "Family", "Model")
     values = [(row.name, row.family, _yes_no(row.requires_model)) for row in rows]
-    widths = [max(len(headers[i]), *(len(str(row[i])) for row in values)) for i in range(len(headers))]
+    widths = [
+        max(len(headers[i]), *(len(str(row[i])) for row in values))
+        for i in range(len(headers))
+    ]
     typer.echo("  ".join(headers[i].ljust(widths[i]) for i in range(len(headers))))
     typer.echo("  ".join("-" * width for width in widths))
     for row in values:
         typer.echo("  ".join(str(row[i]).ljust(widths[i]) for i in range(len(headers))))
     typer.echo("\nUse `lab selection representation NAME` for configuration details.")
+
 
 @selection_app.command("validate")
 def selection_validate(
@@ -209,23 +252,10 @@ def selection_validate(
         ),
     ),
 ) -> None:
-    """Validate a corpus before using it for document selection.
-
-    Validation delegates to lab.core.read_corpus(), so this command applies
-    exactly the same canonical corpus contract used by the rest of the library.
-
-    The command checks the canonical schema and corpus invariants, then reports
-    the number of documents, annotated/unannotated documents, entities and the
-    SHA-256 fingerprint of the input file.
-
-    Example:
-
-        lab selection validate --input documents.parquet
-    """
+    """Validate a corpus before using it for document selection."""
     from lab.selection.api import validate_selection_input
 
     summary = validate_selection_input(input_path)
-
     typer.echo(f"path: {summary['path']}")
     typer.echo(f"documents: {summary['n_documents']}")
     typer.echo(f"annotated documents: {summary['n_annotated_documents']}")
@@ -233,6 +263,7 @@ def selection_validate(
     typer.echo(f"entities: {summary['n_entities']}")
     typer.echo(f"columns: {', '.join(summary['columns'])}")
     typer.echo(f"sha256: {summary['sha256']}")
+
 
 @selection_app.command("representation")
 def selection_representation(
@@ -295,60 +326,16 @@ def selection_select(
             "Repeat to union several previous/manual selections."
         ),
     ),
-    representation: Optional[str] = typer.Option(
-        None,
-        "--representation",
-        help="Compute this representation from the input corpus for a representation-based method.",
-    ),
-    representations_path: Optional[Path] = typer.Option(
-        None,
-        "--representations",
-        exists=True,
-        dir_okay=False,
-        help="Reuse a precomputed doc_id | embedding Parquet instead of recomputing representations.",
-    ),
-    scores_path: Optional[Path] = typer.Option(
-        None,
-        "--scores",
-        exists=True,
-        dir_okay=False,
-        help="Task-produced doc_id | score Parquet for uncertainty/model-based methods.",
-    ),
-    probabilities_path: Optional[Path] = typer.Option(
-        None,
-        "--probabilities",
-        exists=True,
-        dir_okay=False,
-        help="Task-produced doc_id | probabilities Parquet for methods such as PATRON and DEUCE.",
-    ),
+    representation: Optional[str] = typer.Option(None, "--representation", help="Compute this representation from the input corpus for a representation-based method."),
+    representations_path: Optional[Path] = typer.Option(None, "--representations", exists=True, dir_okay=False, help="Reuse a precomputed doc_id | embedding Parquet instead of recomputing representations."),
+    scores_path: Optional[Path] = typer.Option(None, "--scores", exists=True, dir_okay=False, help="Task-produced doc_id | score Parquet for uncertainty/model-based methods."),
+    probabilities_path: Optional[Path] = typer.Option(None, "--probabilities", exists=True, dir_okay=False, help="Task-produced doc_id | probabilities Parquet for methods such as PATRON and DEUCE."),
     seed: int = typer.Option(13, "--seed", "--random-state", help="Random seed recorded in the run manifest."),
     round_number: Optional[int] = typer.Option(None, "--round", min=1, help="Annotation round. Inferred from previous history when omitted."),
-    method_param: list[str] = typer.Option(
-        [],
-        "--method-param",
-        metavar="KEY=VALUE",
-        help="Method-specific parameter. Repeat as needed; inspect `lab selection method NAME` first.",
-    ),
-    representation_param: list[str] = typer.Option(
-        [],
-        "--representation-param",
-        metavar="KEY=VALUE",
-        help="Representation-specific parameter. Repeat as needed.",
-    ),
+    method_param: list[str] = typer.Option([], "--method-param", metavar="KEY=VALUE", help="Method-specific parameter. Repeat as needed; inspect `lab selection method NAME` first."),
+    representation_param: list[str] = typer.Option([], "--representation-param", metavar="KEY=VALUE", help="Representation-specific parameter. Repeat as needed."),
 ) -> None:
-    """Select the next N documents while excluding all documents selected previously.
-
-    Examples:
-
-      lab selection select --input documents.parquet --method random --n 25 --output-dir runs/random/round_001
-
-      lab selection select --input documents.parquet --method typiclust --representation tfidf --n 25 --output-dir runs/typiclust/round_001
-
-      lab selection select --input documents.parquet --selected runs/typiclust/round_001/history.parquet --method typiclust --representation tfidf --n 25 --output-dir runs/typiclust/round_002
-
-    For controlled comparisons, precompute embeddings with `lab selection represent`
-    and pass the same file through --representations to every compatible method.
-    """
+    """Select the next N documents while excluding all documents selected previously."""
     from lab.selection.api import select_documents
 
     run = select_documents(
@@ -422,127 +409,27 @@ def selection_compare(
     typer.echo(path)
 
 
-
 @selection_app.command("consensus")
 def selection_consensus(
-    input_path: Path = typer.Option(
-        ...,
-        "--input",
-        exists=True,
-        dir_okay=False,
-        readable=True,
-        help="Canonical lab Parquet containing the full document pool.",
-    ),
-    method: list[str] = typer.Option(
-        ...,
-        "--method",
-        help="Method contributing to the consensus. Repeat at least twice.",
-    ),
-    n_select: int = typer.Option(
-        ...,
-        "--n",
-        min=1,
-        help="Exact FINAL number of NEW consensus documents to select.",
-    ),
-    output_dir: Path = typer.Option(
-        ...,
-        "--output-dir",
-        help=(
-            "Directory for consensus selected.parquet, ranking.parquet, "
-            "history.parquet and manifest.json."
-        ),
-    ),
-    selected: list[Path] = typer.Option(
-        [],
-        "--selected",
-        help=(
-            "Previous canonical selected.parquet or selection history/ranking "
-            "Parquet. Repeat to union several previous selections."
-        ),
-    ),
-    representation: Optional[str] = typer.Option(
-        None,
-        "--representation",
-        help="Shared representation computed for compatible methods.",
-    ),
-    representations_path: Optional[Path] = typer.Option(
-        None,
-        "--representations",
-        exists=True,
-        dir_okay=False,
-        help="Shared precomputed doc_id | embedding Parquet.",
-    ),
-    scores_path: Optional[Path] = typer.Option(
-        None,
-        "--scores",
-        exists=True,
-        dir_okay=False,
-        help="Shared doc_id | score Parquet for model-based methods.",
-    ),
-    probabilities_path: Optional[Path] = typer.Option(
-        None,
-        "--probabilities",
-        exists=True,
-        dir_okay=False,
-        help=(
-            "Shared doc_id | probabilities Parquet for methods such as "
-            "PATRON and DEUCE."
-        ),
-    ),
-    seed: int = typer.Option(
-        13,
-        "--seed",
-        "--random-state",
-        help="Shared random seed recorded in the run manifest.",
-    ),
-    round_number: Optional[int] = typer.Option(
-        None,
-        "--round",
-        min=1,
-        help="Annotation round. Inferred from previous history when omitted.",
-    ),
-    method_weight: list[str] = typer.Option(
-        [],
-        "--method-weight",
-        metavar="METHOD=WEIGHT",
-        help=(
-            "Optional positive vote weight for one participating method. "
-            "Repeat as needed; unspecified methods have weight 1."
-        ),
-    ),
-    method_param: list[str] = typer.Option(
-        [],
-        "--method-param",
-        metavar="KEY=VALUE",
-        help="Parameter applied to each compatible method.",
-    ),
-    representation_param: list[str] = typer.Option(
-        [],
-        "--representation-param",
-        metavar="KEY=VALUE",
-        help="Shared representation parameter.",
-    ),
+    input_path: Path = typer.Option(..., "--input", exists=True, dir_okay=False, readable=True, help="Canonical lab Parquet containing the full document pool."),
+    method: list[str] = typer.Option(..., "--method", help="Method contributing to the consensus. Repeat at least twice."),
+    n_select: int = typer.Option(..., "--n", min=1, help="Exact FINAL number of NEW consensus documents to select."),
+    output_dir: Path = typer.Option(..., "--output-dir", help="Directory for consensus selected.parquet, ranking.parquet, history.parquet and manifest.json."),
+    selected: list[Path] = typer.Option([], "--selected", help="Previous canonical selected.parquet or selection history/ranking Parquet. Repeat to union several previous selections."),
+    representation: Optional[str] = typer.Option(None, "--representation", help="Shared representation computed for compatible methods."),
+    representations_path: Optional[Path] = typer.Option(None, "--representations", exists=True, dir_okay=False, help="Shared precomputed doc_id | embedding Parquet."),
+    scores_path: Optional[Path] = typer.Option(None, "--scores", exists=True, dir_okay=False, help="Shared doc_id | score Parquet for model-based methods."),
+    probabilities_path: Optional[Path] = typer.Option(None, "--probabilities", exists=True, dir_okay=False, help="Shared doc_id | probabilities Parquet for methods such as PATRON and DEUCE."),
+    seed: int = typer.Option(13, "--seed", "--random-state", help="Shared random seed recorded in the run manifest."),
+    round_number: Optional[int] = typer.Option(None, "--round", min=1, help="Annotation round. Inferred from previous history when omitted."),
+    method_weight: list[str] = typer.Option([], "--method-weight", metavar="METHOD=WEIGHT", help="Optional positive vote weight for one participating method. Repeat as needed; unspecified methods have weight 1."),
+    method_param: list[str] = typer.Option([], "--method-param", metavar="KEY=VALUE", help="Parameter applied to each compatible method."),
+    representation_param: list[str] = typer.Option([], "--representation-param", metavar="KEY=VALUE", help="Shared representation parameter."),
 ) -> None:
-    """Select one exact batch by majority voting across several methods.
-
-    Every participating selector independently chooses N documents and produces
-    one score for every remaining candidate. The final batch is NOT N per method:
-    it contains exactly N documents total.
-
-    Primary ordering is weighted majority vote. Ties are resolved with a
-    weighted Borda-style fusion of the full candidate rankings, so every method
-    contributes information for every document.
-
-    Previous selections supplied through --selected are excluded and are passed
-    to conditional methods, enabling iterative active-learning rounds.
-    """
+    """Select one exact batch by majority voting across several methods."""
     from lab.selection.api import consensus_select_documents
 
-    weights = _parse_key_values(
-        method_weight,
-        "--method-weight",
-    )
-
+    weights = _parse_key_values(method_weight, "--method-weight")
     run = consensus_select_documents(
         input_path,
         output_dir,
@@ -555,28 +442,105 @@ def selection_consensus(
         probabilities_path=probabilities_path,
         random_state=seed,
         round_number=round_number,
-        method_params=_parse_key_values(
-            method_param,
-            "--method-param",
-        ),
-        representation_params=_parse_key_values(
-            representation_param,
-            "--representation-param",
-        ),
+        method_params=_parse_key_values(method_param, "--method-param"),
+        representation_params=_parse_key_values(representation_param, "--representation-param"),
         method_weights=weights or None,
     )
-
     typer.echo(f"round: {run.round_number}")
     typer.echo(f"consensus selected: {len(run.selected_doc_ids)}")
-    for rank, doc_id in enumerate(
-        run.selected_doc_ids,
-        start=1,
-    ):
+    for rank, doc_id in enumerate(run.selected_doc_ids, start=1):
         typer.echo(f"  {rank:02d}. {doc_id}")
     typer.echo(f"selected parquet: {run.selected_path}")
     typer.echo(f"ranking parquet: {run.ranking_path}")
     typer.echo(f"history parquet: {run.history_path}")
     typer.echo(f"manifest: {run.manifest_path}")
+
+
+# ---------------------------------------------------------------------------
+# NER analysis CLI
+# ---------------------------------------------------------------------------
+
+
+@ner_analysis_app.command("run")
+def ner_analysis_run(
+    predictions: Path = typer.Option(..., "--predictions", exists=True, dir_okay=False, readable=True, help="Prediction span table (.tsv or .parquet); score is optional."),
+    gold: Path = typer.Option(..., "--gold", exists=True, dir_okay=False, readable=True, help="Gold span table (.tsv or .parquet)."),
+    training: Path = typer.Option(..., "--training", exists=True, dir_okay=False, readable=True, help="Training canonical documents.parquet or span table (.tsv/.parquet)."),
+    output_dir: Path = typer.Option(..., "--output-dir", help="Directory for evaluation.parquet, tables, manifest and optional SVG figures."),
+    run_id: str = typer.Option("analysis", "--run-id", help="Stable identifier stored in artifacts and event rows."),
+    levenshtein_threshold: float = typer.Option(0.80, "--levenshtein-threshold", min=0.0, max=1.0, help="Threshold separating lexical FEW_SHOT from ZERO_SHOT after exact SEEN matching."),
+    min_overlap_percentage: float = typer.Option(40.0, "--min-overlap-percentage", min=0.0, max=100.0, help="Existing nervaluate overlap parameter passed to canonical scoring."),
+    bootstrap_samples: int = typer.Option(2000, "--bootstrap-samples", min=0, help="Document-level bootstrap samples; 0 disables bootstrap."),
+    bootstrap_confidence: float = typer.Option(0.95, "--bootstrap-confidence", min=0.01, max=0.999, help="Bootstrap confidence level."),
+    seed: int = typer.Option(13, "--seed", "--random-state", help="Bootstrap/random seed recorded in the manifest."),
+    verbose: int = typer.Option(0, "--verbose", min=0, max=1, help="0: Parquet/manifest only; 1: also generate publication SVG figures and detailed console summary."),
+    evaluation_documents: Optional[Path] = typer.Option(None, "--evaluation-documents", exists=True, dir_okay=False, readable=True, help="Optional canonical document Parquet for surface/offset integrity checks."),
+    training_documents: Optional[Path] = typer.Option(None, "--training-documents", exists=True, dir_okay=False, readable=True, help="Optional canonical training document Parquet when --training is a span table."),
+) -> None:
+    """Run STRICT/character evaluation plus boundary, label and generalization analysis."""
+    from lab.ner.analysis import analyze_evaluation
+
+    result = analyze_evaluation(
+        predictions,
+        gold,
+        training,
+        output_dir,
+        run_id=run_id,
+        levenshtein_threshold=levenshtein_threshold,
+        min_overlap_percentage=min_overlap_percentage,
+        bootstrap_samples=bootstrap_samples,
+        bootstrap_confidence=bootstrap_confidence,
+        random_state=seed,
+        verbose=verbose,
+        evaluation_documents=evaluation_documents,
+        training_documents=training_documents,
+    )
+    typer.echo(f"run: {run_id}")
+    typer.echo(f"multiclass: {_yes_no(result.multiclass)}")
+    typer.echo(f"STRICT F1: {result.metrics.get('span_strict_f1', 0.0):.4f}")
+    typer.echo(f"character F1: {result.metrics.get('char_f1', 0.0):.4f}")
+    typer.echo(f"evaluation parquet: {result.evaluation_path}")
+    typer.echo(f"tables: {len(result.table_paths)}")
+    typer.echo(f"figures: {len(result.figure_paths)}")
+    typer.echo(f"manifest: {result.manifest_path}")
+
+
+@ner_analysis_app.command("inspect")
+def ner_analysis_inspect(
+    path: Path = typer.Argument(..., exists=True, readable=True, help="Analysis directory, manifest.json or evaluation.parquet."),
+) -> None:
+    """Print official and SEEN/FEW_SHOT/ZERO_SHOT metrics from an existing analysis."""
+    from lab.ner.analysis import inspect_analysis
+
+    summary = inspect_analysis(path)
+    typer.echo(f"run: {summary.get('run_id')}")
+    typer.echo(f"multiclass: {_yes_no(bool(summary.get('multiclass')))}")
+    typer.echo(f"labels: {', '.join(map(str, summary.get('labels', [])))}")
+    metrics = summary.get("official_metrics", {})
+    typer.echo(f"STRICT P/R/F1: {metrics.get('span_strict_precision', 0.0):.4f} / {metrics.get('span_strict_recall', 0.0):.4f} / {metrics.get('span_strict_f1', 0.0):.4f}")
+    typer.echo(f"character P/R/F1: {metrics.get('char_precision', 0.0):.4f} / {metrics.get('char_recall', 0.0):.4f} / {metrics.get('char_f1', 0.0):.4f}")
+    if summary.get("metrics_by_generalization"):
+        typer.echo("\nGeneralization:")
+        for row in summary["metrics_by_generalization"]:
+            typer.echo(
+                f"  {row['value']:<10} strict F1={row['strict_f1']:.4f} "
+                f"char F1={row['char_f1']:.4f} support={row['support']}"
+            )
+
+
+@ner_analysis_app.command("report")
+def ner_analysis_report(
+    analysis_dir: Path = typer.Option(..., "--analysis-dir", exists=True, file_okay=False, readable=True, help="Existing analysis directory containing manifest.json and tables/."),
+    verbose: int = typer.Option(1, "--verbose", min=0, max=1, help="1 regenerates publication SVG figures from persisted Parquet tables."),
+) -> None:
+    """Regenerate SVG figures without rerunning inference, exposure or scoring."""
+    from lab.ner.analysis import regenerate_report
+
+    figures = regenerate_report(analysis_dir, verbose=verbose)
+    typer.echo(f"figures: {len(figures)}")
+    for path in figures:
+        typer.echo(path)
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Console-script entry point preserving the existing integer-return convention."""
@@ -596,6 +560,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (ValueError, FileNotFoundError, TypeError, ImportError) as error:
         typer.echo(f"lab: {error}", err=True)
         return 2
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

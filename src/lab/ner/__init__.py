@@ -6,11 +6,15 @@ import importlib
 from typing import Any
 
 _EXPORTS: dict[str, str] = {
+    "AnalysisResult": "lab.ner.analysis",
     "Encoder": "lab.ner.encoding",
+    "analyze_evaluation": "lab.ner.analysis",
     "build_compute_metrics": "lab.ner.evaluation",
     "build_model": "lab.ner.models",
     "evaluate_predictions": "lab.ner.evaluation",
+    "inspect_analysis": "lab.ner.analysis",
     "predict_entities": "lab.ner.inference",
+    "regenerate_report": "lab.ner.analysis",
     "search_hyperparameters": "lab.ner.hpo",
     "train": "lab.ner.training",
     "train_model": "lab.ner.training",

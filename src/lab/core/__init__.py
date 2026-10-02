@@ -69,7 +69,15 @@ from lab.core.segmentation import (
     split_into_sentences,
     tokenize_document,
 )
-from lab.core.spans import SCORED_SPAN_COLUMNS, SPAN_COLUMNS, span_dataframe, spans_from_corpus
+from lab.core.spans import (
+    SCORED_SPAN_COLUMNS,
+    SPAN_ALIASES,
+    SPAN_COLUMNS,
+    read_spans,
+    span_dataframe,
+    spans_from_corpus,
+    validate_spans,
+)
 from lab.core.split import (
     SplitResult,
     build_balance_report,
@@ -94,6 +102,7 @@ __all__ = [
     "PreparedDataset",
     "SCENARIO_PREFIXES",
     "SCORED_SPAN_COLUMNS",
+    "SPAN_ALIASES",
     "SPAN_COLUMNS",
     "SourceConflict",
     "SourceMismatch",
@@ -132,6 +141,7 @@ __all__ = [
     "read_corpus",
     "read_dataset_metadata",
     "read_manifest",
+    "read_spans",
     "read_split",
     "resolve_codes",
     "resolve_conflicts",
@@ -151,6 +161,7 @@ __all__ = [
     "tokenize_document",
     "validate_assignments",
     "validate_corpus",
+    "validate_spans",
     "write_corpus",
     "write_manifest",
     "write_stats",

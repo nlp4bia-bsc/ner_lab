@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="698.712023pt" height="289.203377pt" viewBox="0 0 698.712023 289.203377" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <title>NER analysis</title>
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:title>NER analysis</dc:title>
+    <dc:date>2026-10-02T15:21:09.570853</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>lab.ner.analysis</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 289.203377 
+L 698.712023 289.203377 
+L 698.712023 0 
+L 0 0 
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 81.313594 238.766633 
+L 482.586249 238.766633 
+L 482.586249 37.818047 
+L 81.313594 37.818047 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="line2d_1">
+    <path d="M 81.313594 86.977583 
+L 482.586249 86.977583 
+" clip-path="url(#pc967dc2548)" style="fill: none; stroke: #d9d9d9; stroke-linecap: square"/>
+   </g>
+   <g id="matplotlib.axis_1">
+    <g id="xtick_1">
+     <g id="line2d_2">
+      <defs>
+       <path id="mda1594b953" d="M 0 0 
+L 0 4 
+" style="stroke: #111111; stroke-width: 0.8"/>
+      </defs>
+      <g>
+       <use xlink:href="#mda1594b953" x="81.313594" y="238.766633" style="fill: #111111; stroke: #111111; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_1">
+      <text style="font-size: 9px; font-family: 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: middle" x="81.313594" y="255.604523" transform="rotate(-0 81.313594 255.604523)">0</text>
+     </g>
+    </g>
+    <g id="xtick_2">
+     <g id="line2d_3">
+      <g>
+       <use xlink:href="#mda1594b953" x="161.057762" y="238.766633" style="fill: #111111; stroke: #111111; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_2">
+      <text style="font-size: 9px; font-family: 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: middle" x="161.057762" y="255.604523" transform="rotate(-0 161.057762 255.604523)">50</text>
+     </g>
+    </g>
+    <g id="xtick_3">
+     <g id="line2d_4">
+      <g>
+       <use xlink:href="#mda1594b953" x="240.80193" y="238.766633" style="fill: #111111; stroke: #111111; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_3">
+      <text style="font-size: 9px; font-family: 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: middle" x="240.80193" y="255.604523" transform="rotate(-0 240.80193 255.604523)">100</text>
+     </g>
+    </g>
+    <g id="xtick_4">
+     <g id="line2d_5">
+      <g>
+       <use xlink:href="#mda1594b953" x="320.546099" y="238.766633" style="fill: #111111; stroke: #111111; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_4">
+      <text style="font-size: 9px; font-family: 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: middle" x="320.546099" y="255.604523" transform="rotate(-0 320.546099 255.604523)">150</text>
+     </g>
+    </g>
+    <g id="xtick_5">
+     <g id="line2d_6">
+      <g>
+       <use xlink:href="#mda1594b953" x="400.290267" y="238.766633" style="fill: #111111; stroke: #111111; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_5">
+      <text style="font-size: 9px; font-family: 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: middle" x="400.290267" y="255.604523" transform="rotate(-0 400.290267 255.604523)">200</text>
+     </g>
+    </g>
+    <g id="xtick_6">
+     <g id="line2d_7">
+      <g>
+       <use xlink:href="#mda1594b953" x="480.034435" y="238.766633" style="fill: #111111; stroke: #111111; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_6">
+      <text style="font-size: 9px; font-family: 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: middle" x="480.034435" y="255.604523" transform="rotate(-0 480.034435 255.604523)">250</text>
+     </g>
+    </g>
+    <g id="text_7">
+     <text style="font-size: 10px; font-family: 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: middle" x="281.949921" y="269.36507" transform="rotate(-0 281.949921 269.36507)">Number of diagnostic outcomes</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_2">
+    <g id="ytick_1">
+     <g id="line2d_8">
+      <defs>
+       <path id="ma1d7492e34" d="M 0 0 
+L -4 0 
+" style="stroke: #111111; stroke-width: 0.8"/>
+      </defs>
+      <g>
+       <use xlink:href="#ma1d7492e34" x="81.313594" y="61.320205" style="fill: #111111; stroke: #111111; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_8">
+      <text style="font-size: 9px; font-family: 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: end" x="72.313594" y="64.739151" transform="rotate(-0 72.313594 64.739151)">Correct</text>
+     </g>
+    </g>
+    <g id="ytick_2">
+     <g id="line2d_9">
+      <g>
+       <use xlink:href="#ma1d7492e34" x="81.313594" y="112.634962" style="fill: #111111; stroke: #111111; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_9">
+      <text style="font-size: 9px; font-family: 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: end" x="72.313594" y="116.054259" transform="rotate(-0 72.313594 116.054259)">Spurious</text>
+     </g>
+    </g>
+    <g id="ytick_3">
+     <g id="line2d_10">
+      <g>
+       <use xlink:href="#ma1d7492e34" x="81.313594" y="163.949718" style="fill: #111111; stroke: #111111; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_10">
+      <text style="font-size: 9px; font-family: 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: end" x="72.313594" y="167.369015" transform="rotate(-0 72.313594 167.369015)">Missed</text>
+     </g>
+    </g>
+    <g id="ytick_4">
+     <g id="line2d_11">
+      <g>
+       <use xlink:href="#ma1d7492e34" x="81.313594" y="215.264474" style="fill: #111111; stroke: #111111; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_11">
+      <text style="font-size: 9px; font-family: 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: end" x="72.313594" y="218.683771" transform="rotate(-0 72.313594 218.683771)">Boundary error</text>
+     </g>
+    </g>
+   </g>
+   <g id="patch_3">
+    <path d="M 81.313594 46.952074 
+L 376.367017 46.952074 
+L 376.367017 75.688337 
+L 81.313594 75.688337 
+z
+" clip-path="url(#pc967dc2548)" style="fill: #009e73; stroke: #ffffff; stroke-width: 0.8; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 81.313594 98.26683 
+L 213.688913 98.26683 
+L 213.688913 127.003093 
+L 81.313594 127.003093 
+z
+" clip-path="url(#pc967dc2548)" style="fill: #cc79a7; stroke: #ffffff; stroke-width: 0.8; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 81.313594 149.581586 
+L 177.006596 149.581586 
+L 177.006596 178.31785 
+L 81.313594 178.31785 
+z
+" clip-path="url(#pc967dc2548)" style="fill: #d55e00; stroke: #ffffff; stroke-width: 0.8; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 81.313594 200.896343 
+L 98.857311 200.896343 
+L 98.857311 229.632606 
+L 81.313594 229.632606 
+z
+" clip-path="url(#pc967dc2548)" style="fill: #56b4e9; stroke: #ffffff; stroke-width: 0.8; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 81.313594 238.766633 
+L 81.313594 37.818047 
+" style="fill: none; stroke: #111111; stroke-width: 0.9; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_8">
+    <path d="M 81.313594 238.766633 
+L 482.586249 238.766633 
+" style="fill: none; stroke: #111111; stroke-width: 0.9; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_12">
+    <text style="font-weight: 700; font-size: 8.2px; font-family: 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: start" x="381.182288" y="63.450283" transform="rotate(-0 381.182288 63.450283)">185  ·  54.6%</text>
+   </g>
+   <g id="text_13">
+    <text style="font-weight: 700; font-size: 8.2px; font-family: 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: start" x="218.504185" y="114.76504" transform="rotate(-0 218.504185 114.76504)">83  ·  24.5%</text>
+   </g>
+   <g id="text_14">
+    <text style="font-weight: 700; font-size: 8.2px; font-family: 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: start" x="181.821868" y="166.079796" transform="rotate(-0 181.821868 166.079796)">60  ·  17.7%</text>
+   </g>
+   <g id="text_15">
+    <text style="font-weight: 700; font-size: 8.2px; font-family: 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: start" x="103.672583" y="217.394553" transform="rotate(-0 103.672583 217.394553)">11  ·  3.2%</text>
+   </g>
+   <g id="text_16">
+    <g id="patch_9">
+     <path d="M 284.815284 224.37126 
+L 476.567159 224.37126 
+Q 480.257159 224.37126 480.257159 220.68126 
+L 480.257159 200.997416 
+Q 480.257159 197.307416 476.567159 197.307416 
+L 284.815284 197.307416 
+Q 281.125284 197.307416 281.125284 200.997416 
+L 281.125284 220.68126 
+Q 281.125284 224.37126 284.815284 224.37126 
+z
+" style="fill: #f2f2f2"/>
+    </g>
+    <text style="font-size: 8.2px; font-family: 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; fill: #111111" transform="translate(377.81994 208.048295)">Errors: 154/339 (45.4%)</text>
+    <text style="font-size: 8.2px; font-family: 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; fill: #111111" transform="translate(284.815284 217.890537)">Dominant error: Spurious (83; 53.9% of errors)</text>
+   </g>
+   <g id="text_17">
+    <text style="font-weight: 700; font-size: 12.5px; font-family: 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: start" x="81.313594" y="13.818047" transform="rotate(-0 81.313594 13.818047)">NER diagnostic outcome taxonomy</text>
+   </g>
+  </g>
+  <g id="text_18">
+   <text style="font-size: 7.95px; font-family: 'Arial', 'Helvetica', 'DejaVu Sans', sans-serif; text-anchor: start; fill: #4d4d4d" x="49.993594" y="282.973513" transform="rotate(-0 49.993594 282.973513)">Correct = exact span and label; Missed = unmatched gold mention; Spurious = unmatched prediction. Remaining categories describe matched diagnostic errors.</text>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pc967dc2548">
+   <rect x="81.313594" y="37.818047" width="401.272655" height="200.948586"/>
+  </clipPath>
+ </defs>
+</svg>
