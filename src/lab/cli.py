@@ -468,11 +468,14 @@ def ner_analysis_run(
     training: Path = typer.Option(..., "--training", exists=True, dir_okay=False, readable=True, help="Training canonical documents.parquet or span table (.tsv/.parquet)."),
     output_dir: Path = typer.Option(..., "--output-dir", help="Directory for evaluation.parquet, tables, manifest and optional SVG figures."),
     run_id: str = typer.Option("analysis", "--run-id", help="Stable identifier stored in artifacts and event rows."),
-    levenshtein_threshold: float = typer.Option(0.80, "--levenshtein-threshold", min=0.0, max=1.0, help="Threshold separating lexical FEW_SHOT from ZERO_SHOT after exact SEEN matching."),
+    levenshtein_threshold: float = typer.Option(0.80, "--levenshtein-threshold", min=0.0, max=1.0, help="Lexical-similarity threshold separating LEXICALLY_SIMILAR from NOVEL after exact SEEN matching."),
+    lexical_similarity_mode: str = typer.Option("hybrid", "--lexical-similarity-mode", help="Lexical comparator: hybrid (conservative min of normalized Levenshtein + Jaro-Winkler) or levenshtein."),
     min_overlap_percentage: float = typer.Option(40.0, "--min-overlap-percentage", min=0.0, max=100.0, help="Existing nervaluate overlap parameter passed to canonical scoring."),
+    diagnostic_overlap_threshold: float = typer.Option(0.60, "--diagnostic-overlap-threshold", min=0.001, max=1.0, help="Normalized character Sørensen-Dice threshold for post-hoc FN↔FP diagnostic pairing."),
     bootstrap_samples: int = typer.Option(2000, "--bootstrap-samples", min=0, help="Document-level bootstrap samples; 0 disables bootstrap."),
     bootstrap_confidence: float = typer.Option(0.95, "--bootstrap-confidence", min=0.01, max=0.999, help="Bootstrap confidence level."),
-    seed: int = typer.Option(13, "--seed", "--random-state", help="Bootstrap/random seed recorded in the manifest."),
+    partition_size: int = typer.Option(50, "--partition-size", min=0, help="Documents per non-overlapping descriptive stability partition; 0 disables this analysis."),
+    seed: int = typer.Option(13, "--seed", "--random-state", help="Bootstrap/partition random seed recorded in the manifest."),
     verbose: int = typer.Option(0, "--verbose", min=0, max=1, help="0: Parquet/manifest only; 1: also generate publication SVG figures and detailed console summary."),
     evaluation_documents: Optional[Path] = typer.Option(None, "--evaluation-documents", exists=True, dir_okay=False, readable=True, help="Optional canonical document Parquet for surface/offset integrity checks."),
     training_documents: Optional[Path] = typer.Option(None, "--training-documents", exists=True, dir_okay=False, readable=True, help="Optional canonical training document Parquet when --training is a span table."),
@@ -487,9 +490,12 @@ def ner_analysis_run(
         output_dir,
         run_id=run_id,
         levenshtein_threshold=levenshtein_threshold,
+        lexical_similarity_mode=lexical_similarity_mode,
         min_overlap_percentage=min_overlap_percentage,
+        diagnostic_overlap_threshold=diagnostic_overlap_threshold,
         bootstrap_samples=bootstrap_samples,
         bootstrap_confidence=bootstrap_confidence,
+        partition_size=partition_size,
         random_state=seed,
         verbose=verbose,
         evaluation_documents=evaluation_documents,
@@ -509,7 +515,7 @@ def ner_analysis_run(
 def ner_analysis_inspect(
     path: Path = typer.Argument(..., exists=True, readable=True, help="Analysis directory, manifest.json or evaluation.parquet."),
 ) -> None:
-    """Print official and SEEN/FEW_SHOT/ZERO_SHOT metrics from an existing analysis."""
+    """Print official and SEEN/LEXICALLY_SIMILAR/NOVEL metrics from an existing analysis."""
     from lab.ner.analysis import inspect_analysis
 
     summary = inspect_analysis(path)

@@ -6,7 +6,6 @@ import re
 import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
-from difflib import SequenceMatcher
 from typing import Callable
 
 import pandas as pd
@@ -44,9 +43,27 @@ DEFAULT_SIMILARITY_BINS = (
 
 @dataclass(frozen=True)
 class ExposureConfig:
-    """Configuration for SEEN / FEW_SHOT / ZERO_SHOT lexical exposure."""
+    """Configuration for lexical training-exposure analysis.
+
+    Canonical exposure classes are:
+
+    * ``SEEN``: raw mention surface occurs exactly in training;
+    * ``LEXICALLY_SIMILAR``: no raw exact match, but lexical similarity reaches
+      the configured threshold;
+    * ``NOVEL``: no raw exact match and lexical similarity is below threshold.
+
+    ``similarity_mode='hybrid'`` is intentionally conservative: the combined
+    score is the minimum of normalized Levenshtein and Jaro-Winkler similarity,
+    so both comparators must support a high-similarity decision.  This gives
+    genuinely novel mentions more protection from being absorbed into the
+    similar class. ``levenshtein`` is retained as a backward-compatible mode.
+
+    Jaro reference: Jaro, M. A. (1989), JASA 84(406), 414–420,
+    https://doi.org/10.1080/01621459.1989.10478785.
+    """
 
     levenshtein_threshold: float = 0.80
+    similarity_mode: str = "hybrid"
     normalization: NormalizationConfig = field(default_factory=NormalizationConfig)
     similarity_bins: tuple[tuple[str, float, float], ...] = DEFAULT_SIMILARITY_BINS
     frequency_bins: tuple[tuple[str, int, int | None], ...] = (
@@ -61,6 +78,8 @@ class ExposureConfig:
     def __post_init__(self) -> None:
         if not 0.0 <= float(self.levenshtein_threshold) <= 1.0:
             raise ValueError("levenshtein_threshold must be on the 0.0-1.0 scale.")
+        if self.similarity_mode not in {"hybrid", "levenshtein"}:
+            raise ValueError("similarity_mode must be 'hybrid' or 'levenshtein'.")
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -71,24 +90,12 @@ class Neighbour:
     text: str | None
     label: str | None
     similarity: float | None
+    levenshtein_similarity: float | None = None
+    jaro_winkler_similarity: float | None = None
 
 
 class ExposureIndex:
-    """Cached training-mention index for lexical generalization analysis.
-
-    Classification semantics are deliberately explicit:
-
-    * ``SEEN``: the raw mention surface occurs exactly in training;
-    * ``FEW_SHOT``: no raw exact match, but nearest normalized Levenshtein
-      similarity is at least the configured threshold;
-    * ``ZERO_SHOT``: no raw exact match and nearest similarity is below the
-      threshold (or training contains no mentions).
-
-    ``FEW_SHOT`` here therefore means *lexically similar to training*, not a
-    conventional k-example learning regime. Metadata and output tables keep the
-    threshold and nearest similarity so this operational definition is never
-    implicit.
-    """
+    """Cached training-mention index for lexical generalization analysis."""
 
     def __init__(self, training: pd.DataFrame, config: ExposureConfig | None = None) -> None:
         self.config = config or ExposureConfig()
@@ -112,7 +119,7 @@ class ExposureIndex:
                 seen_entries.add(key)
 
         self.entries.sort(key=lambda item: (item[0], item[1], item[2]))
-        self.backend, self._similarity = _resolve_similarity()
+        self.backend, self._similarity = _resolve_similarity(self.config.similarity_mode)
         self._cache: dict[tuple[str, str | None, bool], Neighbour] = {}
         self.cache_hits = 0
 
@@ -135,17 +142,30 @@ class ExposureIndex:
         ]
 
         if not candidates:
-            result = Neighbour(None, None, None)
+            result = Neighbour(None, None, None, None, None)
         else:
-            scored = [
-                (round(float(self._similarity(normalized, entry[0])), 6), entry)
-                for entry in candidates
-            ]
-            similarity, (_, original, candidate_label) = min(
+            scored = []
+            for entry in candidates:
+                combined, levenshtein, jaro_winkler = self._similarity(normalized, entry[0])
+                scored.append(
+                    (
+                        round(float(combined), 6),
+                        round(float(levenshtein), 6),
+                        round(float(jaro_winkler), 6),
+                        entry,
+                    )
+                )
+            similarity, levenshtein, jaro_winkler, (_, original, candidate_label) = min(
                 scored,
-                key=lambda item: (-item[0], item[1][1], item[1][2], item[1][0]),
+                key=lambda item: (-item[0], -item[1], -item[2], item[3][1], item[3][2], item[3][0]),
             )
-            result = Neighbour(original, candidate_label, similarity)
+            result = Neighbour(
+                original,
+                candidate_label,
+                similarity,
+                levenshtein,
+                jaro_winkler,
+            )
 
         self._cache[key] = result
         return result
@@ -168,12 +188,19 @@ class ExposureIndex:
         if exact_seen:
             generalization = "SEEN"
         elif similarity is not None and similarity >= threshold:
-            generalization = "FEW_SHOT"
+            generalization = "LEXICALLY_SIMILAR"
         else:
-            generalization = "ZERO_SHOT"
+            generalization = "NOVEL"
+
+        legacy_generalization = {
+            "SEEN": "SEEN",
+            "LEXICALLY_SIMILAR": "FEW_SHOT",
+            "NOVEL": "ZERO_SHOT",
+        }[generalization]
 
         return {
             "generalization_class": generalization,
+            "generalization_class_legacy": legacy_generalization,
             "train_exact_seen": exact_seen,
             "train_exact_seen_same_label": label in exact_labels,
             "train_exact_seen_other_label": any(value != label for value in exact_labels),
@@ -187,6 +214,8 @@ class ExposureIndex:
             "train_nearest_text": nearest.text,
             "train_nearest_label": nearest.label,
             "train_nearest_similarity": similarity,
+            "train_nearest_levenshtein_similarity": nearest.levenshtein_similarity,
+            "train_nearest_jaro_winkler_similarity": nearest.jaro_winkler_similarity,
             "train_nearest_same_label_text": nearest_same.text,
             "train_nearest_same_label_similarity": nearest_same.similarity,
             "train_nearest_other_label_text": nearest_other.text,
@@ -196,10 +225,14 @@ class ExposureIndex:
             "train_frequency_bin": frequency_bin(
                 int(self.raw_counts[text]), self.config.frequency_bins
             ),
+            # Canonical flags.
+            "lexically_similar": generalization == "LEXICALLY_SIMILAR",
+            "lexically_novel": generalization == "NOVEL",
+            # Backward-compatible aliases retained for downstream users.
             "zero_shot_exact": not exact_seen,
             "zero_shot_normalized": not normalized_seen,
-            "zero_shot_levenshtein": generalization == "ZERO_SHOT",
-            "few_shot_levenshtein": generalization == "FEW_SHOT",
+            "zero_shot_levenshtein": generalization == "NOVEL",
+            "few_shot_levenshtein": generalization == "LEXICALLY_SIMILAR",
         }
 
 
@@ -240,15 +273,29 @@ def frequency_bin(
     raise ValueError(f"No training-frequency bin covers {value}.")
 
 
-def _resolve_similarity() -> tuple[str, Callable[[str, str], float]]:
+def _resolve_similarity(
+    mode: str,
+) -> tuple[str, Callable[[str, str], tuple[float, float, float]]]:
     try:
-        from rapidfuzz.distance import Levenshtein
-    except ImportError:
-        return (
-            "difflib.SequenceMatcher",
-            lambda first, second: SequenceMatcher(
-                None, first, second, autojunk=False
-            ).ratio(),
-        )
+        from rapidfuzz.distance import JaroWinkler, Levenshtein
+    except ImportError as error:
+        raise ImportError(
+            "Lexical exposure analysis requires rapidfuzz; install lab[ner]."
+        ) from error
 
-    return "rapidfuzz.Levenshtein.normalized_similarity", Levenshtein.normalized_similarity
+    def compare(first: str, second: str) -> tuple[float, float, float]:
+        levenshtein = float(Levenshtein.normalized_similarity(first, second))
+        jaro_winkler = float(JaroWinkler.normalized_similarity(first, second))
+        combined = (
+            levenshtein
+            if mode == "levenshtein"
+            else min(levenshtein, jaro_winkler)
+        )
+        return combined, levenshtein, jaro_winkler
+
+    backend = (
+        "rapidfuzz.Levenshtein.normalized_similarity"
+        if mode == "levenshtein"
+        else "min(rapidfuzz.Levenshtein.normalized_similarity, rapidfuzz.JaroWinkler.normalized_similarity)"
+    )
+    return backend, compare

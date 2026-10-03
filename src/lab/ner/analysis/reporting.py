@@ -10,10 +10,14 @@ import pandas as pd
 
 from lab.core import safe_f1
 from lab.ner.evaluation import span_metrics
-from lab.ner.analysis.diagnostics import span_feature_frame
+from lab.ner.analysis.diagnostics import (
+    DiagnosticMatchConfig,
+    enrich_error_diagnostics,
+    span_feature_frame,
+)
 from lab.ner.analysis.exposure import ExposureIndex, describe_frame
 
-GENERALIZATION_ORDER = ("SEEN", "FEW_SHOT", "ZERO_SHOT")
+GENERALIZATION_ORDER = ("SEEN", "LEXICALLY_SIMILAR", "NOVEL")
 
 
 def score_subgroup(
@@ -70,6 +74,9 @@ def build_analysis_tables(
     bootstrap_samples: int = 2000,
     bootstrap_confidence: float = 0.95,
     random_state: int = 13,
+    diagnostic_overlap_threshold: float = 0.60,
+    diagnostic_sensitivity_thresholds: tuple[float, ...] = (0.40, 0.50, 0.60, 0.70, 0.80),
+    partition_size: int = 50,
 ) -> dict[str, pd.DataFrame]:
     """Create publication-ready Parquet tables without defining a second scorer."""
     gold_exposure = describe_frame(gold, exposure)
@@ -203,6 +210,11 @@ def build_analysis_tables(
     error_taxonomy = error_taxonomy_table(events)
     error_type_pareto_table = error_type_pareto(error_taxonomy)
     boundary = boundary_error_table(events)
+    fragmentation = (
+        boundary.loc[boundary["error_fragmentation"].fillna(False).astype(bool)].reset_index(drop=True)
+        if "error_fragmentation" in boundary.columns
+        else pd.DataFrame()
+    )
     boundary_summary = boundary_summary_table(boundary)
     confusion_counts, confusion_normalized, confusion_extended = confusion_tables(
         events,
@@ -238,6 +250,28 @@ def build_analysis_tables(
         confidence=bootstrap_confidence,
         seed=random_state,
     )
+    boundary_sensitivity = boundary_overlap_sensitivity(
+        events,
+        gold,
+        predicted,
+        thresholds=tuple(diagnostic_sensitivity_thresholds) + (float(diagnostic_overlap_threshold),),
+        multiclass=len(tags) > 1,
+    )
+    if not boundary_sensitivity.empty:
+        boundary_sensitivity["selected_threshold"] = np.isclose(
+            pd.to_numeric(boundary_sensitivity["diagnostic_overlap_threshold"], errors="coerce"),
+            float(diagnostic_overlap_threshold),
+        )
+    partition_metrics, partition_generalization, partition_summary = document_partition_stability(
+        gold,
+        predicted,
+        events,
+        official_metrics,
+        tags=tags,
+        min_overlap_percentage=min_overlap_percentage,
+        partition_size=partition_size,
+        seed=random_state,
+    )
 
     return {
         "overall_metrics": overall,
@@ -255,6 +289,7 @@ def build_analysis_tables(
         "error_taxonomy": error_taxonomy,
         "error_type_pareto": error_type_pareto_table,
         "boundary_errors": boundary,
+        "fragmentation_errors": fragmentation,
         "boundary_summary": boundary_summary,
         "label_confusion_counts": confusion_counts,
         "label_confusion_normalized": confusion_normalized,
@@ -269,6 +304,10 @@ def build_analysis_tables(
         "error_pareto": pareto,
         "error_intersections": intersections,
         "bootstrap_intervals": bootstrap,
+        "boundary_overlap_sensitivity": boundary_sensitivity,
+        "document_partition_metrics": partition_metrics,
+        "document_partition_generalization": partition_generalization,
+        "document_partition_summary": partition_summary,
     }
 
 
@@ -402,15 +441,21 @@ def error_type_pareto(error_taxonomy: pd.DataFrame) -> pd.DataFrame:
 
 
 def boundary_summary_table(boundary: pd.DataFrame) -> pd.DataFrame:
-    """Compact descriptive statistics for paired boundary-related errors."""
+    """Compact statistics for one-to-one boundary errors plus fragmentation count."""
     if boundary.empty:
         return pd.DataFrame()
 
-    start = pd.to_numeric(boundary.get("span_start_delta"), errors="coerce").dropna()
-    end = pd.to_numeric(boundary.get("span_end_delta"), errors="coerce").dropna()
-    abs_start = pd.to_numeric(boundary.get("span_abs_start_delta"), errors="coerce").dropna()
-    abs_end = pd.to_numeric(boundary.get("span_abs_end_delta"), errors="coerce").dropna()
-    n = int(len(boundary))
+    fragmentation_mask = (
+        boundary["error_fragmentation"].fillna(False).astype(bool)
+        if "error_fragmentation" in boundary.columns
+        else pd.Series(False, index=boundary.index)
+    )
+    pairwise = boundary.loc[~fragmentation_mask].copy()
+
+    start = pd.to_numeric(pairwise.get("span_start_delta"), errors="coerce").dropna()
+    end = pd.to_numeric(pairwise.get("span_end_delta"), errors="coerce").dropna()
+    abs_start = pd.to_numeric(pairwise.get("span_abs_start_delta"), errors="coerce").dropna()
+    abs_end = pd.to_numeric(pairwise.get("span_abs_end_delta"), errors="coerce").dropna()
 
     def median(values):
         return float(values.median()) if len(values) else np.nan
@@ -421,7 +466,9 @@ def boundary_summary_table(boundary: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
-                "boundary_pairs": n,
+                "boundary_errors_total": int(len(boundary)),
+                "one_to_one_boundary_errors": int(len(pairwise)),
+                "fragmentation_boundary_errors": int(fragmentation_mask.sum()),
                 "start_exact_proportion": float((start == 0).mean()) if len(start) else np.nan,
                 "end_exact_proportion": float((end == 0).mean()) if len(end) else np.nan,
                 "start_off_by_one_proportion": float((abs_start <= 1).mean()) if len(abs_start) else np.nan,
@@ -435,6 +482,7 @@ def boundary_summary_table(boundary: pd.DataFrame) -> pd.DataFrame:
             }
         ]
     )
+
 
 
 def error_taxonomy_table(events: pd.DataFrame) -> pd.DataFrame:
@@ -473,7 +521,21 @@ def boundary_error_table(events: pd.DataFrame) -> pd.DataFrame:
         "span_abs_start_delta",
         "span_abs_end_delta",
         "span_intersection",
+        "span_gold_length",
+        "span_pred_length",
+        "span_gold_coverage",
+        "span_pred_coverage",
+        "span_dice",
         "span_iou",
+        "error_fragmentation",
+        "fragmentation_pred_count",
+        "fragmentation_pred_starts",
+        "fragmentation_pred_ends",
+        "fragmentation_pred_texts",
+        "fragmentation_pred_labels",
+        "fragmentation_gold_coverage",
+        "fragmentation_dice",
+        "diagnostic_pred_ids",
         "span_boundary_error",
         "span_relation",
         "span_one_character_offset",
@@ -651,46 +713,54 @@ def oracle_error_budget(
     events: pd.DataFrame,
     official_metrics: dict[str, float | int],
 ) -> pd.DataFrame:
-    """Counterfactual STRICT ceilings; these are diagnostics, not forecasts."""
+    """Counterfactual STRICT ceilings; these are diagnostics, not forecasts.
+
+    Fragmentation is one gold-side boundary diagnostic unit but may correspond to
+    multiple official FP predictions. Correcting such a group therefore removes
+    all fragment FPs while recovering one FN as one TP.
+    """
     tp = int(events["strict_is_tp"].sum())
     fp = int(events["strict_is_fp"].sum())
     fn = int(events["strict_is_fn"].sum())
     baseline = safe_f1(tp, fp, fn)
 
-    gold_pairs = events.loc[events["error_pair_role"] == "GOLD"]
-    pair_counts = Counter(gold_pairs["error_primary"].astype(str))
+    gold_pairs = events.loc[events["error_pair_role"] == "GOLD"].copy()
+    if "fragmentation_pred_count" in gold_pairs.columns:
+        fragmentation_size = pd.to_numeric(
+            gold_pairs["fragmentation_pred_count"], errors="coerce"
+        ).fillna(1).clip(lower=1).astype(int)
+    else:
+        fragmentation_size = pd.Series(1, index=gold_pairs.index, dtype="int64")
+    gold_pairs["diagnostic_fp_count"] = fragmentation_size
+
     missed = int((events["error_primary"] == "MISSED").sum())
     spurious = int((events["error_primary"] == "SPURIOUS").sum())
 
-    scenarios = [
-        ("boundary_correction", int(pair_counts.get("BOUNDARY_ERROR", 0)), 0),
-        ("label_correction", int(pair_counts.get("LABEL_ERROR", 0)), 0),
-        (
-            "boundary_and_label_correction",
-            int(pair_counts.get("BOUNDARY_AND_LABEL_ERROR", 0)),
-            0,
-        ),
-        ("recover_all_missed", missed, 1),
-        ("remove_all_spurious", spurious, 2),
-    ]
+    pair_types = (
+        ("boundary_correction", "BOUNDARY_ERROR"),
+        ("label_correction", "LABEL_ERROR"),
+        ("boundary_and_label_correction", "BOUNDARY_AND_LABEL_ERROR"),
+    )
 
     rows = []
-    for name, count, mode in scenarios:
-        new_tp, new_fp, new_fn = tp, fp, fn
-        if mode == 0:  # paired FP+FN -> TP
-            new_tp += count
-            new_fp -= count
-            new_fn -= count
-        elif mode == 1:  # FN -> TP
-            new_tp += count
-            new_fn -= count
-        else:  # remove FP
-            new_fp -= count
-        scores = safe_f1(new_tp, new_fp, new_fn)
+    total_pair_units = 0
+    total_pair_fp = 0
+    for scenario, error_type in pair_types:
+        subset = gold_pairs.loc[gold_pairs["error_primary"].astype(str) == error_type]
+        count = int(len(subset))
+        fp_removed = int(subset["diagnostic_fp_count"].sum()) if count else 0
+        total_pair_units += count
+        total_pair_fp += fp_removed
+        scores = safe_f1(
+            tp + count,
+            max(0, fp - fp_removed),
+            max(0, fn - count),
+        )
         rows.append(
             {
-                "scenario": name,
+                "scenario": scenario,
                 "affected": count,
+                "fp_removed": fp_removed,
                 "baseline_f1": float(baseline["f1"]),
                 "oracle_f1": float(scores["f1"]),
                 "delta_f1": float(scores["f1"] - baseline["f1"]),
@@ -700,18 +770,45 @@ def oracle_error_budget(
             }
         )
 
-    all_pair = sum(
-        int(pair_counts.get(name, 0))
-        for name in ("BOUNDARY_ERROR", "LABEL_ERROR", "BOUNDARY_AND_LABEL_ERROR")
+    scores = safe_f1(tp + missed, fp, max(0, fn - missed))
+    rows.append(
+        {
+            "scenario": "recover_all_missed",
+            "affected": missed,
+            "fp_removed": 0,
+            "baseline_f1": float(baseline["f1"]),
+            "oracle_f1": float(scores["f1"]),
+            "delta_f1": float(scores["f1"] - baseline["f1"]),
+            "oracle_tp": int(scores["tp"]),
+            "oracle_fp": int(scores["fp"]),
+            "oracle_fn": int(scores["fn"]),
+        }
     )
-    new_tp = tp + all_pair + missed
-    new_fp = max(0, fp - all_pair - spurious)
-    new_fn = max(0, fn - all_pair - missed)
+
+    scores = safe_f1(tp, max(0, fp - spurious), fn)
+    rows.append(
+        {
+            "scenario": "remove_all_spurious",
+            "affected": spurious,
+            "fp_removed": spurious,
+            "baseline_f1": float(baseline["f1"]),
+            "oracle_f1": float(scores["f1"]),
+            "delta_f1": float(scores["f1"] - baseline["f1"]),
+            "oracle_tp": int(scores["tp"]),
+            "oracle_fp": int(scores["fp"]),
+            "oracle_fn": int(scores["fn"]),
+        }
+    )
+
+    new_tp = tp + total_pair_units + missed
+    new_fp = max(0, fp - total_pair_fp - spurious)
+    new_fn = max(0, fn - total_pair_units - missed)
     scores = safe_f1(new_tp, new_fp, new_fn)
     rows.append(
         {
             "scenario": "all_diagnostic_errors",
-            "affected": all_pair + missed + spurious,
+            "affected": total_pair_units + missed + spurious,
+            "fp_removed": total_pair_fp + spurious,
             "baseline_f1": float(baseline["f1"]),
             "oracle_f1": float(scores["f1"]),
             "delta_f1": float(scores["f1"] - baseline["f1"]),
@@ -721,6 +818,7 @@ def oracle_error_budget(
         }
     )
     return pd.DataFrame(rows)
+
 
 
 def confidence_by_error(events: pd.DataFrame) -> pd.DataFrame:
@@ -815,7 +913,6 @@ def error_intersections(events: pd.DataFrame) -> pd.DataFrame:
     units = _diagnostic_units(events)
     features = [
         "error_fragmentation",
-        "error_merging",
         "error_duplicate_prediction",
         "error_nested_entity",
         "error_overlapping_entity",
@@ -829,6 +926,192 @@ def error_intersections(events: pd.DataFrame) -> pd.DataFrame:
             if count:
                 rows.append({"feature_a": left, "feature_b": right, "count": count})
     return pd.DataFrame(rows, columns=["feature_a", "feature_b", "count"])
+
+
+def boundary_overlap_sensitivity(
+    strict_events: pd.DataFrame,
+    gold: pd.DataFrame,
+    predicted: pd.DataFrame,
+    *,
+    thresholds: Iterable[float],
+    multiclass: bool,
+) -> pd.DataFrame:
+    """Re-run only diagnostic pairing over several Dice gates.
+
+    Official STRICT counts are invariant.  The table quantifies how much the
+    post-hoc error taxonomy depends on the configurable diagnostic overlap
+    threshold.
+    """
+    rows: list[dict[str, float | int]] = []
+    for threshold in sorted({float(value) for value in thresholds}):
+        if not 0.0 < threshold <= 1.0:
+            raise ValueError("Diagnostic sensitivity thresholds must be in (0, 1].")
+        enriched = enrich_error_diagnostics(
+            strict_events,
+            gold,
+            predicted,
+            match_config=DiagnosticMatchConfig(overlap_threshold=threshold),
+            multiclass=multiclass,
+        )
+        units = _diagnostic_units(enriched)
+        counts = units["error_primary"].fillna("UNKNOWN").astype(str).value_counts()
+        rows.append(
+            {
+                "diagnostic_overlap_threshold": threshold,
+                "correct": int(counts.get("CORRECT", 0)),
+                "missed": int(counts.get("MISSED", 0)),
+                "spurious": int(counts.get("SPURIOUS", 0)),
+                "boundary_error": int(counts.get("BOUNDARY_ERROR", 0)),
+                "label_error": int(counts.get("LABEL_ERROR", 0)),
+                "boundary_and_label_error": int(counts.get("BOUNDARY_AND_LABEL_ERROR", 0)),
+                "fragmentation_boundary_errors": int(
+                    (
+                        (units["error_primary"].astype(str) == "BOUNDARY_ERROR")
+                        & units.get("error_fragmentation", False).fillna(False).astype(bool)
+                    ).sum()
+                ) if "error_fragmentation" in units.columns else 0,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def document_partition_stability(
+    gold: pd.DataFrame,
+    predicted: pd.DataFrame,
+    events: pd.DataFrame,
+    official_metrics: dict[str, float | int],
+    *,
+    tags: list[str],
+    min_overlap_percentage: float,
+    partition_size: int,
+    seed: int,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Deterministic document partitions without replacement.
+
+    This is descriptive stability analysis, not bootstrap inference. Documents
+    are shuffled once with ``seed`` and divided into non-overlapping batches of
+    up to ``partition_size`` documents.  The complete evaluation set remains the
+    authoritative point estimate.
+    """
+    if int(partition_size) <= 0:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    doc_ids = sorted(set(gold["filename"].astype(str)) | set(predicted["filename"].astype(str)))
+    if not doc_ids:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    rng = np.random.default_rng(seed)
+    shuffled = np.asarray(doc_ids, dtype=object)[rng.permutation(len(doc_ids))]
+    partitions = [
+        [str(value) for value in shuffled[start : start + int(partition_size)]]
+        for start in range(0, len(shuffled), int(partition_size))
+    ]
+
+    metric_rows: list[dict[str, float | int | str]] = []
+    generalization_rows: list[dict[str, float | int | str]] = []
+    gold_docs = gold["filename"].astype(str)
+    pred_docs = predicted["filename"].astype(str)
+
+    for partition_index, ids in enumerate(partitions, start=1):
+        id_set = set(ids)
+        result = score_subgroup(
+            gold,
+            predicted,
+            gold_docs.isin(id_set),
+            pred_docs.isin(id_set),
+            tags=tags,
+            min_overlap_percentage=min_overlap_percentage,
+        )
+        metric_rows.append(
+            {
+                "partition": partition_index,
+                "n_documents": len(ids),
+                "document_ids": ids,
+                **result,
+            }
+        )
+
+        gold_events = events.loc[
+            events["gold_exists"]
+            & events["document_id"].astype(str).isin(id_set)
+        ]
+        for class_name in GENERALIZATION_ORDER:
+            subset = gold_events.loc[
+                gold_events["generalization_class"].astype(str) == class_name
+            ]
+            support = int(len(subset))
+            correct = int(subset["strict_correct"].fillna(False).astype(bool).sum())
+            generalization_rows.append(
+                {
+                    "partition": partition_index,
+                    "n_documents": len(ids),
+                    "generalization_class": class_name,
+                    "support": support,
+                    "strict_correct": correct,
+                    "strict_recall": correct / support if support else np.nan,
+                }
+            )
+
+    metrics_frame = pd.DataFrame(metric_rows)
+    generalization_frame = pd.DataFrame(generalization_rows)
+
+    summary_rows: list[dict[str, float | int | str]] = []
+    full_estimates = {
+        "strict_precision": float(official_metrics.get("span_strict_precision", np.nan)),
+        "strict_recall": float(official_metrics.get("span_strict_recall", np.nan)),
+        "strict_f1": float(official_metrics.get("span_strict_f1", np.nan)),
+        "char_precision": float(official_metrics.get("char_precision", np.nan)),
+        "char_recall": float(official_metrics.get("char_recall", np.nan)),
+        "char_f1": float(official_metrics.get("char_f1", np.nan)),
+    }
+    for metric, full_value in full_estimates.items():
+        values = pd.to_numeric(metrics_frame[metric], errors="coerce").dropna()
+        summary_rows.append(
+            {
+                "scope": "ALL",
+                "metric": metric,
+                "full_test_estimate": full_value,
+                "partition_mean": float(values.mean()) if len(values) else np.nan,
+                "partition_std": float(values.std(ddof=1)) if len(values) > 1 else 0.0,
+                "partition_min": float(values.min()) if len(values) else np.nan,
+                "partition_max": float(values.max()) if len(values) else np.nan,
+                "n_partitions": int(len(partitions)),
+                "target_partition_size": int(partition_size),
+                "n_documents": int(len(doc_ids)),
+            }
+        )
+
+    full_gold = events.loc[events["gold_exists"]]
+    for class_name in GENERALIZATION_ORDER:
+        subset = full_gold.loc[full_gold["generalization_class"].astype(str) == class_name]
+        support = int(len(subset))
+        full_recall = (
+            float(subset["strict_correct"].fillna(False).astype(bool).mean())
+            if support else np.nan
+        )
+        values = pd.to_numeric(
+            generalization_frame.loc[
+                generalization_frame["generalization_class"] == class_name,
+                "strict_recall",
+            ],
+            errors="coerce",
+        ).dropna()
+        summary_rows.append(
+            {
+                "scope": class_name,
+                "metric": "gold_conditioned_strict_recall",
+                "full_test_estimate": full_recall,
+                "partition_mean": float(values.mean()) if len(values) else np.nan,
+                "partition_std": float(values.std(ddof=1)) if len(values) > 1 else 0.0,
+                "partition_min": float(values.min()) if len(values) else np.nan,
+                "partition_max": float(values.max()) if len(values) else np.nan,
+                "n_partitions": int(len(partitions)),
+                "target_partition_size": int(partition_size),
+                "n_documents": int(len(doc_ids)),
+            }
+        )
+
+    return metrics_frame, generalization_frame, pd.DataFrame(summary_rows)
 
 
 def bootstrap_intervals(

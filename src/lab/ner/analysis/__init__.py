@@ -8,10 +8,12 @@ from lab.ner.analysis.api import (
     inspect_analysis,
     regenerate_report,
 )
+from lab.ner.analysis.diagnostics import DiagnosticMatchConfig
 from lab.ner.analysis.exposure import ExposureConfig, ExposureIndex, NormalizationConfig
 
 __all__ = [
     "AnalysisResult",
+    "DiagnosticMatchConfig",
     "ExposureConfig",
     "ExposureIndex",
     "NormalizationConfig",

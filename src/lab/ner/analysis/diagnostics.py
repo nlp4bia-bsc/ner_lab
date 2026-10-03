@@ -6,6 +6,7 @@ import math
 import string
 import unicodedata
 from collections import Counter, defaultdict, deque
+from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
@@ -17,6 +18,29 @@ from lab.ner.evaluation import span_metrics
 STRICT_TP = "TP"
 STRICT_FP = "FP"
 STRICT_FN = "FN"
+
+
+@dataclass(frozen=True)
+class DiagnosticMatchConfig:
+    """Configuration for post-hoc FN↔FP diagnostic association.
+
+    The Sørensen-Dice coefficient is used as a normalized, symmetric span-overlap
+    gate.  The default 0.60 is a repository diagnostic heuristic, not a value
+    prescribed by Dice (1945).  It is deliberately configurable and is persisted
+    in the analysis manifest.
+
+    Reference
+    ---------
+    Dice, L. R. (1945). Measures of the Amount of Ecologic Association Between
+    Species. Ecology, 26(3), 297–302. https://doi.org/10.2307/1932409
+    """
+
+    overlap_threshold: float = 0.60
+
+    def __post_init__(self) -> None:
+        value = float(self.overlap_threshold)
+        if not 0.0 < value <= 1.0:
+            raise ValueError("diagnostic overlap_threshold must be in (0, 1].")
 
 
 def evaluate_to_events(
@@ -58,8 +82,27 @@ def enrich_error_diagnostics(
     events: pd.DataFrame,
     gold: pd.DataFrame,
     predicted: pd.DataFrame,
+    *,
+    match_config: DiagnosticMatchConfig | None = None,
+    multiclass: bool | None = None,
 ) -> pd.DataFrame:
-    """Pair unmatched FP/FN rows and classify boundary/label error structure."""
+    """Pair unmatched FP/FN rows and classify diagnostic error structure.
+
+    Official STRICT accounting is never changed.  The diagnostic layer first
+    detects conservative one-gold-to-many-prediction fragmentation groups, then
+    applies global one-to-one matching to the remaining unmatched spans.  A
+    one-to-one candidate must satisfy a normalized character-overlap gate based
+    on Sørensen-Dice overlap.
+
+    Label disagreement participates in the diagnostic taxonomy only when the
+    evaluation contains more than one entity label.  In a single-label setup a
+    label error is not a meaningful failure mode.
+    """
+    config = match_config or DiagnosticMatchConfig()
+    if multiclass is None:
+        labels = set(gold["label"].astype(str)) | set(predicted["label"].astype(str))
+        multiclass = len(labels) > 1
+
     enriched = events.copy()
     defaults: dict[str, Any] = {
         "error_primary": None,
@@ -67,13 +110,28 @@ def enrich_error_diagnostics(
         "error_pair_role": None,
         "diagnostic_gold_id": None,
         "diagnostic_pred_id": None,
+        "diagnostic_pred_ids": None,
         "error_label_agreement": None,
         "error_fragmentation": False,
+        # Retained for schema compatibility. Merging is intentionally not
+        # analysed in this profile.
         "error_merging": False,
+        "fragmentation_pred_count": None,
+        "fragmentation_pred_starts": None,
+        "fragmentation_pred_ends": None,
+        "fragmentation_pred_texts": None,
+        "fragmentation_pred_labels": None,
+        "fragmentation_gold_coverage": None,
+        "fragmentation_dice": None,
         "error_duplicate_prediction": False,
         "error_nested_entity": False,
         "error_overlapping_entity": False,
         "span_intersection": None,
+        "span_gold_length": None,
+        "span_pred_length": None,
+        "span_gold_coverage": None,
+        "span_pred_coverage": None,
+        "span_dice": None,
         "span_iou": None,
         "span_start_delta": None,
         "span_end_delta": None,
@@ -104,12 +162,6 @@ def enrich_error_diagnostics(
     unmatched_pred = set(
         enriched.loc[enriched["strict_is_fp"], "pred_id"].dropna().astype(int)
     )
-    overlaps_by_gold, overlaps_by_pred = _overlap_maps(
-        gold,
-        predicted,
-        unmatched_gold,
-        unmatched_pred,
-    )
 
     for index, row in enriched.iterrows():
         if bool(row.strict_is_tp):
@@ -125,23 +177,6 @@ def enrich_error_diagnostics(
         if bool(row.pred_exists) and pd.notna(row.pred_id) and int(row.pred_id) in duplicate_predictions:
             enriched.at[index, "error_duplicate_prediction"] = True
 
-    pairs: list[tuple[int, int]] = []
-    documents = sorted(
-        set(gold["filename"].astype(str)) | set(predicted["filename"].astype(str))
-    )
-    for document in documents:
-        gold_ids = sorted(
-            index
-            for index in unmatched_gold
-            if str(gold.iloc[index].filename) == document
-        )
-        pred_ids = sorted(
-            index
-            for index in unmatched_pred
-            if str(predicted.iloc[index].filename) == document
-        )
-        pairs.extend(_assign(gold, predicted, gold_ids, pred_ids))
-
     gold_event = {
         int(row.gold_id): index
         for index, row in enriched.iterrows()
@@ -153,56 +188,111 @@ def enrich_error_diagnostics(
         if bool(row.strict_is_fp) and pd.notna(row.pred_id)
     }
 
-    for pair_id, (gold_id, pred_id) in enumerate(pairs):
+    next_group_id = 0
+
+    # Fragmentation is a one-gold-to-many-prediction diagnostic.  It is resolved
+    # before one-to-one assignment and counts as ONE boundary error through the
+    # gold-side diagnostic unit.  A candidate group is only used when no single
+    # fragment would already pass the one-to-one Dice gate and the union of the
+    # fragments passes the same normalized threshold.
+    fragmentation_groups = _fragmentation_groups(
+        gold,
+        predicted,
+        unmatched_gold,
+        unmatched_pred,
+        config,
+    )
+    used_gold: set[int] = set()
+    used_pred: set[int] = set()
+    for gold_id, pred_ids, details in fragmentation_groups:
+        if gold_id in used_gold or any(pred_id in used_pred for pred_id in pred_ids):
+            continue
+        used_gold.add(gold_id)
+        used_pred.update(pred_ids)
+        group_id = next_group_id
+        next_group_id += 1
+
+        gold_index = gold_event[gold_id]
+        enriched.at[gold_index, "error_pair_id"] = group_id
+        enriched.at[gold_index, "error_pair_role"] = "GOLD"
+        enriched.at[gold_index, "error_primary"] = "BOUNDARY_ERROR"
+        enriched.at[gold_index, "diagnostic_gold_id"] = gold_id
+        enriched.at[gold_index, "diagnostic_pred_id"] = pred_ids[0]
+        enriched.at[gold_index, "diagnostic_pred_ids"] = list(map(int, pred_ids))
+        enriched.at[gold_index, "error_fragmentation"] = True
+        for name, value in details.items():
+            enriched.at[gold_index, name] = value
+
+        for pred_id in pred_ids:
+            pred_index = pred_event[pred_id]
+            enriched.at[pred_index, "error_pair_id"] = group_id
+            enriched.at[pred_index, "error_pair_role"] = "PRED"
+            enriched.at[pred_index, "error_primary"] = "BOUNDARY_ERROR"
+            enriched.at[pred_index, "diagnostic_gold_id"] = gold_id
+            enriched.at[pred_index, "diagnostic_pred_id"] = pred_id
+            enriched.at[pred_index, "diagnostic_pred_ids"] = list(map(int, pred_ids))
+            enriched.at[pred_index, "error_fragmentation"] = True
+            for name, value in details.items():
+                enriched.at[pred_index, name] = value
+
+    unmatched_gold -= used_gold
+    unmatched_pred -= used_pred
+
+    pairs: list[tuple[int, int]] = []
+    documents = sorted(
+        set(gold["filename"].astype(str)) | set(predicted["filename"].astype(str))
+    )
+    for document in documents:
+        gold_ids = sorted(
+            index for index in unmatched_gold if str(gold.iloc[index].filename) == document
+        )
+        pred_ids = sorted(
+            index for index in unmatched_pred if str(predicted.iloc[index].filename) == document
+        )
+        pairs.extend(
+            _assign(
+                gold,
+                predicted,
+                gold_ids,
+                pred_ids,
+                config=config,
+                multiclass=bool(multiclass),
+            )
+        )
+
+    for gold_id, pred_id in pairs:
         gold_row = gold.iloc[gold_id]
         pred_row = predicted.iloc[pred_id]
         details = _pair_details(gold_row, pred_row)
-        primary = (
-            "LABEL_ERROR"
-            if details["span_boundary_error"] is None
-            else "BOUNDARY_ERROR"
-            if details["error_label_agreement"]
-            else "BOUNDARY_AND_LABEL_ERROR"
-        )
+        same_boundary = details["span_boundary_error"] is None
+        label_agreement = bool(details["error_label_agreement"])
 
-        for role, event_index in (
-            ("GOLD", gold_event[gold_id]),
-            ("PRED", pred_event[pred_id]),
-        ):
-            enriched.at[event_index, "error_pair_id"] = pair_id
+        if same_boundary:
+            # Same-boundary mismatches are meaningful only as label errors and
+            # therefore only in a genuinely multi-label-type evaluation.
+            if not bool(multiclass) or label_agreement:
+                continue
+            primary = "LABEL_ERROR"
+        elif bool(multiclass) and not label_agreement:
+            primary = "BOUNDARY_AND_LABEL_ERROR"
+        else:
+            primary = "BOUNDARY_ERROR"
+
+        group_id = next_group_id
+        next_group_id += 1
+        for role, event_index in (("GOLD", gold_event[gold_id]), ("PRED", pred_event[pred_id])):
+            enriched.at[event_index, "error_pair_id"] = group_id
             enriched.at[event_index, "error_pair_role"] = role
             enriched.at[event_index, "error_primary"] = primary
             enriched.at[event_index, "diagnostic_gold_id"] = gold_id
             enriched.at[event_index, "diagnostic_pred_id"] = pred_id
+            enriched.at[event_index, "diagnostic_pred_ids"] = [int(pred_id)]
             for name, value in details.items():
                 enriched.at[event_index, name] = value
 
-    for gold_id, prediction_ids in overlaps_by_gold.items():
-        if len(prediction_ids) >= 2:
-            enriched.loc[
-                enriched["gold_id"] == gold_id,
-                "error_fragmentation",
-            ] = True
-            for pred_id in prediction_ids:
-                enriched.loc[
-                    enriched["pred_id"] == pred_id,
-                    "error_fragmentation",
-                ] = True
-
-    for pred_id, gold_ids in overlaps_by_pred.items():
-        if len(gold_ids) >= 2:
-            enriched.loc[
-                enriched["pred_id"] == pred_id,
-                "error_merging",
-            ] = True
-            for gold_id in gold_ids:
-                enriched.loc[
-                    enriched["gold_id"] == gold_id,
-                    "error_merging",
-                ] = True
-
     enriched["error_type"] = enriched["error_primary"]
     return enriched
+
 
 
 def audit_annotations(
@@ -565,6 +655,11 @@ def _duplicate_indices(frame: pd.DataFrame) -> set[int]:
 
 
 def _overlap_maps(gold, predicted, gold_ids, pred_ids):
+    """Legacy overlap map using any positive character intersection.
+
+    Retained for compatibility with downstream imports. New diagnostic pairing
+    uses :func:`_span_overlap_metrics` plus ``DiagnosticMatchConfig`` instead.
+    """
     by_gold: dict[int, list[int]] = defaultdict(list)
     by_pred: dict[int, list[int]] = defaultdict(list)
     for gold_id in gold_ids:
@@ -584,12 +679,17 @@ def _overlap_maps(gold, predicted, gold_ids, pred_ids):
     return by_gold, by_pred
 
 
+
 def _assign(
     gold: pd.DataFrame,
     predicted: pd.DataFrame,
     gold_ids: list[int],
     pred_ids: list[int],
+    *,
+    config: DiagnosticMatchConfig,
+    multiclass: bool,
 ) -> list[tuple[int, int]]:
+    """Globally assign only diagnostically eligible one-to-one span pairs."""
     size = max(len(gold_ids), len(pred_ids))
     if not size:
         return []
@@ -599,6 +699,8 @@ def _assign(
             weights[i][j] = _association_weight(
                 gold.iloc[gold_id],
                 predicted.iloc[pred_id],
+                config=config,
+                multiclass=multiclass,
             )
     assignment = _hungarian_max(weights)
     return [
@@ -608,45 +710,47 @@ def _assign(
     ]
 
 
-def _association_weight(gold, pred) -> float:
-    intersection = _intersection(
-        int(gold.start_span),
-        int(gold.end_span),
-        int(pred.start_span),
-        int(pred.end_span),
-    )
+
+def _association_weight(
+    gold,
+    pred,
+    *,
+    config: DiagnosticMatchConfig,
+    multiclass: bool,
+) -> float:
+    """Priority among already-eligible diagnostic span pairs.
+
+    Eligibility is determined by normalized Sørensen-Dice overlap. The weight
+    then favours exact boundaries, stronger overlap and smaller boundary shifts.
+    Label agreement is only a tie-break signal in multi-label-type evaluations;
+    it never controls eligibility.
+    """
+    if str(gold.filename) != str(pred.filename):
+        return 0.0
+    metrics = _span_overlap_metrics(gold, pred)
+    if float(metrics["span_dice"]) < float(config.overlap_threshold):
+        return 0.0
+
     same_boundary = (
         int(gold.start_span) == int(pred.start_span)
         and int(gold.end_span) == int(pred.end_span)
     )
-    if not intersection and not same_boundary:
-        return 0.0
-    union = max(int(gold.end_span), int(pred.end_span)) - min(
-        int(gold.start_span), int(pred.start_span)
-    )
-    iou = intersection / union if union else 0.0
     distance = abs(int(pred.start_span) - int(gold.start_span)) + abs(
         int(pred.end_span) - int(gold.end_span)
     )
     confidence_value = _row_score(pred)
     confidence = 0.0 if confidence_value is None else confidence_value
+    label_bonus = 1.0 if multiclass and str(gold.label) == str(pred.label) else 0.0
+
     return (
         1_000_000 * same_boundary
-        + 100_000 * iou
-        + 10_000 * (str(gold.label) == str(pred.label))
-        + 1_000
-        * (
-            int(gold.start_span) <= int(pred.start_span)
-            and int(gold.end_span) >= int(pred.end_span)
-        )
-        + 1_000
-        * (
-            int(pred.start_span) <= int(gold.start_span)
-            and int(pred.end_span) >= int(gold.end_span)
-        )
+        + 100_000 * float(metrics["span_dice"])
+        + 10_000 * float(metrics["span_iou"])
+        + 1_000 * label_bonus
         + 100 / (1 + distance)
         + confidence
     )
+
 
 
 def _hungarian_max(weights: list[list[float]]) -> list[int]:
@@ -710,8 +814,7 @@ def _pair_details(gold, pred) -> dict[str, Any]:
     pred_end = int(pred.end_span)
     start_delta = pred_start - gold_start
     end_delta = pred_end - gold_end
-    intersection = _intersection(gold_start, gold_end, pred_start, pred_end)
-    union = max(gold_end, pred_end) - min(gold_start, pred_start)
+    overlap = _span_overlap_metrics(gold, pred)
     same_boundary = start_delta == 0 and end_delta == 0
 
     if same_boundary:
@@ -734,8 +837,7 @@ def _pair_details(gold, pred) -> dict[str, Any]:
 
     return {
         "error_label_agreement": str(gold.label) == str(pred.label),
-        "span_intersection": int(intersection),
-        "span_iou": float(intersection / union) if union else 0.0,
+        **overlap,
         "span_start_delta": int(start_delta),
         "span_end_delta": int(end_delta),
         "span_length_delta": int((pred_end - pred_start) - (gold_end - gold_start)),
@@ -753,6 +855,159 @@ def _pair_details(gold, pred) -> dict[str, Any]:
             punctuation_gold == punctuation_pred and len(pred_text) < len(gold_text)
         ),
     }
+
+
+
+def _span_overlap_metrics(gold, pred) -> dict[str, float | int]:
+    gold_start = int(gold.start_span)
+    gold_end = int(gold.end_span)
+    pred_start = int(pred.start_span)
+    pred_end = int(pred.end_span)
+    gold_length = max(0, gold_end - gold_start)
+    pred_length = max(0, pred_end - pred_start)
+    intersection = _intersection(gold_start, gold_end, pred_start, pred_end)
+    union = gold_length + pred_length - intersection
+    denominator = gold_length + pred_length
+    return {
+        "span_intersection": int(intersection),
+        "span_gold_length": int(gold_length),
+        "span_pred_length": int(pred_length),
+        "span_gold_coverage": float(intersection / gold_length) if gold_length else 0.0,
+        "span_pred_coverage": float(intersection / pred_length) if pred_length else 0.0,
+        "span_dice": float(2.0 * intersection / denominator) if denominator else 0.0,
+        "span_iou": float(intersection / union) if union else 0.0,
+    }
+
+
+def _merge_intervals(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    if not intervals:
+        return []
+    ordered = sorted((int(start), int(end)) for start, end in intervals if int(end) > int(start))
+    merged: list[tuple[int, int]] = []
+    for start, end in ordered:
+        if not merged or start > merged[-1][1]:
+            merged.append((start, end))
+        else:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+    return merged
+
+
+def _fragmentation_group_details(gold_row, pred_rows: list[Any]) -> dict[str, Any]:
+    gold_start = int(gold_row.start_span)
+    gold_end = int(gold_row.end_span)
+    gold_length = max(0, gold_end - gold_start)
+    merged = _merge_intervals(
+        [(int(row.start_span), int(row.end_span)) for row in pred_rows]
+    )
+    pred_union_length = sum(end - start for start, end in merged)
+    intersection = sum(
+        _intersection(gold_start, gold_end, start, end) for start, end in merged
+    )
+    union = gold_length + pred_union_length - intersection
+    denominator = gold_length + pred_union_length
+    hull_start = min(start for start, _ in merged)
+    hull_end = max(end for _, end in merged)
+    start_delta = hull_start - gold_start
+    end_delta = hull_end - gold_end
+    return {
+        "error_label_agreement": all(str(row.label) == str(gold_row.label) for row in pred_rows),
+        "fragmentation_pred_count": int(len(pred_rows)),
+        "fragmentation_pred_starts": [int(row.start_span) for row in pred_rows],
+        "fragmentation_pred_ends": [int(row.end_span) for row in pred_rows],
+        "fragmentation_pred_texts": [str(row.text) for row in pred_rows],
+        "fragmentation_pred_labels": [str(row.label) for row in pred_rows],
+        "fragmentation_gold_coverage": float(intersection / gold_length) if gold_length else 0.0,
+        "fragmentation_dice": float(2.0 * intersection / denominator) if denominator else 0.0,
+        "span_intersection": int(intersection),
+        "span_gold_length": int(gold_length),
+        "span_pred_length": int(pred_union_length),
+        "span_gold_coverage": float(intersection / gold_length) if gold_length else 0.0,
+        "span_pred_coverage": float(intersection / pred_union_length) if pred_union_length else 0.0,
+        "span_dice": float(2.0 * intersection / denominator) if denominator else 0.0,
+        "span_iou": float(intersection / union) if union else 0.0,
+        "span_start_delta": int(start_delta),
+        "span_end_delta": int(end_delta),
+        "span_length_delta": int((hull_end - hull_start) - gold_length),
+        "span_abs_start_delta": abs(int(start_delta)),
+        "span_abs_end_delta": abs(int(end_delta)),
+        "span_boundary_error": "FRAGMENTATION",
+        "span_relation": "FRAGMENTATION",
+        "span_one_character_offset": False,
+        "span_leading_whitespace": False,
+        "span_trailing_whitespace": False,
+        "span_punctuation_included": False,
+        "span_punctuation_excluded": False,
+    }
+
+
+def _fragmentation_groups(
+    gold: pd.DataFrame,
+    predicted: pd.DataFrame,
+    gold_ids: set[int],
+    pred_ids: set[int],
+    config: DiagnosticMatchConfig,
+) -> list[tuple[int, list[int], dict[str, Any]]]:
+    """Find conservative one-gold-to-many-prediction fragmentation groups.
+
+    A group is considered only when at least two unmatched predictions overlap
+    the gold span, no individual fragment already passes the one-to-one Dice
+    threshold, and their union passes the same normalized threshold. Candidate
+    groups are ordered deterministically by group Dice, gold coverage and span id.
+    """
+    candidates: list[tuple[float, float, int, list[int], dict[str, Any]]] = []
+    for gold_id in sorted(gold_ids):
+        gold_row = gold.iloc[gold_id]
+        overlapping = [
+            pred_id
+            for pred_id in sorted(pred_ids)
+            if str(predicted.iloc[pred_id].filename) == str(gold_row.filename)
+            and _intersection(
+                int(gold_row.start_span), int(gold_row.end_span),
+                int(predicted.iloc[pred_id].start_span), int(predicted.iloc[pred_id].end_span),
+            ) > 0
+        ]
+        if len(overlapping) < 2:
+            continue
+        # If one prediction is already a plausible one-to-one pair, prefer the
+        # normal Hungarian path and leave extras spurious rather than overcalling
+        # fragmentation.
+        if any(
+            _span_overlap_metrics(gold_row, predicted.iloc[pred_id])["span_dice"]
+            >= float(config.overlap_threshold)
+            for pred_id in overlapping
+        ):
+            continue
+        rows = [predicted.iloc[pred_id] for pred_id in overlapping]
+        details = _fragmentation_group_details(gold_row, rows)
+        if float(details["fragmentation_dice"]) < float(config.overlap_threshold):
+            continue
+        candidates.append(
+            (
+                float(details["fragmentation_dice"]),
+                float(details["fragmentation_gold_coverage"]),
+                int(gold_id),
+                overlapping,
+                details,
+            )
+        )
+
+    candidates.sort(key=lambda item: (-item[0], -item[1], item[2], item[3]))
+    result: list[tuple[int, list[int], dict[str, Any]]] = []
+    used_pred: set[int] = set()
+    for _dice, _coverage, gold_id, overlapping, details in candidates:
+        available = [pred_id for pred_id in overlapping if pred_id not in used_pred]
+        if len(available) < 2:
+            continue
+        if available != overlapping:
+            details = _fragmentation_group_details(
+                gold.iloc[gold_id],
+                [predicted.iloc[pred_id] for pred_id in available],
+            )
+            if float(details["fragmentation_dice"]) < float(config.overlap_threshold):
+                continue
+        result.append((gold_id, available, details))
+        used_pred.update(available)
+    return result
 
 
 def _relation(gold_start, gold_end, pred_start, pred_end) -> str:

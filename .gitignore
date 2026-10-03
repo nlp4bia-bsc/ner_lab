@@ -48,3 +48,6 @@ aug_grid_bundle/
 
 #data
 assets/
+
+#analysis
+analysis/

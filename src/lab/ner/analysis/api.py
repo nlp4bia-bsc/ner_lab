@@ -20,6 +20,7 @@ from lab.core import (
     write_manifest,
 )
 from lab.ner.analysis.diagnostics import (
+    DiagnosticMatchConfig,
     audit_annotations,
     enrich_error_diagnostics,
     entity_features,
@@ -51,9 +52,13 @@ def analyze_evaluation(
     *,
     run_id: str = "analysis",
     levenshtein_threshold: float = 0.80,
+    lexical_similarity_mode: str = "hybrid",
     min_overlap_percentage: float = 40.0,
+    diagnostic_overlap_threshold: float = 0.60,
+    diagnostic_sensitivity_thresholds: tuple[float, ...] = (0.40, 0.50, 0.60, 0.70, 0.80),
     bootstrap_samples: int = 2000,
     bootstrap_confidence: float = 0.95,
+    partition_size: int = 50,
     random_state: int = 13,
     verbose: int = 0,
     evaluation_documents: pd.DataFrame | str | Path | None = None,
@@ -65,15 +70,21 @@ def analyze_evaluation(
     ``training`` may additionally be a canonical ``documents.parquet`` corpus;
     its entities are converted through :func:`lab.core.spans_from_corpus`.
 
-    ``SEEN`` / ``FEW_SHOT`` / ``ZERO_SHOT`` are lexical exposure classes:
-    exact raw mention in training; otherwise nearest normalized Levenshtein at
-    least ``levenshtein_threshold``; otherwise zero-shot.  This operational
-    definition is persisted in ``manifest.json``.
+    ``SEEN`` / ``LEXICALLY_SIMILAR`` / ``NOVEL`` are lexical exposure classes.
+    Exact raw mention surfaces are ``SEEN``. Otherwise lexical similarity is
+    compared with ``levenshtein_threshold``. In the default ``hybrid`` mode the
+    similarity is the conservative minimum of normalized Levenshtein and
+    Jaro-Winkler similarity. This operational definition is persisted in the
+    manifest.
     """
     if int(verbose) not in (0, 1):
         raise ValueError("verbose must be 0 or 1.")
     if int(bootstrap_samples) < 0:
         raise ValueError("bootstrap_samples must be >= 0.")
+    if not 0.0 < float(diagnostic_overlap_threshold) <= 1.0:
+        raise ValueError("diagnostic_overlap_threshold must be in (0, 1].")
+    if int(partition_size) < 0:
+        raise ValueError("partition_size must be >= 0; 0 disables partition stability analysis.")
 
     output_root = Path(output_dir)
     tables_root = output_root / "tables"
@@ -91,7 +102,8 @@ def analyze_evaluation(
     multiclass = len(tags) > 1
 
     exposure_config = ExposureConfig(
-        levenshtein_threshold=float(levenshtein_threshold)
+        levenshtein_threshold=float(levenshtein_threshold),
+        similarity_mode=str(lexical_similarity_mode),
     )
     exposure = ExposureIndex(training_frame, exposure_config)
 
@@ -102,7 +114,15 @@ def analyze_evaluation(
         tags=tags,
         min_overlap_percentage=float(min_overlap_percentage),
     )
-    events = enrich_error_diagnostics(events, gold_frame, predicted_frame)
+    events = enrich_error_diagnostics(
+        events,
+        gold_frame,
+        predicted_frame,
+        match_config=DiagnosticMatchConfig(
+            overlap_threshold=float(diagnostic_overlap_threshold)
+        ),
+        multiclass=multiclass,
+    )
     events = _attach_exposure(events, gold_frame, predicted_frame, exposure)
     events = _attach_entity_features(events)
 
@@ -128,6 +148,11 @@ def analyze_evaluation(
         bootstrap_samples=int(bootstrap_samples),
         bootstrap_confidence=float(bootstrap_confidence),
         random_state=int(random_state),
+        diagnostic_overlap_threshold=float(diagnostic_overlap_threshold),
+        diagnostic_sensitivity_thresholds=tuple(
+            float(value) for value in diagnostic_sensitivity_thresholds
+        ),
+        partition_size=int(partition_size),
     )
 
     # Annotation-integrity tables are persisted independently from model errors.
@@ -162,7 +187,7 @@ def analyze_evaluation(
 
     manifest = {
         "artifact": "ner_error_analysis",
-        "schema_version": "2.0.0",
+        "schema_version": "2.1.0",
         "run_id": str(run_id),
         "official_evaluator": "lab.ner.evaluation.span_metrics",
         "official_metrics": metrics,
@@ -182,21 +207,40 @@ def analyze_evaluation(
             "training_duplicates": int(training_frame.duplicated().sum()),
         },
         "generalization": {
-            "classes": ["SEEN", "FEW_SHOT", "ZERO_SHOT"],
+            "classes": ["SEEN", "LEXICALLY_SIMILAR", "NOVEL"],
+            "legacy_class_mapping": {
+                "SEEN": "SEEN",
+                "LEXICALLY_SIMILAR": "FEW_SHOT",
+                "NOVEL": "ZERO_SHOT",
+            },
             "seen_definition": "raw mention surface occurs exactly in training",
-            "few_shot_definition": (
-                "not exact-seen and nearest normalized Levenshtein similarity "
-                f">= {float(levenshtein_threshold):.6g}"
+            "lexically_similar_definition": (
+                "not exact-seen and configured lexical similarity >= "
+                f"{float(levenshtein_threshold):.6g}"
             ),
-            "zero_shot_definition": (
-                "not exact-seen and nearest normalized Levenshtein similarity "
-                f"< {float(levenshtein_threshold):.6g}, or no training neighbour"
+            "novel_definition": (
+                "not exact-seen and configured lexical similarity < "
+                f"{float(levenshtein_threshold):.6g}, or no training neighbour"
             ),
-            "levenshtein_threshold": float(levenshtein_threshold),
+            "lexical_similarity_threshold": float(levenshtein_threshold),
+            "levenshtein_threshold_legacy_name": float(levenshtein_threshold),
+            "similarity_mode": str(lexical_similarity_mode),
             "similarity_backend": exposure.backend,
+            "hybrid_rule": (
+                "minimum of normalized Levenshtein and Jaro-Winkler"
+                if str(lexical_similarity_mode) == "hybrid"
+                else "normalized Levenshtein"
+            ),
             "normalization": exposure_config.normalization.__dict__,
             "unique_training_mentions": exposure.unique_training_mentions,
             "cache_hits": exposure.cache_hits,
+            "references": [
+                {
+                    "method": "Jaro similarity",
+                    "citation": "Jaro MA. J Am Stat Assoc. 1989;84(406):414-420.",
+                    "doi": "10.1080/01621459.1989.10478785",
+                }
+            ],
         },
         "diagnostics": {
             "strict_pairing": (
@@ -210,13 +254,46 @@ def analyze_evaluation(
                 "BOUNDARY_ERROR",
                 "BOUNDARY_AND_LABEL_ERROR",
             ],
-            "min_overlap_percentage": float(min_overlap_percentage),
+            "label_error_diagnostics_enabled": bool(multiclass),
+            "diagnostic_overlap_metric": "character-level Sorensen-Dice",
+            "diagnostic_overlap_threshold": float(diagnostic_overlap_threshold),
+            "diagnostic_sensitivity_thresholds": [
+                float(value) for value in diagnostic_sensitivity_thresholds
+            ],
+            "diagnostic_overlap_threshold_is_repository_default": True,
+            "fragmentation_policy": (
+                "one gold mention split across multiple unmatched predictions is counted "
+                "as one boundary-error diagnostic unit when the fragment union passes "
+                "the same normalized Dice threshold and no fragment is already an eligible "
+                "one-to-one pair"
+            ),
+            "merging_analysis": "disabled by design",
+            "official_min_overlap_percentage": float(min_overlap_percentage),
+            "references": [
+                {
+                    "method": "Sorensen-Dice overlap coefficient",
+                    "citation": "Dice LR. Ecology. 1945;26(3):297-302.",
+                    "doi": "10.2307/1932409",
+                    "note": (
+                        "The coefficient motivates the normalized symmetric overlap; "
+                        "the 0.60 default is a repository diagnostic heuristic, not a "
+                        "threshold prescribed by the original paper."
+                    ),
+                }
+            ],
         },
         "bootstrap": {
             "samples": int(bootstrap_samples),
             "confidence": float(bootstrap_confidence),
             "seed": int(random_state),
             "unit": "document",
+        },
+        "document_partition_stability": {
+            "enabled": int(partition_size) > 0,
+            "partition_size": int(partition_size),
+            "sampling": "without replacement",
+            "seed": int(random_state),
+            "interpretation": "descriptive stability analysis; not a bootstrap confidence interval",
         },
         "visualization": {
             "profile": "publication_svg_v2",
@@ -227,7 +304,7 @@ def analyze_evaluation(
             "right_spine": False,
             "default_grid": False,
             "support_annotations": True,
-            "bootstrap_ci_on_generalization_f1": True,
+            "bootstrap_ci_on_generalization_f1": False,
             "uninformative_plots_are_omitted": True,
         },
         "verbose": int(verbose),
@@ -276,6 +353,9 @@ def inspect_analysis(path: str | Path) -> dict[str, Any]:
         "counts": data.get("counts", {}),
         "official_metrics": data.get("official_metrics", {}),
         "generalization": data.get("generalization", {}),
+        "diagnostics": data.get("diagnostics", {}),
+        "bootstrap": data.get("bootstrap", {}),
+        "document_partition_stability": data.get("document_partition_stability", {}),
         "tables": tables,
         "figures": data.get("outputs", {}).get("figures", []),
     }

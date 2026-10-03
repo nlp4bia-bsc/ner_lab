@@ -68,8 +68,8 @@ ERROR_LABELS = {
 
 GENERALIZATION_LABELS = {
     "SEEN": "Seen",
-    "FEW_SHOT": "Few-shot",
-    "ZERO_SHOT": "Zero-shot",
+    "LEXICALLY_SIMILAR": "Lexically similar",
+    "NOVEL": "Novel",
 }
 
 ORACLE_LABELS = {
@@ -117,15 +117,14 @@ class PlotDecision:
 FIGURE_CAPTIONS: dict[str, str] = {
     "generalization_strict_prf.svg": (
         "STRICT precision, recall and F1 across lexical exposure groups. Gold-support counts "
-        "and proportions are shown with each group; F1 markers include document-bootstrap "
-        "confidence intervals when available, and deltas quantify the generalization gap from seen mentions."
+        "and proportions are shown with each group; deltas quantify the F1 gap from seen mentions."
     ),
     "generalization_character_prf.svg": (
         "Character-level precision, recall and F1 across lexical exposure groups, with gold-support "
-        "counts/proportions and document-bootstrap confidence intervals for F1 when available."
+        "counts/proportions and F1 deltas relative to seen mentions."
     ),
     "generalization_error_profile.svg": (
-        "Gold-conditioned outcome composition across seen, few-shot and zero-shot mentions. "
+        "Gold-conditioned outcome composition across seen, lexically similar and novel mentions. "
         "The 100% stacked bars separate correct detections from missed, boundary, label and combined errors."
     ),
     "generalization_strict_f1_by_label.svg": (
@@ -192,7 +191,7 @@ FIGURE_CAPTIONS: dict[str, str] = {
     ),
     "dataset_shift_labels.svg": (
         "Training versus evaluation label composition as 100% stacked bars. Segment labels report meaningful "
-        "shares, and Jensen-Shannon distance is displayed when available."
+        "shares; Jensen-Shannon statistics remain available in the persisted summary table rather than the figure."
     ),
     "confidence_by_error.svg": (
         "Prediction-confidence distribution summaries by error type: min-max range, interquartile range, median "
@@ -205,6 +204,11 @@ FIGURE_CAPTIONS: dict[str, str] = {
     "document_performance_distribution.svg": (
         "Distribution of per-document STRICT and character F1. Box summaries and individual-document points "
         "expose heterogeneity that aggregate corpus metrics can hide."
+    ),
+    "document_partition_stability.svg": (
+        "Descriptive stability of STRICT and character-overlap metrics across deterministic, non-overlapping "
+        "document partitions. The complete-test estimate is shown as the reference and the partition analysis "
+        "must not be interpreted as a bootstrap confidence interval."
     ),
 }
 
@@ -376,26 +380,35 @@ def write_analysis_figures(
 
     boundary = tables.get("boundary_errors", pd.DataFrame())
     if _has_rows(boundary):
-        generate(
-            "span_start_delta.svg",
-            signed_boundary_figure,
-            boundary["span_start_delta"],
-            title="Start-boundary deviation",
-            explanation="Prediction − gold; negative = starts too early, positive = starts too late",
-        )
-        generate(
-            "span_end_delta.svg",
-            signed_boundary_figure,
-            boundary["span_end_delta"],
-            title="End-boundary deviation",
-            explanation="Prediction − gold; negative = ends too early, positive = ends too late",
-        )
-        generate(
-            "boundary_absolute_delta.svg",
-            absolute_boundary_figure,
-            boundary,
-            title="How large are boundary errors?",
-        )
+        pairwise_boundary = boundary.copy()
+        if "error_fragmentation" in pairwise_boundary.columns:
+            pairwise_boundary = pairwise_boundary.loc[
+                ~pairwise_boundary["error_fragmentation"].fillna(False).astype(bool)
+            ].copy()
+        if _has_rows(pairwise_boundary):
+            generate(
+                "span_start_delta.svg",
+                signed_boundary_figure,
+                pairwise_boundary["span_start_delta"],
+                title="Start-boundary deviation",
+                explanation="Prediction − gold; negative = starts too early, positive = starts too late",
+            )
+            generate(
+                "span_end_delta.svg",
+                signed_boundary_figure,
+                pairwise_boundary["span_end_delta"],
+                title="End-boundary deviation",
+                explanation="Prediction − gold; negative = ends too early, positive = ends too late",
+            )
+            generate(
+                "boundary_absolute_delta.svg",
+                absolute_boundary_figure,
+                pairwise_boundary,
+                title="How large are one-to-one boundary errors?",
+            )
+        else:
+            for filename in ("span_start_delta.svg", "span_end_delta.svg", "boundary_absolute_delta.svg"):
+                omit(filename, "Only fragmentation boundary errors were available; one-to-one boundary offsets would be misleading.")
         omit("boundary_relations.svg", "Disabled by design: span-relation panels were judged low-value compared with deviation-range summaries.")
     else:
         for filename in ("span_start_delta.svg", "span_end_delta.svg", "boundary_absolute_delta.svg", "boundary_relations.svg"):
@@ -493,11 +506,27 @@ def write_analysis_figures(
             title="Performance heterogeneity across documents",
         )
 
+    partition_metrics = tables.get("document_partition_metrics", pd.DataFrame())
+    partition_summary = tables.get("document_partition_summary", pd.DataFrame())
+    if _has_rows(partition_metrics) and len(partition_metrics) >= 2:
+        generate(
+            "document_partition_stability.svg",
+            document_partition_stability_figure,
+            partition_metrics,
+            summary=partition_summary,
+            title="Metric stability across non-overlapping document partitions",
+        )
+    elif _has_rows(partition_metrics):
+        omit(
+            "document_partition_stability.svg",
+            "Only one document partition was available; a stability distribution would be uninformative.",
+        )
+
     manifest_path = root / "plot_manifest.json"
     manifest_path.write_text(
         json.dumps(
             {
-                "schema_version": "2.0.0",
+                "schema_version": "2.1.0",
                 "theme": asdict(THEME),
                 "generated": [Path(path).name for path in figures],
                 "decisions": [asdict(decision) for decision in decisions],
@@ -562,7 +591,7 @@ def generalization_prf_figure(
     title: str,
     path: str | Path,
 ) -> Path:
-    order = [value for value in ("SEEN", "FEW_SHOT", "ZERO_SHOT") if value in set(frame["value"].astype(str))]
+    order = [value for value in ("SEEN", "LEXICALLY_SIMILAR", "NOVEL") if value in set(frame["value"].astype(str))]
     ordered = frame.set_index(frame["value"].astype(str)).reindex(order).reset_index(drop=True)
     supports = pd.to_numeric(ordered.get("support", 0), errors="coerce").fillna(0).astype(int).to_numpy()
     total = max(int(supports.sum()), 1)
@@ -635,7 +664,7 @@ def generalization_prf_figure(
 
 
 def generalization_error_profile_figure(frame: pd.DataFrame, *, title: str, path: str | Path) -> Path:
-    order = [value for value in ("SEEN", "FEW_SHOT", "ZERO_SHOT") if value in set(frame["generalization_class"].astype(str))]
+    order = [value for value in ("SEEN", "LEXICALLY_SIMILAR", "NOVEL") if value in set(frame["generalization_class"].astype(str))]
     error_order = [
         value
         for value in ("CORRECT", "MISSED", "BOUNDARY_ERROR", "LABEL_ERROR", "BOUNDARY_AND_LABEL_ERROR")
@@ -695,7 +724,7 @@ def generalization_error_profile_figure(frame: pd.DataFrame, *, title: str, path
 
 
 def label_generalization_heatmap(frame: pd.DataFrame, *, metric: str, title: str, path: str | Path) -> Path:
-    classes = [value for value in ("SEEN", "FEW_SHOT", "ZERO_SHOT") if value in set(frame["generalization_class"].astype(str))]
+    classes = [value for value in ("SEEN", "LEXICALLY_SIMILAR", "NOVEL") if value in set(frame["generalization_class"].astype(str))]
     labels = sorted(frame["label"].astype(str).unique(), key=lambda value: value.lower())
     matrix = np.full((len(labels), len(classes)), np.nan)
     support = np.zeros((len(labels), len(classes)), dtype=int)
@@ -812,7 +841,12 @@ def training_frequency_figure(
     title: str,
     path: str | Path,
 ) -> Path:
-    """Show STRICT F1 by exact mention-surface frequency in training."""
+    """Show STRICT F1 by exact mention-surface frequency in training.
+
+    Support is embedded compactly in the category labels rather than rendered as
+    a separate footnote. This keeps the x-axis readable in publication-width
+    figures and avoids collisions between support text and the axis title.
+    """
     work = frame.copy()
     work["_bucket_key"] = work["value"].astype(str).map(_frequency_bucket_key)
     work = work.sort_values("_bucket_key", kind="stable").reset_index(drop=True)
@@ -820,53 +854,120 @@ def training_frequency_figure(
     values = pd.to_numeric(work["strict_f1"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
     support = pd.to_numeric(work.get("support", 0), errors="coerce").fillna(0).astype(int).to_numpy()
     raw_labels = work["value"].astype(str).tolist()
-    x = np.arange(len(work), dtype=float) + 0.18
+
+    # A little extra horizontal spacing avoids collisions between adjacent
+    # multi-line category labels without rotating text.
+    x = np.arange(len(work), dtype=float) * 1.18 + 0.30
 
     point_palette = [VERMILLION, ORANGE, YELLOW, SKY, BLUE, GREEN, PURPLE, MID_GREY]
 
     with _publication_context():
-        fig, ax = plt.subplots(figsize=(THEME.width + 0.35, 5.5))
-        fig.subplots_adjust(bottom=0.28, top=0.80)
+        fig, ax = plt.subplots(figsize=(THEME.width + 1.15, 5.25))
+        fig.subplots_adjust(bottom=0.22, top=0.80, left=0.11, right=0.98)
+
         for index, (raw, value, n) in enumerate(zip(raw_labels, values, support)):
             xpos = x[index]
             color = point_palette[index % len(point_palette)]
+
             if overall is not None and np.isfinite(overall):
                 low, high = sorted((float(overall), float(value)))
                 ax.vlines(xpos, low, high, color=LIGHT_GREY, linewidth=2.4, zorder=1)
             else:
                 ax.vlines(xpos, 0.0, value, color=LIGHT_GREY, linewidth=2.4, zorder=1)
+
             reliable = int(n) >= MIN_RELIABLE_SUPPORT
-            ax.scatter(xpos, value, s=92, facecolor=color if reliable else WHITE, edgecolor=color, linewidth=1.8, zorder=3)
-            ax.text(xpos, min(value + 0.045, 1.035), f"{value:.3f}", ha="center", va="bottom", fontsize=THEME.annotation_size + 0.2, fontweight="bold", color=BLACK)
+            ax.scatter(
+                xpos,
+                value,
+                s=92,
+                facecolor=color if reliable else WHITE,
+                edgecolor=color,
+                linewidth=1.8,
+                zorder=3,
+            )
+            ax.text(
+                xpos,
+                min(value + 0.045, 1.035),
+                f"{value:.3f}",
+                ha="center",
+                va="bottom",
+                fontsize=THEME.annotation_size + 0.2,
+                fontweight="bold",
+                color=BLACK,
+            )
+
             if overall is not None and np.isfinite(overall):
                 delta = float(value) - float(overall)
-                ax.text(xpos, max(value - 0.058, 0.045), f"Δ {delta:+.3f}", ha="center", va="top", fontsize=THEME.annotation_size - 0.35, color=DARK_GREY)
+                ax.text(
+                    xpos,
+                    max(value - 0.058, 0.045),
+                    f"Δ {delta:+.3f}",
+                    ha="center",
+                    va="top",
+                    fontsize=THEME.annotation_size - 0.35,
+                    color=DARK_GREY,
+                )
 
         if overall is not None and np.isfinite(overall):
-            ax.axhline(float(overall), color=DARK_GREY, linestyle=(0, (4, 3)), linewidth=1.1, zorder=0)
-            ax.text(x[-1] + 0.25, float(overall) + 0.012, f"Overall STRICT F1 = {float(overall):.3f}", ha="right", va="bottom", fontsize=THEME.annotation_size, color=DARK_GREY)
+            ax.axhline(
+                float(overall),
+                color=DARK_GREY,
+                linestyle=(0, (4, 3)),
+                linewidth=1.1,
+                zorder=0,
+            )
+            ax.text(
+                x[-1] + 0.35,
+                float(overall) + 0.012,
+                f"Overall STRICT F1 = {float(overall):.3f}",
+                ha="right",
+                va="bottom",
+                fontsize=THEME.annotation_size,
+                color=DARK_GREY,
+            )
 
-        tick_labels = [_frequency_bucket_label_short(raw) for raw in raw_labels]
+        tick_labels = [
+            _frequency_bucket_label_compact(raw, int(n))
+            for raw, n in zip(raw_labels, support)
+        ]
         ax.set_xticks(x)
         ax.set_xticklabels(tick_labels, rotation=0, ha="center")
-        ax.set_xlim(-0.10, x[-1] + 0.30)
+        ax.tick_params(axis="x", pad=8)
+        ax.set_xlim(-0.18, x[-1] + 0.48)
         ax.set_ylim(0.0, 1.06)
         ax.set_yticks(np.arange(0.0, 1.01, 0.2))
         ax.set_ylabel("STRICT F1")
-        ax.set_xlabel("Exact mention-surface exposure in the training corpus", labelpad=8)
+        ax.set_xlabel("Exact mention-surface exposure in the training corpus", labelpad=12)
         ax.set_title(title, loc="left", pad=34)
-        ax.text(0.0, 1.02, "Each point is STRICT F1 for a group of evaluation mentions, bucketed by how often the exact mention surface appeared in training.", transform=ax.transAxes, ha="left", va="bottom", fontsize=THEME.subtitle_font_size, color=DARK_GREY)
+        ax.text(
+            0.0,
+            1.02,
+            "Each point is STRICT F1 for a group of evaluation mentions, bucketed by how often the exact mention surface appeared in training.",
+            transform=ax.transAxes,
+            ha="left",
+            va="bottom",
+            fontsize=THEME.subtitle_font_size,
+            color=DARK_GREY,
+        )
 
-        support_note = "Supports by bucket: " + "; ".join(f"{_frequency_bucket_name(raw)} n={int(n)}" for raw, n in zip(raw_labels, support)) + "."
-        fig.text(0.13, 0.06, support_note, ha="left", va="bottom", fontsize=THEME.annotation_size - 0.2, color=DARK_GREY)
-        handles = []
         if (support < MIN_RELIABLE_SUPPORT).any():
-            handles.append(Line2D([0], [0], marker="o", color="none", markerfacecolor=WHITE, markeredgecolor=MID_GREY, markeredgewidth=1.5, label=f"Open marker: low support (n < {MIN_RELIABLE_SUPPORT})", markersize=6))
-        if handles:
+            handles = [
+                Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="none",
+                    markerfacecolor=WHITE,
+                    markeredgecolor=MID_GREY,
+                    markeredgewidth=1.5,
+                    label=f"Open marker: low support (n < {MIN_RELIABLE_SUPPORT})",
+                    markersize=6,
+                )
+            ]
             ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.0, 0.93), frameon=False)
+
         _clean_axes(ax)
         return _save(fig, path)
-
 
 
 def structural_effects_figure(frame: pd.DataFrame, *, title: str, path: str | Path) -> Path:
@@ -1267,6 +1368,52 @@ def document_distribution_figure(frame: pd.DataFrame, *, title: str, path: str |
         return _save(fig, path)
 
 
+def document_partition_stability_figure(
+    frame: pd.DataFrame,
+    *,
+    summary: pd.DataFrame,
+    title: str,
+    path: str | Path,
+) -> Path:
+    """Show descriptive metric variation across disjoint document partitions."""
+    metrics = [
+        ("STRICT precision", "strict_precision"),
+        ("STRICT recall", "strict_recall"),
+        ("STRICT F1", "strict_f1"),
+        ("Character-overlap F1", "char_f1"),
+    ]
+    available = [(label, column) for label, column in metrics if column in frame.columns]
+    with _publication_context():
+        fig, ax = plt.subplots(figsize=(THEME.width, max(4.0, 1.2 + 0.82 * len(available))))
+        rng = np.random.default_rng(13)
+        for y, (label, column) in enumerate(available):
+            values = pd.to_numeric(frame[column], errors="coerce").dropna().to_numpy(dtype=float)
+            if not len(values):
+                continue
+            jitter = rng.uniform(-0.08, 0.08, size=len(values))
+            ax.scatter(values, np.full(len(values), y) + jitter, s=32, facecolor=WHITE, edgecolor=_label_color(y), linewidth=1.2, zorder=3)
+            mean = float(np.mean(values))
+            ax.scatter(mean, y, s=75, marker="D", color=_label_color(y), edgecolor=BLACK, linewidth=0.7, zorder=4)
+            full = np.nan
+            if _has_rows(summary):
+                subset = summary.loc[(summary["scope"].astype(str) == "ALL") & (summary["metric"].astype(str) == column)]
+                if len(subset):
+                    full = float(subset.iloc[0]["full_test_estimate"])
+            if np.isfinite(full):
+                ax.scatter(full, y, s=75, marker="|", color=BLACK, linewidth=2.1, zorder=5)
+                ax.text(min(1.02, full + 0.018), y + 0.16, f"full {full:.3f}", ha="left", va="center", fontsize=THEME.annotation_size - 0.2, color=DARK_GREY)
+            ax.text(min(1.02, float(values.max()) + 0.025), y - 0.16, f"mean {mean:.3f} · range {values.min():.3f}–{values.max():.3f}", ha="left", va="center", fontsize=THEME.annotation_size - 0.2, color=DARK_GREY)
+        ax.set_yticks(np.arange(len(available)))
+        ax.set_yticklabels([label for label, _ in available])
+        ax.set_xlim(0.0, 1.08)
+        ax.set_xticks(np.arange(0.0, 1.01, 0.2))
+        ax.set_xlabel("Score")
+        ax.set_title(title, loc="left", pad=24)
+        fig.text(0.13, 0.012, "Open circles are non-overlapping document partitions; diamonds are partition means; black ticks are complete-test estimates. This is descriptive stability analysis, not a confidence interval.", ha="left", va="bottom", fontsize=THEME.annotation_size - 0.2, color=DARK_GREY)
+        _clean_axes(ax)
+        return _save(fig, path)
+
+
 # ---------------------------------------------------------------------------
 # Compatibility wrappers for the first analysis release. Keeping these names
 # avoids breaking downstream code that imported plotting helpers directly.
@@ -1522,6 +1669,22 @@ def _frequency_bucket_name(value: str) -> str:
     return mapping.get(normalized, _pretty_bucket(str(value)))
 
 
+def _frequency_bucket_label_compact(value: str, support: int) -> str:
+    """Compact two-line label for the training-frequency plot."""
+    normalized = str(value).strip().replace("–", "-").replace("—", "-").replace(" ", "")
+    mapping = {
+        "0": ("Unseen", "0×"),
+        "1": ("Seen once", "1×"),
+        "2-5": ("Low exposure", "2–5×"),
+        "6-10": ("Moderate exposure", "6–10×"),
+        "11-20": ("High exposure", "11–20×"),
+        ">20": ("Very high exposure", ">20×"),
+        "21+": ("Very high exposure", "21+×"),
+    }
+    name, frequency = mapping.get(normalized, (_pretty_bucket(str(value)), "training exposure"))
+    return f"{name}\n{frequency} · n={int(support)}"
+
+
 def _frequency_bucket_label_short(value: str) -> str:
     normalized = str(value).strip().replace("–", "-").replace("—", "-").replace(" ", "")
     mapping = {
@@ -1579,8 +1742,8 @@ def _pretty_bucket(value: str) -> str:
         str(value)
         .replace("-<", "–<")
         .replace("-", "–")
-        .replace("FEW_SHOT", "Few-shot")
-        .replace("ZERO_SHOT", "Zero-shot")
+        .replace("LEXICALLY_SIMILAR", "Lexically similar")
+        .replace("NOVEL", "Novel")
     )
 
 

@@ -2,8 +2,9 @@
 
 `lab.ner.analysis` extends the repository's existing NER evaluation without replacing it.
 The canonical evaluator remains `lab.ner.evaluation.span_metrics`; analysis only adds
-subgroup scoring, diagnostic FP/FN association, training-exposure analysis, error tables,
-bootstrap intervals and optional publication-oriented SVG figures.
+subgroup scoring, diagnostic FP/FN association, lexical training-exposure analysis,
+bootstrap/stability analyses, reusable Parquet tables, and optional publication-oriented
+SVG figures.
 
 ## CLI
 
@@ -15,7 +16,10 @@ lab ner analysis run \
   --output-dir runs/model_01/analysis \
   --run-id model_01 \
   --levenshtein-threshold 0.80 \
+  --lexical-similarity-mode hybrid \
+  --diagnostic-overlap-threshold 0.60 \
   --bootstrap-samples 2000 \
+  --partition-size 50 \
   --seed 13 \
   --verbose 1
 ```
@@ -26,9 +30,8 @@ Predictions and gold can be `.tsv` or `.parquet` span tables with:
 filename | label | start_span | end_span | text
 ```
 
-Predictions may additionally contain `score` in `[0, 1]`. Rows are **not** deduplicated
-when read; duplicate annotations/predictions are reported by the audit instead of being
-silently removed.
+Predictions may additionally contain `score`. Rows are **not** deduplicated when read;
+duplicate annotations/predictions are reported by the audit rather than silently removed.
 
 Training can use the same span-table contract or the canonical repository corpus:
 
@@ -39,26 +42,117 @@ doc_id | text | entities_json | n_entities
 The latter is converted with `lab.core.spans_from_corpus`, so no analysis-specific corpus
 reader is duplicated.
 
-## Generalization classes
+## Diagnostic FN↔FP association
 
-The default operational definition is lexical and is persisted in `manifest.json`:
+Official STRICT TP/FP/FN remains unchanged. Diagnostic pairing is applied **only after**
+strictly correct entities have been removed.
+
+One-to-one candidates must:
+
+1. occur in the same document; and
+2. reach the configurable normalized character Sørensen–Dice overlap threshold.
+
+The default is:
+
+```text
+diagnostic_overlap_threshold = 0.60
+```
+
+with:
+
+```text
+Dice(G, P) = 2 * intersection(G, P) / (length(G) + length(P))
+```
+
+The coefficient is normalized to `[0, 1]` and symmetric in gold/prediction. The `0.60`
+cut-off is a **repository diagnostic heuristic**, not a threshold proposed by the original
+Dice paper. It is persisted in the manifest and a sensitivity table is generated for
+`0.40, 0.50, 0.60, 0.70, 0.80` by default.
+
+Eligible one-to-one candidates are resolved globally with the existing deterministic
+Hungarian assignment. Label agreement may help distinguish error type, but it never decides
+whether spans are geometrically eligible.
+
+### Label errors
+
+`LABEL_ERROR` and `BOUNDARY_AND_LABEL_ERROR` are only meaningful when the evaluation has
+more than one entity label. In a single-label NER run, the diagnostic layer does not create
+an artificial label-error category.
+
+### Fragmentation
+
+Fragmentation is treated as a one-gold-to-many-prediction boundary failure. It is resolved
+before one-to-one matching and counts as **one boundary diagnostic unit**, not one error per
+fragment.
+
+A conservative fragmentation candidate requires:
+
+- at least two unmatched predictions overlapping the same unmatched gold span;
+- no individual fragment already qualifying as a valid one-to-one pair; and
+- the union of the fragments reaching the same normalized Dice threshold.
+
+The gold-side diagnostic row stores the complete list of fragment prediction IDs plus union
+coverage and union Dice. Standard one-to-one boundary-offset figures exclude fragmentation
+rows because a single start/end deviation is not a faithful description of a split entity.
+
+Merging is intentionally not studied in the current analysis profile. The legacy schema
+field is retained for compatibility but is not populated or included in intersection
+analyses.
+
+### Diagnostic overlap reference
+
+- Dice, L. R. (1945). *Measures of the Amount of Ecologic Association Between Species*.
+  **Ecology, 26(3), 297–302**. DOI: `10.2307/1932409`.
+
+The paper motivates the normalized symmetric coefficient. Its original domain is ecological
+association; applying the coefficient to character-span overlap is a repository adaptation.
+
+## Lexical exposure classes
+
+The canonical classes are now:
 
 - `SEEN`: the raw mention surface occurs exactly in training.
-- `FEW_SHOT`: no exact raw match, but the nearest normalized training mention has
-  normalized Levenshtein similarity `>= 0.80` by default.
-- `ZERO_SHOT`: no exact raw match and nearest similarity is below the threshold, or
-  training contains no candidate mention.
+- `LEXICALLY_SIMILAR`: no raw exact match, but configured lexical similarity is at least
+  the threshold (default `0.80`).
+- `NOVEL`: no raw exact match and lexical similarity is below the threshold, or training
+  contains no neighbour.
 
-Here `FEW_SHOT` means *lexically similar to training*. It does not claim that the model was
-trained in a conventional k-shot learning regime. The artifact also stores exact frequency,
-normalized exposure, nearest same-label/other-label mentions, similarity bins and training
-frequency bins.
+The previous `FEW_SHOT` / `ZERO_SHOT` terminology is avoided in new outputs because these
+classes describe **lexical exposure**, not conventional few-shot/zero-shot learning.
+A `generalization_class_legacy` field maps these values back to `SEEN` / `FEW_SHOT` / `ZERO_SHOT`, and backward-compatible boolean columns such as `few_shot_levenshtein` and `zero_shot_levenshtein` are retained.
+
+### Lexical similarity modes
+
+`--lexical-similarity-mode levenshtein` preserves normalized Levenshtein similarity.
+
+The new default:
+
+```text
+--lexical-similarity-mode hybrid
+```
+
+uses:
+
+```text
+combined_similarity = min(normalized_Levenshtein, normalized_Jaro_Winkler)
+```
+
+This is deliberately conservative: both character comparators must support a high-similarity
+decision before a non-exact mention is assigned to `LEXICALLY_SIMILAR`. Individual
+Levenshtein and Jaro–Winkler values are also persisted so the combined rule remains auditable.
+
+Reference for the Jaro comparator:
+
+- Jaro, M. A. (1989). *Advances in Record-Linkage Methodology as Applied to Matching the
+  1985 Census of Tampa, Florida*. **Journal of the American Statistical Association,
+  84(406), 414–420**. DOI: `10.1080/01621459.1989.10478785`.
+
+The `min(...)` aggregation rule is a repository design choice, not a rule prescribed by the
+Jaro paper.
 
 ## Error taxonomy
 
-Official STRICT accounting remains TP/FP/FN. Unmatched FP/FN rows are then associated
-within each document only for diagnostics. Association never creates evaluation credit.
-The primary diagnostic classes are:
+The existing diagnostic taxonomy is preserved:
 
 - `CORRECT`
 - `MISSED`
@@ -67,109 +161,113 @@ The primary diagnostic classes are:
 - `BOUNDARY_ERROR`
 - `BOUNDARY_AND_LABEL_ERROR`
 
-Boundary diagnostics include signed and absolute start/end errors, length difference,
-intersection, IoU, containment/overlap direction, one-character offsets, whitespace and
-simple punctuation differences. Fragmentation, merging, duplicate prediction, nested and
-overlapping entity flags are retained independently.
+No redesign of taxonomy units/denominators is performed in this version.
 
-## Multiclass analysis
+## Generalization and training-frequency metrics
 
-The run is considered multiclass when the union of gold and predicted labels contains more
-than one label. In that case publication output includes exact-boundary label-confusion
-figures. Confusion tables are always persisted in Parquet, including an extended table with
-`[MISSED]` and `[SPURIOUS]` flows.
+The existing subgroup PRF semantics are preserved in this version. The audit identified
+possible alternative conditioning schemes, but these are intentionally **not** changed here.
+The only change is the exposure-class terminology (`SEEN`, `LEXICALLY_SIMILAR`, `NOVEL`) and
+the optional hybrid lexical comparator.
 
-## Metrics and tables
+## Bootstrap
 
-The analysis writes:
+Document-level bootstrap remains the inferential resampling strategy:
 
 ```text
-analysis_dir/
-├── evaluation.parquet
-├── manifest.json
-├── captions.md                      # verbose=1
-├── tables/
-│   ├── overall_metrics.parquet
-│   ├── metrics_by_generalization.parquet
-│   ├── gold_recall_by_generalization.parquet
-│   ├── metrics_by_similarity.parquet
-│   ├── metrics_by_training_frequency.parquet
-│   ├── metrics_by_label.parquet
-│   ├── metrics_by_label_generalization.parquet
-│   ├── metrics_by_entity_length.parquet
-│   ├── metrics_by_acronym.parquet
-│   ├── metrics_by_overlap.parquet
-│   ├── metrics_by_nested.parquet
-│   ├── error_taxonomy.parquet
-│   ├── boundary_errors.parquet
-│   ├── label_confusion_counts.parquet
-│   ├── label_confusion_normalized.parquet
-│   ├── label_confusion_extended.parquet
-│   ├── document_metrics.parquet
-│   ├── dataset_shift_labels.parquet
-│   ├── oracle_error_budget.parquet
-│   ├── confidence_by_error.parquet
-│   ├── confidence_threshold_sweep.parquet
-│   ├── error_pareto.parquet
-│   ├── error_intersections.parquet
-│   ├── bootstrap_intervals.parquet
-│   └── *_annotation_audit.parquet
-└── figures/                         # verbose=1
-    └── *.svg
+sampling unit = complete document
+sampling = with replacement
 ```
 
-Every subgroup P/R/F1 table calls the existing evaluator on the complete selected gold and
-prediction populations. It does not estimate subgroup F1 by filtering only correct events.
+Gold and predictions for the sampled document stay paired, preserving within-document
+annotation dependence.
 
-Document-level bootstrap intervals retain within-document dependence. Oracle tables are
-counterfactual STRICT ceilings and must not be interpreted as expected model improvement.
+## Non-overlapping document-partition stability
+
+A separate descriptive analysis is now produced with:
+
+```text
+--partition-size 50
+```
+
+Documents are shuffled deterministically from the run seed and divided **without replacement**
+into non-overlapping partitions. The analysis reports:
+
+- per-partition STRICT precision / recall / F1;
+- per-partition character metrics;
+- per-partition gold-conditioned recall for `SEEN`, `LEXICALLY_SIMILAR`, `NOVEL`;
+- full-test estimate;
+- partition mean / standard deviation / minimum / maximum.
+
+This must not be interpreted as a bootstrap confidence interval. It is a descriptive
+stability analysis answering whether the aggregate result is dominated by particular groups
+of documents.
+
+Set `--partition-size 0` to disable it.
+
+## Main reusable tables
+
+In addition to the existing outputs, this version adds:
+
+```text
+tables/boundary_overlap_sensitivity.parquet
+tables/fragmentation_errors.parquet
+tables/document_partition_metrics.parquet
+tables/document_partition_generalization.parquet
+tables/document_partition_summary.parquet
+```
+
+`boundary_errors.parquet` additionally stores normalized overlap fields where available:
+
+```text
+span_gold_length
+span_pred_length
+span_gold_coverage
+span_pred_coverage
+span_dice
+span_iou
+error_fragmentation
+fragmentation_pred_count
+fragmentation_gold_coverage
+fragmentation_dice
+diagnostic_pred_ids
+```
 
 ## Figures
 
-`--verbose 1` additionally generates deterministic SVG vectors. The central required plots
-are:
+The existing publication-quality profile is preserved. Relevant behaviour in this version:
 
-- `generalization_strict_prf.svg`
-- `generalization_character_prf.svg`
-- `generalization_strict_f1_by_label.svg` (multiclass)
-- `generalization_character_f1_by_label.svg` (multiclass)
-- similarity/frequency curves
-- boundary offset histograms
-- error-taxonomy and oracle plots
-- label confusion heatmaps (multiclass)
-- label-distribution shift
-- confidence-by-error plot when scores exist
+- `generalization_strict_prf.svg` and `generalization_character_prf.svg` keep existing PRF
+  semantics but display `Seen`, `Lexically similar`, `Novel`;
+- training-frequency figures remain available with their existing metric semantics;
+- one-to-one start/end/absolute boundary plots exclude fragmentation rows;
+- `boundary_relations.svg` remains disabled;
+- `similarity_vs_strict_f1.svg` remains disabled;
+- `document_partition_stability.svg` visualizes the new without-replacement stability
+  analysis when at least two partitions are available;
+- single-label confusion plots and uninformative confidence plots remain automatically
+  omitted.
 
-The plotting layer uses an Okabe–Ito color-blind-safe palette, white background, editable
-SVG text, no default grid and no top/right Cartesian spines.
+Every plotting decision is stored in `figures/plot_manifest.json`.
 
-## Inspect and regenerate
+## Verification
+
+Run:
 
 ```bash
-lab ner analysis inspect runs/model_01/analysis
-lab ner analysis report --analysis-dir runs/model_01/analysis --verbose 1
+python3 verification/verify_analysis.py
+python3 verification/verify_layering.py
+python3 verification/run_all.py
 ```
 
-`report` regenerates figures from persisted Parquet tables without rerunning inference or
-rescore/re-exposure work.
+The analysis verification now includes adversarial checks for:
 
-## Publication-quality visualization profile (v2)
-
-`--verbose 1` now generates an analytical SVG report rather than a generic set of plots. The plotting layer is designed around model-diagnostic questions and uses consistent semantic colors, horizontal category labels, direct value/support annotations, no top/right spines, and no default grid. Category tick labels are never rotated; long labels are wrapped or moved to a horizontal layout.
-
-Key visualizations include:
-
-- precision/recall/F1 by `SEEN`, `FEW_SHOT`, and `ZERO_SHOT`, with gold-support counts/proportions and document-bootstrap F1 confidence intervals when available;
-- a gold-conditioned 100% error profile showing *why* each lexical exposure group fails;
-- similarity, training-frequency, and entity-length lollipop plots that explicitly flag low-support estimates;
-- multiclass label-by-generalization heatmaps and confusion matrices with horizontal text;
-- an error taxonomy plus errors-only Pareto view and recurrent-error-surface Pareto;
-- signed and absolute boundary diagnostics with interpretable character-offset bins and span-relation summaries;
-- an oracle dumbbell plot that compares each independent counterfactual with the observed STRICT F1 without implying that oracle gains are additive;
-- 100% stacked training/evaluation label-composition shift with Jensen–Shannon distance;
-- confidence distribution/threshold plots only when prediction scores vary enough to make such figures informative;
-- per-document F1 distributions and structural-effect plots for acronym-like, overlapping, and nested mentions.
-
-Every plotting decision is written to `figures/plot_manifest.json`. Figures that would be misleading or redundant are deliberately omitted and the reason is recorded in both `plot_manifest.json` and `captions.md`; examples include single-label confusion matrices or confidence plots for almost constant scores.
-
-The plotting code remains downstream of persisted Parquet analysis tables. Therefore `lab ner analysis report --analysis-dir ... --verbose 1` can regenerate the complete SVG report without rescoring the model.
+- distant FN/FP spans;
+- one-character trivial overlap below the Dice threshold;
+- plausible boundary mismatch;
+- multiclass label-only mismatch;
+- combined boundary + label mismatch;
+- one-gold-to-many-prediction fragmentation counted as one boundary diagnostic unit;
+- merging remaining disabled in this analysis profile;
+- overlap-threshold sensitivity artifact;
+- without-replacement partition artifacts.
