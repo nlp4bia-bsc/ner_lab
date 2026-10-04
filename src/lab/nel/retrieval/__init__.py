@@ -4,6 +4,7 @@ from lab.nel.retrieval.base import BaseBiEncoder
 from lab.nel.retrieval.faiss import FaissBiEncoder
 from lab.nel.retrieval.matrix import MatrixBiEncoder
 from lab.nel.retrieval.sentence_transformer import DenseRetriever, SentenceTransformerBiEncoder
+from lab.nel.retrieval.store import gazetteer_fingerprint, load_embeddings, save_embeddings
 from lab.nel.retrieval.transformer_faiss import HerbertFaissBiEncoder
 from lab.nel.retrieval.workflow import CandidateRetrievalPipeline, RetrievalResult, build_vocabulary
 
@@ -17,4 +18,7 @@ __all__ = [
     "RetrievalResult",
     "SentenceTransformerBiEncoder",
     "build_vocabulary",
+    "gazetteer_fingerprint",
+    "load_embeddings",
+    "save_embeddings",
 ]

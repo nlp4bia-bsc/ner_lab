@@ -28,6 +28,8 @@ result.metrics      # recall@k, MRR and coverage, when the input carried gold co
 | `k_values` | `(1, 5, 25)` | The `k` in `recall@k`. Each must lie between 1 and `top_k`. |
 | `hierarchy` | `None` | A pickled NetworkX graph of the ontology, parent to child. Adds exact / narrow / broad / unrelated proportions to the metrics. |
 | `keep_gold` | `False` | Complete instead of evaluate: spans with a gold code keep it and only the others are linked. See [completing a corpus](#completing-a-corpus). |
+| `index_dir` | `None` | Where `transformer_faiss` and `dense` keep the gazetteer's embeddings; `None` is `<output_dir>/gazetteer_index`. Invalid with the other methods. See [reusing the gazetteer's embeddings](#reusing-the-gazetteers-embeddings). |
+| `save_index` | `True` | `False` encodes the gazetteer in memory and writes nothing. An index already in `index_dir` is still loaded. |
 
 **Returns** a `LinkingResult` with `spans`, `metrics`, `manifest` and `paths`.
 
@@ -95,13 +97,47 @@ since no linked span has a gold code to compare with, and the manifest records `
 `n_kept_gold` and `n_linked`. `gold_code` stays on the output, so a completed table fed back
 in evaluates against its original gold, never against its own predictions.
 
+## Reusing the gazetteer's embeddings
+
+Encoding a gazetteer of a few hundred thousand terms takes minutes on a GPU, and it is the
+same every run. The encoder methods therefore keep the embeddings in `index_dir`:
+
+| `index_dir` holds | What happens |
+|---|---|
+| nothing, or does not exist | The gazetteer is encoded and saved there, unless `save_index=False`. |
+| an index | It is loaded and checked against this run; only the mentions are encoded. |
+| files but no `index_manifest.json` | Refused: an interrupted build, or not an index. |
+
+An index records what its vectors depend on — the method, `base_model`, the gazetteer's
+`term`/`code` content, and the encoding settings (`pooling` and `max_length` for
+`transformer_faiss`, plus `batch_size` with `mean` pooling, which averages over padding;
+`normalize` for `dense`). One built for anything else is refused, naming what differs:
+delete it or pass another `index_dir`.
+
+The FAISS settings are not among them. The embeddings are stored as the encoder produced
+them and the FAISS index is rebuilt on load, so an index built with `f_type: FlatIP` serves
+`FlatL2`, `IVFFlatIP` or any other `f_type` without encoding the gazetteer again.
+
+To reuse one across runs, point `index_dir` at it:
+
+```python
+link_entities(spans, gazetteer, "assets/linking/test", method="transformer_faiss",
+              base_model="ICB-UMA/HERBERT-P", index_dir="assets/linking/train/gazetteer_index")
+```
+
+The manifest's `index` says `loaded`, `built`, or `in_memory`.
+
 ## What it writes
 
 ```
 <output_dir>/
     predictions.tsv            the linked span table
     linking_metrics.json       method, recall@k, MRR, coverage, mean candidates — when there was gold
-    linking_manifest.json      inputs and their sha256, method, model, top_k, keep_gold, what was linked
+    linking_manifest.json      inputs and their sha256, method, model, top_k, keep_gold, index, what was linked
+    gazetteer_index/           encoder methods, unless index_dir points elsewhere or save_index is off
+        embeddings.npy         float32, one row per vocabulary row
+        vocabulary.parquet     term, code
+        index_manifest.json    what the embeddings depend on; written last
 ```
 
 ## From YAML

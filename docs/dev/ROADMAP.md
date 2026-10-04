@@ -11,7 +11,9 @@ integration of `bsc/nlp4bia-linking` as `lab.nel` (D91–D95) both landed on 202
 Gold codes entered the corpus contract on 2026-09-25 (D98–D106): `prepare_dataset` takes a
 linking TSV, `spans_from_corpus` carries the codes, and `link_entities` either evaluates
 against them or, with `keep_gold`, completes around them.
-Verification stands at 957 checks across eleven scripts, all passing, plus one deliberate
+The encoder methods of `link_entities` keep the gazetteer's embeddings on disk since
+2026-10-04 (D107–D111).
+Verification stands at 982 checks across eleven scripts, all passing, plus one deliberate
 skip — the NER-API equivalence no longer applies to byte-level tokenizers, whose token
 offsets `tokenize_document` trims and NER-API's `DataLoader` does not; see
 [`verification/`](../../verification/).
@@ -26,8 +28,9 @@ consumes is confirmed (Q16).
 
 ## Next
 
-- **Persisting the gazetteer's representations.** `link_entities` rebuilds the index over
-  the gazetteer on every run. Scope not yet discussed.
+- **Checking persisted embeddings on a real encoder.** D107–D111 are verified with a tiny
+  local model only. On a GPU machine, with the SympTEMIST gazetteer and test mentions: recall@k
+  and MRR from a loaded index must equal a fresh build's.
 
 ## Open questions
 
@@ -59,6 +62,13 @@ Nothing here blocks the next stage. Each is decided when the stage that needs it
   with punctuation, so trimming relocates the errors rather than removing them. Decide by
   counting gold spans that start on punctuation against predictions carrying a spurious one.
   Trimming would be a no-op for tokenizers whose punctuation is already its own token.
+- **Q20 — `mean` pooling averages over padding.** `transformer_faiss`'s default pooling,
+  kept from HERBERT, is `last_hidden_state.mean(dim=1)` without the attention mask, so a
+  term's vector depends on the longest term in its batch, and therefore on `batch_size`.
+  `attention_mask_mean` exists. Changing the default changes every `transformer_faiss` result.
+- **Q21 — `dense` does not collapse duplicate codes.** `transformer_faiss` and the lexical
+  methods keep each code once at its best term; `dense` returns the top-k terms, so one code
+  can fill several of the `top_k` slots and recall@k is not comparable across methods.
 
 *Closed:* Q1–Q9 during the migration (scope, cluster scripts → D10, task naming → D48,
 Python floor → D17, public API → D65); Q12, Q14, Q15 (gold codes → D98–D106); Q17

@@ -7,6 +7,7 @@ import os
 import pickle
 import sys
 import tempfile
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 
@@ -381,6 +382,8 @@ def verify_link_entities(checks: Checks) -> None:
         checks.raises("an unknown method is refused", ValueError, link_entities, MENTIONS, GAZETTEER, root / "x", method="magic", match="Unknown method")
         checks.raises("encoder methods need base_model", ValueError, link_entities, MENTIONS, GAZETTEER, root / "x", method="dense", match="requires base_model")
         checks.raises("base_model is refused elsewhere", ValueError, link_entities, MENTIONS, GAZETTEER, root / "x", method="matrix", base_model="m", match="only applies")
+        checks.raises("index_dir is refused elsewhere", ValueError, link_entities, MENTIONS, GAZETTEER, root / "x", method="matrix", index_dir=root / "index", match="index_dir only applies")
+        checks.equal("a lexical method keeps no index", (result.manifest["index"], result.manifest["index_dir"]), (None, None))
         checks.raises("k_values beyond top_k are refused", ValueError, link_entities, MENTIONS, GAZETTEER, root / "x", top_k=3, k_values=(1, 5), match="k_values")
         checks.raises("a span table without the canonical columns is refused", ValueError, link_entities, MENTIONS.drop(columns=["text"]), GAZETTEER, root / "x", match="missing columns")
         checks.raises("a gazetteer without term/code is refused", ValueError, link_entities, MENTIONS, GAZETTEER.drop(columns=["code"]), root / "x", match="missing columns")
@@ -405,6 +408,9 @@ def verify_encoder_paths(checks: Checks, root: Path) -> None:
         result = link_entities(MENTIONS, GAZETTEER, root / method, method=method, base_model=str(base_model), method_kwargs=kwargs, top_k=5, k_values=(1, 5))
         checks.equal(f"{method} links every mention with five candidates", ([len(json.loads(c)) for c in result.spans["candidates_json"]], result.spans["code"].notna().all()), ([5] * len(MENTIONS), True))
         checks.equal(f"{method} records base_model", result.manifest["base_model"], str(base_model))
+        verify_index_persistence(checks, root, method, str(base_model), kwargs, result)
+
+    verify_index_settings(checks, root, str(base_model))
 
     reranked = link_entities(MENTIONS, GAZETTEER, root / "reranked", method="matrix", reranker=base_model, reranker_kwargs={"device": "cpu", "batch_size": 8}, top_k=5, k_values=(1, 5))
     candidates = [json.loads(c) for c in reranked.spans["candidates_json"]]
@@ -412,6 +418,78 @@ def verify_encoder_paths(checks: Checks, root: Path) -> None:
     checks.check("reranked candidates are in descending score order", all([c["score"] for c in row] == sorted((c["score"] for c in row), reverse=True) for row in candidates))
     checks.equal("the metrics name the reranked method", reranked.metrics["method"], "matrix+cross_encoder")
     checks.equal("the manifest records the reranker", reranked.manifest["reranker"], str(base_model.resolve()))
+
+
+@contextmanager
+def encoded_batches(method: str):
+    """Record how many texts each call to the method's encoder receives."""
+    from lab.nel.retrieval import HerbertFaissBiEncoder, SentenceTransformerBiEncoder
+
+    owner = HerbertFaissBiEncoder if method == "transformer_faiss" else SentenceTransformerBiEncoder
+    original, sizes = owner.encode, []
+
+    def encode(self, texts, *args, **kwargs):
+        sizes.append(len(texts))
+        return original(self, texts, *args, **kwargs)
+
+    owner.encode = encode
+
+    try:
+        yield sizes
+    finally:
+        owner.encode = original
+
+
+def candidate_lists(spans: pd.DataFrame) -> tuple[list, list]:
+    rows = [json.loads(cell) for cell in spans["candidates_json"]]
+
+    return [[c["code"] for c in row] for row in rows], [[c["score"] for c in row] for row in rows]
+
+
+def verify_index_persistence(checks: Checks, root: Path, method: str, base_model: str, kwargs: dict, built) -> None:
+    from lab.nel.retrieval.store import EMBEDDINGS_FILENAME, INDEX_MANIFEST_FILENAME, VOCABULARY_FILENAME
+
+    index_dir = root / method / "gazetteer_index"
+    link = dict(method=method, base_model=base_model, method_kwargs=kwargs, top_k=5, k_values=(1, 5))
+
+    checks.equal(f"{method} saves the gazetteer's embeddings under the run by default", (built.manifest["index"], built.manifest["index_dir"], sorted(p.name for p in index_dir.iterdir())), ("built", str(index_dir), sorted([EMBEDDINGS_FILENAME, INDEX_MANIFEST_FILENAME, VOCABULARY_FILENAME])))
+
+    with encoded_batches(method) as sizes:
+        reloaded = link_entities(MENTIONS, GAZETTEER, root / method, **link)
+
+    built_codes, built_scores = candidate_lists(built.spans)
+    loaded_codes, loaded_scores = candidate_lists(reloaded.spans)
+    checks.equal(f"{method} loads the index on a rerun into the same output_dir", reloaded.manifest["index"], "loaded")
+    checks.equal(f"{method} encodes only the mentions when the index is loaded", sizes, [len(MENTIONS)])
+    checks.equal(f"{method} ranks the same candidates from a loaded index", loaded_codes, built_codes)
+    checks.check(f"{method} scores them the same from a loaded index", all(abs(a - b) < 1e-5 for row_a, row_b in zip(loaded_scores, built_scores) for a, b in zip(row_a, row_b)))
+
+    elsewhere = link_entities(MENTIONS, GAZETTEER, root / f"{method}_elsewhere", index_dir=index_dir, **link)
+    checks.equal(f"{method} loads an index_dir from another run and writes no copy", (elsewhere.manifest["index"], (root / f"{method}_elsewhere" / "gazetteer_index").exists()), ("loaded", False))
+
+    unsaved = link_entities(MENTIONS, GAZETTEER, root / f"{method}_unsaved", save_index=False, **link)
+    checks.equal(f"{method} with save_index=False encodes in memory and writes nothing", (unsaved.manifest["index"], unsaved.manifest["index_dir"], (root / f"{method}_unsaved" / "gazetteer_index").exists()), ("in_memory", None, False))
+
+    checks.raises(f"{method} refuses an index built from another gazetteer", ValueError, link_entities, MENTIONS, GAZETTEER.iloc[:-1], root / "x", index_dir=index_dir, match="built for a different run", **link)
+    checks.raises(f"{method} refuses an index built for another base_model", ValueError, link_entities, MENTIONS, GAZETTEER, root / "x", index_dir=index_dir, match="base_model", **{**link, "base_model": f"{base_model}/."})
+
+
+def verify_index_settings(checks: Checks, root: Path, base_model: str) -> None:
+    index_dir = root / "transformer_faiss" / "gazetteer_index"
+    link = dict(method="transformer_faiss", base_model=base_model, top_k=5, k_values=(1, 5), index_dir=index_dir)
+    kwargs = {"device": "cpu", "batch_size": 8}
+
+    with encoded_batches("transformer_faiss") as sizes:
+        flat_l2 = link_entities(MENTIONS, GAZETTEER, root / "flat_l2", method_kwargs={**kwargs, "f_type": "FlatL2"}, **link)
+
+    checks.equal("an index built as FlatIP serves FlatL2 without re-encoding the gazetteer", (flat_l2.manifest["index"], sizes), ("loaded", [len(MENTIONS)]))
+    checks.raises("an index built with mean pooling refuses cls", ValueError, link_entities, MENTIONS, GAZETTEER, root / "x", method_kwargs={**kwargs, "pooling": "cls"}, match="pooling", **link)
+    checks.raises("mean pooling averages padding, so another batch_size is refused", ValueError, link_entities, MENTIONS, GAZETTEER, root / "x", method_kwargs={**kwargs, "batch_size": 4}, match="batch_size", **link)
+
+    interrupted = root / "interrupted"
+    interrupted.mkdir()
+    (interrupted / "embeddings.npy").write_bytes(b"")
+    checks.raises("a directory with files but no index manifest is refused", ValueError, link_entities, MENTIONS, GAZETTEER, root / "x", method_kwargs=kwargs, match="no index_manifest.json", **{**link, "index_dir": interrupted})
 
 
 def main() -> int:

@@ -19,7 +19,14 @@ from lab.nel.evaluation import (
 from lab.nel.io import read_table
 from lab.nel.matching import MATCHER_REGISTRY, build_matcher
 from lab.nel.pipeline import EntityLinkingPipeline
-from lab.nel.retrieval import DenseRetriever, FaissBiEncoder, HerbertFaissBiEncoder, MatrixBiEncoder
+from lab.nel.retrieval import (
+    DenseRetriever,
+    FaissBiEncoder,
+    HerbertFaissBiEncoder,
+    MatrixBiEncoder,
+    load_embeddings,
+    save_embeddings,
+)
 from lab.nel.schemas import GazetteerEntry, LinkedEntity, MatchCandidate, MentionAnnotation
 
 GOLD_COLUMN = "gold_code"
@@ -30,6 +37,7 @@ GAZETTEER_COLUMNS = ["term", "code"]
 PREDICTIONS_FILENAME = "predictions.tsv"
 METRICS_FILENAME = "linking_metrics.json"
 LINKING_MANIFEST_FILENAME = "linking_manifest.json"
+INDEX_DIRNAME = "gazetteer_index"
 
 RETRIEVERS = {"matrix": MatrixBiEncoder, "faiss": FaissBiEncoder}
 ENCODER_METHODS = ("transformer_faiss", "dense")
@@ -66,6 +74,8 @@ def link_entities(
     k_values: Sequence[int] = (1, 5, 25),
     hierarchy: str | Path | None = None,
     keep_gold: bool = False,
+    index_dir: str | Path | None = None,
+    save_index: bool = True,
 ) -> LinkingResult:
     """
     Link every span to a gazetteer code and write the result as a span table.
@@ -86,11 +96,17 @@ def link_entities(
     `keep_gold=True` completes instead of evaluating: spans with a gold code
     keep it as their `code`, only the others are linked, `code_source` says
     `gold` or `predicted`, and nothing is scored.
+
+    The encoder methods keep the gazetteer's embeddings in `index_dir`,
+    `<output_dir>/gazetteer_index` by default: an index already there is loaded
+    and checked against this run, otherwise the gazetteer is encoded and, unless
+    `save_index=False`, saved there.
     """
-    _validate(method, base_model, top_k, k_values)
+    _validate(method, base_model, top_k, k_values, index_dir)
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    index_dir = resolve_index_dir(method, output_dir, index_dir)
 
     span_frame = read_spans(spans)
     gazetteer_frame = read_gazetteer(gazetteer)
@@ -99,8 +115,8 @@ def link_entities(
     uncoded = [mention.code is None for mention in mentions]
     to_link = [mention for mention, keep in zip(mentions, uncoded) if keep] if keep_gold else mentions
 
-    generator = build_candidate_generator(
-        method, entries, gazetteer_frame, base_model, top_k, method_kwargs or {}
+    generator, index = build_candidate_generator(
+        method, entries, gazetteer_frame, base_model, top_k, method_kwargs or {}, index_dir, save_index
     )
     reranker_model = build_reranker(reranker, reranker_kwargs or {})
     pipeline = EntityLinkingPipeline(generator, reranker=reranker_model, top_k_candidates=top_k)
@@ -134,6 +150,8 @@ def link_entities(
         "method_kwargs": method_kwargs or {},
         "reranker": None if reranker is None else str(Path(reranker).resolve()),
         "reranker_kwargs": reranker_kwargs or {},
+        "index_dir": str(index_dir) if index in ("loaded", "built") else None,
+        "index": index,
         "top_k": int(top_k),
         "k_values": [int(k) for k in k_values],
         "hierarchy": None if hierarchy is None else str(Path(hierarchy).resolve()),
@@ -230,28 +248,103 @@ def build_candidate_generator(
     base_model: str | None,
     top_k: int,
     kwargs: dict[str, Any],
-) -> Any:
-    """Construct and index the candidate generator a method name refers to."""
+    index_dir: Path | None = None,
+    save_index: bool = True,
+) -> tuple[Any, str | None]:
+    """
+    Construct and index the candidate generator a method name refers to.
+
+    Also returns where an encoder method's gazetteer embeddings came from:
+    `loaded` from `index_dir`, `built` and saved there, or `in_memory`.
+    None for the other methods, which have no embeddings to keep.
+    """
     if method in MATCHER_REGISTRY:
-        return build_matcher(method, gazetteer=entries, top_k=top_k, **kwargs)
+        return build_matcher(method, gazetteer=entries, top_k=top_k, **kwargs), None
 
     if method in RETRIEVERS:
         retriever = RETRIEVERS[method](top_k=top_k, **kwargs)
         retriever.build_index(entries)
 
-        return retriever
+        return retriever, None
 
     vocabulary = gazetteer[GAZETTEER_COLUMNS]
 
     if method == "transformer_faiss":
         retriever = HerbertFaissBiEncoder(base_model, **kwargs)
-        retriever.fit_faiss(vocab=vocabulary)
+        retriever.set_vocab(vocabulary)
+        settings = transformer_faiss_settings(retriever, base_model)
+        embeddings = stored_embeddings(index_dir, retriever.vocab, settings)
+        index = "loaded"
 
-        return EncoderRetriever(retriever, retriever.method, top_k)
+        if embeddings is None:
+            embeddings = retriever.encode(retriever.arr_text)
+            index = store_embeddings(index_dir, embeddings, retriever.vocab, settings, save_index)
 
-    retriever = DenseRetriever(vocabulary, base_model, **kwargs)
+        retriever.fit_faiss_from_embeddings(embeddings)
 
-    return EncoderRetriever(retriever, "dense", top_k)
+        return EncoderRetriever(retriever, retriever.method, top_k), index
+
+    settings = {"method": method, "base_model": base_model, "normalize": bool(kwargs.get("normalize", True))}
+    embeddings = stored_embeddings(index_dir, vocabulary, settings)
+
+    if embeddings is None:
+        retriever = DenseRetriever(vocabulary, base_model, **kwargs)
+        vectors = retriever.vector_db.detach().cpu().numpy()
+        index = store_embeddings(index_dir, vectors, vocabulary, settings, save_index)
+    else:
+        import torch
+
+        retriever = DenseRetriever(vocabulary, base_model, vector_db=torch.from_numpy(embeddings), **kwargs)
+        index = "loaded"
+
+    return EncoderRetriever(retriever, method, top_k), index
+
+
+def resolve_index_dir(method: str, output_dir: Path, index_dir: str | Path | None) -> Path | None:
+    """Where an encoder method keeps the gazetteer's embeddings; None for the other methods."""
+    if method not in ENCODER_METHODS:
+        return None
+
+    return output_dir / INDEX_DIRNAME if index_dir is None else Path(index_dir)
+
+
+def transformer_faiss_settings(retriever: HerbertFaissBiEncoder, base_model: str) -> dict[str, Any]:
+    """
+    What a `transformer_faiss` embedding depends on.
+
+    `mean` pooling averages over padding too, so the batch size that decides the
+    padding changes the vectors and is part of the settings.
+    """
+    settings = {
+        "method": "transformer_faiss",
+        "base_model": base_model,
+        "pooling": retriever.pooling,
+        "max_length": int(retriever.max_length),
+    }
+
+    if retriever.pooling == "mean":
+        settings["batch_size"] = int(retriever.batch_size)
+
+    return settings
+
+
+def stored_embeddings(index_dir: Path | None, vocabulary: pd.DataFrame, settings: dict[str, Any]) -> Any:
+    return None if index_dir is None else load_embeddings(index_dir, vocabulary, settings)
+
+
+def store_embeddings(
+    index_dir: Path | None,
+    embeddings: Any,
+    vocabulary: pd.DataFrame,
+    settings: dict[str, Any],
+    save_index: bool,
+) -> str:
+    if index_dir is None or not save_index:
+        return "in_memory"
+
+    save_embeddings(index_dir, embeddings, vocabulary, settings)
+
+    return "built"
 
 
 class EncoderRetriever:
@@ -400,7 +493,13 @@ def run_method(method: str, reranker: str | Path | None) -> str:
     return f"{method}+cross_encoder" if reranker is not None else method
 
 
-def _validate(method: str, base_model: str | None, top_k: int, k_values: Sequence[int]) -> None:
+def _validate(
+    method: str,
+    base_model: str | None,
+    top_k: int,
+    k_values: Sequence[int],
+    index_dir: str | Path | None = None,
+) -> None:
     if method not in METHODS:
         raise ValueError(f"Unknown method {method!r}. Available methods: {', '.join(METHODS)}.")
 
@@ -409,6 +508,9 @@ def _validate(method: str, base_model: str | None, top_k: int, k_values: Sequenc
 
     if method not in ENCODER_METHODS and base_model is not None:
         raise ValueError(f"base_model only applies to {', '.join(ENCODER_METHODS)}.")
+
+    if method not in ENCODER_METHODS and index_dir is not None:
+        raise ValueError(f"index_dir only applies to {', '.join(ENCODER_METHODS)}.")
 
     if top_k < 1:
         raise ValueError("top_k must be at least 1.")

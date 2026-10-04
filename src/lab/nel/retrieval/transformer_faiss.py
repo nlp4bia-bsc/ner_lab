@@ -192,8 +192,20 @@ class HerbertFaissBiEncoder:
         if self.vocab is None:
             raise ValueError("vocab is required before fitting FAISS")
         batch_size = batch_size or self.batch_size
-        embeddings = self.encode(self.arr_text, batch_size=batch_size).astype("float32", copy=False)
-        embeddings = self._prepare_index_embeddings(embeddings)
+        self.fit_faiss_from_embeddings(self.encode(self.arr_text, batch_size=batch_size))
+
+    def fit_faiss_from_embeddings(self, embeddings: np.ndarray, vocab: Any | None = None) -> None:
+        """Fit the FAISS index from precomputed vocabulary embeddings, row i encoding vocabulary row i.
+
+        The embeddings are copied, so the caller's array is not normalized in place.
+        """
+        if vocab is not None:
+            self.set_vocab(vocab)
+        if self.vocab is None:
+            raise ValueError("vocab is required before fitting FAISS")
+        if len(embeddings) != len(self.arr_text):
+            raise ValueError(f"{len(embeddings)} embeddings for {len(self.arr_text)} vocabulary rows")
+        embeddings = self._prepare_index_embeddings(np.array(embeddings, dtype="float32"))
         cpu_index = self._build_cpu_index(embeddings)
         id_index = (
             self.faiss.IndexIDMap2(cpu_index)
