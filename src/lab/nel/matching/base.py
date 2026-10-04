@@ -1,16 +1,22 @@
-"""Base interface for lexical entity matchers."""
+"""The matcher every lexical method shares: score each entry, keep the best per code, rank."""
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
 
 from lab.nel.preprocessing import normalize_text
-from lab.nel.schemas import GazetteerEntry, MatchCandidate, MentionAnnotation
+from lab.nel.schemas import Candidate, GazetteerEntry, Mention, labels_compatible
 
 
-class BaseEntityMatcher(ABC):
-    """Base class for matchers that score every compatible gazetteer entry."""
+class LexicalMatcher:
+    """
+    Score a mention against every compatible gazetteer entry and rank the results.
+
+    A subclass names its `method` and implements `_score_candidates`, yielding
+    `(entry, score)` pairs; everything else — the threshold, keeping the best
+    entry per code, `top_k` and the ranks — happens here. With `label_aware`, an
+    entry labelled differently from the mention is never proposed.
+    """
 
     method = "base"
 
@@ -30,54 +36,60 @@ class BaseEntityMatcher(ABC):
         self.keep_duplicate_codes = keep_duplicate_codes
         self.normalizer = normalizer or normalize_text
 
-    def fit(self) -> "BaseEntityMatcher":
-        """Build any method-specific index and return the matcher."""
-        self._fit_internal()
+    def fit(self) -> LexicalMatcher:
+        """Return the matcher; an index, where a method needs one, is built on first use."""
         return self
 
-    def _fit_internal(self) -> None:
-        """Build an optional method-specific index."""
-
-    def predict(self, mentions: list[MentionAnnotation]) -> list[list[MatchCandidate]]:
-        """Score a batch of mentions."""
+    def predict(self, mentions: list[Mention]) -> list[list[Candidate]]:
+        """The ranked candidates of each mention."""
         return [self.score_mention(mention) for mention in mentions]
 
-    def score_mention(self, mention: MentionAnnotation) -> list[MatchCandidate]:
-        """Score one mention, deduplicate codes and assign one-based ranks."""
-        candidates: list[MatchCandidate] = []
-        for entry, score in self._score_candidates(mention):
-            if score < self.threshold:
-                continue
-            candidates.append(
-                MatchCandidate(
-                    mention_id=None,
-                    filename=mention.filename,
-                    text=mention.text,
-                    label=mention.label,
-                    code=entry.code,
-                    candidate_term=entry.term,
-                    score=float(score),
-                    method=self.method,
-                )
+    def score_mention(self, mention: Mention) -> list[Candidate]:
+        """One mention's candidates at or above the threshold, best first, ranked from 1."""
+        candidates = [
+            Candidate(
+                mention_id=None,
+                filename=mention.filename,
+                text=mention.text,
+                label=mention.label,
+                code=entry.code,
+                term=entry.term,
+                score=float(score),
+                method=self.method,
             )
+            for entry, score in self._score_candidates(mention)
+            if not score < self.threshold
+        ]
 
         if not self.keep_duplicate_codes:
-            best_by_code: dict[str | None, MatchCandidate] = {}
-            for candidate in candidates:
-                current = best_by_code.get(candidate.code)
-                if current is None or candidate.score > current.score:
-                    best_by_code[candidate.code] = candidate
-            candidates = list(best_by_code.values())
+            candidates = _best_per_code(candidates)
 
         candidates.sort(key=lambda candidate: candidate.score, reverse=True)
         candidates = candidates[: self.top_k]
+
         for rank, candidate in enumerate(candidates, 1):
             candidate.rank = rank
+
         return candidates
 
-    @abstractmethod
-    def _score_candidates(
-        self,
-        mention: MentionAnnotation,
-    ) -> Iterable[tuple[GazetteerEntry, float]]:
-        """Yield gazetteer entries with their scores for one mention."""
+    def _compatible_entries(self, mention: Mention) -> Iterable[GazetteerEntry]:
+        return (
+            entry
+            for entry in self.gazetteer
+            if not self.label_aware or labels_compatible(mention.label, entry.label)
+        )
+
+    def _score_candidates(self, mention: Mention) -> Iterable[tuple[GazetteerEntry, float]]:
+        raise NotImplementedError
+
+
+def _best_per_code(candidates: list[Candidate]) -> list[Candidate]:
+    best_by_code: dict[str | None, Candidate] = {}
+
+    for candidate in candidates:
+        current = best_by_code.get(candidate.code)
+
+        if current is None or candidate.score > current.score:
+            best_by_code[candidate.code] = candidate
+
+    return list(best_by_code.values())

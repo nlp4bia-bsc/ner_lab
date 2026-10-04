@@ -1,12 +1,14 @@
-"""Typed records shared by matching, retrieval, reranking and evaluation."""
+"""The records matching, retrieval, reranking and evaluation pass between them."""
+
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
 
 
 @dataclass
-class MentionAnnotation:
-    """One entity mention and its optional gold normalization code."""
+class Mention:
+    """One entity mention and its gold code, if it has one."""
 
     filename: str
     label: str | None
@@ -33,7 +35,7 @@ class GazetteerEntry:
 
 @dataclass
 class Concept:
-    """Ontology concept with its preferred term and optional aliases."""
+    """An ontology concept with its preferred term and any aliases."""
 
     code: str
     term: str
@@ -44,7 +46,7 @@ class Concept:
 
 @dataclass
 class HierarchyEdge:
-    """Directed parent-to-child hierarchy relation."""
+    """A directed parent-to-child relation in an ontology."""
 
     parent_code: str
     child_code: str
@@ -52,15 +54,15 @@ class HierarchyEdge:
 
 
 @dataclass
-class MatchCandidate:
-    """Candidate concept produced by a matcher, retriever or reranker."""
+class Candidate:
+    """A concept proposed for a mention by a matcher, retriever or reranker."""
 
     mention_id: str | None
     filename: str | None
     text: str
     label: str | None
     code: str | None
-    candidate_term: str | None
+    term: str | None
     score: float
     method: str
     rank: int | None = None
@@ -69,12 +71,17 @@ class MatchCandidate:
 
 @dataclass
 class LinkedEntity:
-    """Final entity-linking output for one mention."""
+    """The linking result for one mention: its ranked candidates and the top prediction."""
 
-    mention: MentionAnnotation
-    candidates: list[MatchCandidate]
+    mention: Mention
+    candidates: list[Candidate]
     predicted_code: str | None
     predicted_term: str | None
     score: float | None
     method: str
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+def labels_compatible(mention_label: str | None, entry_label: str | None) -> bool:
+    """Whether an entry may be proposed for a mention: true unless both are labelled differently."""
+    return not (mention_label and entry_label and mention_label != entry_label)

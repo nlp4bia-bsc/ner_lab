@@ -8,15 +8,13 @@ import sys
 import tempfile
 from pathlib import Path
 
-import pandas as pd
-
 sys.path.insert(0, str(Path(__file__).parent))
 
 from _harness import Checks, run
 from fixtures import samples_root, synthetic_corpus
 
 from lab.core import build_corpus, write_corpus
-from lab.ner.encoding import Encoder, build_iob2_labels, build_window
+from lab.ner.encoding import Encoder, build_window
 
 NER_API_ENV = "NER_API_ROOT"
 DEFAULT_NER_API = Path.home() / "bsc" / "NER-API"

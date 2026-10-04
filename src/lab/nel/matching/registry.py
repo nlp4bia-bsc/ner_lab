@@ -1,35 +1,33 @@
-"""Small registry for the built-in lexical matchers."""
+"""The built-in matchers by method name, and building one from its name."""
 
 from __future__ import annotations
 
 from typing import Any
 
+from lab.nel.matching.base import LexicalMatcher
 from lab.nel.matching.lexical import (
     BM25Matcher,
+    ExactMatcher,
     JaroWinklerMatcher,
     LevenshteinMatcher,
-    StringMatchMatcher,
     TfidfCharNgramMatcher,
     TokenSetMatcher,
-    WhooshContextMatcher,
 )
 
-MATCHER_REGISTRY = {
-    "string_match": StringMatchMatcher,
+MATCHER_REGISTRY: dict[str, type[LexicalMatcher]] = {
+    "string_match": ExactMatcher,
     "levenshtein": LevenshteinMatcher,
     "jaro_winkler": JaroWinklerMatcher,
     "token_set": TokenSetMatcher,
     "tfidf_char": TfidfCharNgramMatcher,
     "bm25": BM25Matcher,
-    "whoosh": WhooshContextMatcher,
 }
 
 
-def build_matcher(method: str, **kwargs: Any) -> Any:
-    """Instantiate a built-in matcher by its stable method name."""
-    try:
-        matcher_class = MATCHER_REGISTRY[method]
-    except KeyError as exc:
+def build_matcher(method: str, **kwargs: Any) -> LexicalMatcher:
+    """The built-in matcher called `method`, constructed with `kwargs`."""
+    if method not in MATCHER_REGISTRY:
         available = ", ".join(sorted(MATCHER_REGISTRY))
-        raise ValueError(f"Unknown matcher '{method}'. Available methods: {available}") from exc
-    return matcher_class(**kwargs)
+        raise ValueError(f"Unknown matcher '{method}'. Available methods: {available}")
+
+    return MATCHER_REGISTRY[method](**kwargs)

@@ -3,34 +3,28 @@
 from __future__ import annotations
 
 import unicodedata
-from typing import Mapping
+from collections.abc import Mapping
 
 import pandas as pd
 
 CANONICAL_LABELS: tuple[str, ...] = ("DISEASE", "PROCEDURE", "SYMPTOM", "MEDICATION")
 
+LABEL_ALIAS_GROUPS: dict[str, tuple[str, ...]] = {
+    "DISEASE": ("ENFERMEDAD", "ENFERMEDADES", "DISEASE", "DISEASES"),
+    "PROCEDURE": ("PROCEDIMIENTO", "PROCEDIMIENTOS", "PROCEDURE", "PROCEDURES"),
+    "SYMPTOM": ("SINTOMA", "SINTOMAS", "SYMPTOM", "SYMPTOMS"),
+    "MEDICATION": (
+        "FARMACO",
+        "FARMACOS",
+        "MEDICAMENTO",
+        "MEDICAMENTOS",
+        "MEDICATION",
+        "MEDICATIONS",
+    ),
+}
+
 LABEL_ALIASES: dict[str, str] = {
-    "ENFERMEDAD": "DISEASE",
-    "ENFERMEDADES": "DISEASE",
-    "DISEASE": "DISEASE",
-    "DISEASES": "DISEASE",
-
-    "PROCEDIMIENTO": "PROCEDURE",
-    "PROCEDIMIENTOS": "PROCEDURE",
-    "PROCEDURE": "PROCEDURE",
-    "PROCEDURES": "PROCEDURE",
-
-    "SINTOMA": "SYMPTOM",
-    "SINTOMAS": "SYMPTOM",
-    "SYMPTOM": "SYMPTOM",
-    "SYMPTOMS": "SYMPTOM",
-
-    "FARMACO": "MEDICATION",
-    "FARMACOS": "MEDICATION",
-    "MEDICAMENTO": "MEDICATION",
-    "MEDICAMENTOS": "MEDICATION",
-    "MEDICATION": "MEDICATION",
-    "MEDICATIONS": "MEDICATION",
+    alias: label for label, aliases in LABEL_ALIAS_GROUPS.items() for alias in aliases
 }
 
 

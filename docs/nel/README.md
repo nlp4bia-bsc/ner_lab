@@ -28,7 +28,7 @@ from lab.nel import (
     build_matcher,            # a candidate generator by name
     reciprocal_rank_fusion,
     LinkingResult,
-    MentionAnnotation, GazetteerEntry, MatchCandidate, LinkedEntity, Concept, HierarchyEdge,
+    Mention, GazetteerEntry, Candidate, LinkedEntity, Concept, HierarchyEdge,
 )
 ```
 

@@ -72,10 +72,10 @@ The row is the verdict; the note is the argument.
 | D58 | **`train()` allows early stopping without `load_best_model_at_end` unless `save_model=True`.** | The old unconditional raise blocked the sweep shape: no checkpointing, early stopping on. Verified against transformers 5.14.1 that the stop logic works without saving. The raise stays where the footgun is real: saved weights would be the last epoch's. |
 | D59 | No `max_epochs` parameter on `search_hyperparameters`. The cap is `num_train_epochs`, defaulting to 40 via `HPO_ARGUMENT_DEFAULTS`. | D27: it already has a home in `training_arguments`. |
 | D60 | **The winner block is also written to `winner.yaml` in the sweep's run directory**, with `output_dir: <sweep>/final_train` (D77). `write_winner_config` is public. | D57 left the hand-off correct but manual — retyping ~18 keys where a typo silently changes the run. |
-| D61 | **Inference is `ner/inference.py::predict_entities`, task `ner.predict_entities`.** It takes a `model_dir`, not a run directory. `--random-state` raises a `TypeError` here. | Pointing at the model keeps inference independent of the orchestrator's artifact layout: a `fold_XX/best_model` and a directory copied to scratch load identically. Inference is deterministic, and D42 forbids an unused parameter kept to satisfy a flag. |
+| D61 | **Inference is `ner/inference/predict.py::predict_entities`, task `ner.predict_entities`.** It takes a `model_dir`, not a run directory. `--random-state` raises a `TypeError` here. | Pointing at the model keeps inference independent of the orchestrator's artifact layout: a `fold_XX/best_model` and a directory copied to scratch load identically. Inference is deterministic, and D42 forbids an unused parameter kept to satisfy a flag. |
 | D62 | **A saved model carries an `encoding.json` beside its weights**, written by `train(model_encoding=...)`. Output only — `train_model` never reads one. | The artifact describes itself, as HF's `config.json` does; it is also the only thing that makes a CRF checkpoint loadable. → notes |
 | D63 | `Encoder(require_target_label=False)` skips the check that `target_label` occurs in the corpus. Default stays `True`. | Rule 3. The guard is right for training, where the typo it catches produces an all-`O` corpus; wrong for inference, where unannotated documents legitimately contain no entity. |
-| D64 | **Per-span `score` and `text` are decoded in `ner/evaluation/spans.py`**, not again in `inference.py`. Both off by default. | Two implementations of B/I transition handling that must agree forever is exactly the duplication the migration exists to remove. |
+| D64 | **Per-span `score` and `text` are decoded in `ner/evaluation/spans.py`**, not again in `ner/inference/`. Both off by default. | Two implementations of B/I transition handling that must agree forever is exactly the duplication the migration exists to remove. |
 | D65 | **The stage entry points are re-exported lazily from their subpackage, via a module-level `__getattr__`.** Nine on `lab.ner`, `prepare_dataset` on `lab.core`. Everything else keeps its submodule path. | The folder structure carries meaning; lazy so `import lab.ner` stays instant and torch-free. → notes |
 | D66 | **The pretrained starting point is `base_model`, never `checkpoint`.** `checkpoint` keeps its HF meaning — the `checkpoint-*` snapshots the `Trainer` writes. | D27 in the mirror direction: one name was doing two concepts, and they collided in the run manifest. → notes |
 | D67 | **`source_manifest.json` records `n_entities_by_label`**, built by the public `lab.core.count_labels`. | A manifest saying 15064 entities without saying of what cannot help pick a `target_label`. Consequence: `parse_document_label_counts` raises when a document's `n_entities` disagrees with its `entities_json`, now on every `prepare_dataset` path. |
@@ -92,7 +92,7 @@ The row is the verdict; the note is the argument.
 | D78 | **`train_model` takes `devices: Literal[1, "all"] = 1` and pins to one GPU instead of refusing.** `require_single_device` stays the raise for HPO trials. | `n_gpu` is a plain property HF itself forces down to avoid `DataParallel`; pinning uses that seam and is order-independent, unlike `CUDA_VISIBLE_DEVICES`. → notes |
 | D79 | **An annotation whose text disagrees with its document is resolved by `on_conflict: "raise" \| "rewrite"`**, default `"raise"`; the document always wins. | Labels come from offsets alone, so the `.ann` string can only win by relocating offsets, which was scoped out. → notes |
 | D80 | **`on_conflict` gains `"drop"`**, removing every conflicting document with all its annotations; `resolve_conflicts` returns the resolved pair plus the report. | Rewrite is only right when offsets are trustworthy; dropping the whole file is the third honest answer, and dropping only the row would train `O` over a real entity. → notes |
-| D81 | **`core/stats.py::compute_text_stats`/`compute_annotation_stats` take `base_model: str`, not a tokenizer, and `language` is required.** Amended by D87, which puts the `stats` switch on `prepare_dataset`. | These are the simplest-script entry point; `base_model` matches `train_model` (D66) and is honest about what is passed. `language` per D33. |
+| D81 | **`core/stats/`'s `compute_text_stats`/`compute_annotation_stats` take `base_model: str`, not a tokenizer, and `language` is required.** Amended by D87, which puts the `stats` switch on `prepare_dataset`. | These are the simplest-script entry point; `base_model` matches `train_model` (D66) and is honest about what is passed. `language` per D33. |
 | D82 | **`ner_lab` becomes one subpackage of a group-wide library, `lab`.** Supersedes D1. | One repo, one namespace, one docs site and CLI for the unit; per-tool environments come from extras (D85), not from separate libraries. |
 | D83 | **Layout is `lab.core` / `lab.ner` / `lab.nel` / `lab.cli`, and imports point one way: `core ← {ner, nel}`.** Task subpackages never import each other. Supersedes D2, D24. | A subpackage is defined by the artifacts it consumes and produces; cross-tool composition happens through `core`'s contracts, not through imports. |
 | D84 | **`core` holds the data contracts and nothing torch: corpus, spans, split, stats, segmentation, generic span scoring, provenance, task registry. HPO and training stay under `ner`.** | Nothing moves to a shared layer until a second subpackage needs it; segmentation has two consumers, HPO and the trainer have one. |
@@ -105,7 +105,7 @@ The row is the verdict; the note is the argument.
 | D91 | **`lab.nel` takes `nlp4bia-linking`'s library surface, not its research code.** In: records, readers, the lexical matchers, the retrievers, the cross-encoder reranker, RRF, retrieval and hierarchy metrics, the pipeline. Out: `scripts/`, triplet generation, FAISS profiling, the profiler, corpus-specific helpers. | The package's own docs say the scripts are never imported; the rest is experiment tooling with corpus paths inside. Their fate is Q13. |
 | D92 | **`nel.link_entities` appends `code`, `code_term`, `code_score`, `candidates_json` to the span table it is given; an incoming `code` column is gold, kept as `gold_code`, and scored.** | The prefixed names keep NER's `score` and NEL's score apart in one row. → notes |
 | D93 | Superseded by D98. | |
-| D94 | **NEL's records and class names are kept as written; the span table is converted to and from them at the task boundary, in `nel/linking.py`.** | Equivalence before improvement: the side-by-side checks compare the ported classes against the original package call for call. |
+| D94 | Superseded by D112. | |
 | D95 | **`lab[nel]` is `lab[torch]` plus scikit-learn, networkx, tqdm, sentence-transformers and faiss, with a platform marker choosing `faiss-gpu` on Linux x86_64.** NEL's `transformers<5` cap is dropped. | sentence-transformers 6 runs against transformers 5.14; the verify venv proves it on the lexical, sparse and FAISS paths. |
 | D96 | **The MultiClinNER scorer is removed; `lab.core.score_characters` adds character-level P/R/F1 to the canonical metrics.** `ner/evaluation/multiclinner.py`, `InferenceResult.official` and `multiclinner_eval.json` are gone; `spans_from_corpus` moves to `lab.core.spans`. Amends D44, D46. | Its strict F1 was verified identical to nervaluate's except where it was wrong (predictions in a gold-less document never counted as false positives); its character F1 is replaced by the standard character-as-unit definition, which needs no matching step. → notes |
 | D97 | **`predict_entities` scores span and character metrics against the gold as annotated, not against the gold reconstructed from windows.** Token diagnostics stay window-based and are added only when `documents` itself carries the gold; `reference` takes precedence over the corpus's entities. | Reconstructed gold has already lost what overlap resolution merged and windows truncated, so scoring against it cannot count those as missed. Training keeps the window-based number because rows are all it has, so the two `span_strict_f1` values may legitimately differ. |
@@ -120,9 +120,10 @@ The row is the verdict; the note is the argument.
 | D106 | **`link_entities` evaluates by default: every span is linked and incoming codes are gold. `keep_gold=True` completes instead: coded spans keep their code, only uncoded spans are linked, a `code_source` column says which is which, and nothing is scored.** Amends D92. | A partly linked corpus is only useful filled in, but filling it in leaves nothing to score, so the two uses cannot share one behaviour. |
 | D107 | **Only the encoder methods (`transformer_faiss`, `dense`) keep the gazetteer's representations on disk.** The lexical and sparse methods rebuild in memory as before. | Encoding the gazetteer is the cost, minutes on a GPU; refitting TF-IDF or hashing takes seconds. |
 | D108 | **Persistence is on by default: `index_dir`, `<output_dir>/gazetteer_index` when `None`, is loaded when it holds an index and built and saved into when it does not; `save_index=False` turns the writing off.** `index_dir` is refused with the other methods; the manifest records `index: loaded \| built \| in_memory`. | One argument covers building, keeping and reusing, and the default keeps the run directory self-contained, as `search_hyperparameters` does. Reuse across runs is an explicit `index_dir`. |
-| D109 | **What is kept is the raw embeddings (`embeddings.npy`), their vocabulary (`vocabulary.parquet`) and `index_manifest.json`, written last; the FAISS index is rebuilt on load.** `HerbertFaissBiEncoder.fit_faiss_from_embeddings` and `DenseRetriever`'s existing `vector_db` take them. | SQ and PQ indexes keep only lossy vectors, a GPU index cannot be written as is, and `dense` has no FAISS index at all. Raw vectors serve every `f_type` and both methods; rebuilding a flat index costs nothing next to encoding. |
+| D109 | **What is kept is the raw embeddings (`embeddings.npy`), their vocabulary (`vocabulary.parquet`) and `index_manifest.json`, written last; the FAISS index is rebuilt on load.** `TransformerFaissRetriever.fit_faiss_from_embeddings` and `DenseRetriever`'s existing `vector_db` take them. | SQ and PQ indexes keep only lossy vectors, a GPU index cannot be written as is, and `dense` has no FAISS index at all. Raw vectors serve every `f_type` and both methods; rebuilding a flat index costs nothing next to encoding. |
 | D110 | **An index records what its vectors depend on — method, `base_model`, a fingerprint of the gazetteer's `term`/`code` content, `n_terms`, and the encoding settings — and one that differs from the run raises, naming the fields.** A directory with files but no manifest is refused. FAISS settings are not recorded. | The strict default of `on_mismatch` and `on_conflict`: a silently reused index links against the wrong vectors. The fingerprint is over content because the gazetteer may be a frame. `batch_size` is recorded under `mean` pooling, which averages over padding (Q20). |
 | D111 | **FAISS stays the search backend; usearch was not adopted.** | Retrieval accuracy must not drop, so search is exact, and exact search is fastest as a flat index on a GPU. usearch's strength is approximate HNSW search, and once the embeddings are kept, search is no longer the bottleneck. |
+| D112 | **`lab.nel` is lab code, refactored to `docs/dev/CODE_STYLE.md`: classes and records renamed to what they are, compatibility aliases and duplicates removed.** Behaviour is unchanged except where a removal says otherwise; `link_entities` outputs, metric keys and the YAML method names are untouched, except that `whoosh` is gone. | The equivalence D94 protected is kept by `verify_nel`'s side-by-side checks, which now compare the renamed classes to the originals. → notes |
 
 ## Notes
 
@@ -273,7 +274,7 @@ failed after the corpus was built. One behaviour change: the CLI branch popped
 `normalize_labels` off the YAML and passed it only to the annotation statistics, so from YAML
 the corpus itself was never normalized although the documentation said it was. Inside the
 task the one parameter reaches both. The cost D81 avoided — `dataset.py` importing
-`stats.py` — is paid.
+`core/stats/` — is paid.
 
 ### D96 — character metrics replace the MultiClinNER scorer
 
@@ -300,3 +301,43 @@ through `link_entities` then reads unambiguously — `score` is still what NER m
 read. `candidates_json` holds the whole `top_k` list because the reranker, RRF provenance and
 any error analysis need more than the top hit, and one JSON cell keeps the table one row per
 mention. The per-run `method` is in the manifest, not on every row.
+
+### D112 — `lab.nel` refactored
+
+Renamed, old names removed: `MentionAnnotation` → `Mention`; `MatchCandidate` → `Candidate`, its
+`candidate_term` → `term` (so `EntityLinkingPipeline.write_outputs` writes `term` in
+`candidates_json`); `BaseEntityMatcher` → `LexicalMatcher`; `StringMatchMatcher` →
+`ExactMatcher`; `MatrixBiEncoder` → `SparseRetriever`, with `BaseBiEncoder` folded into it;
+`FaissBiEncoder` → `SparseFaissRetriever`; `HerbertFaissBiEncoder` →
+`TransformerFaissRetriever`; `BaseDataFrameLexicalRetriever` → `DataFrameLexicalRetriever`;
+`EntityLinkingCrossEncoder` merged into `CrossEncoderReranker`; the `load_*` readers →
+`read_mentions_tsv`, `read_gazetteer_entries`, `read_concepts_tsv`, `read_hierarchy_tsv`,
+`read_text_dir`, `read_brat_dir`, `read_brat_ann`; `build_snomed_graph`, `load_snomed_graph`,
+`load_snomed_graph_pickle` → `build_ontology_graph`, `read_ontology_graph`,
+`read_ontology_graph_pickle`; `snomed_graph_distance_and_direction` →
+`graph_distance_and_direction`; `load_embeddings`/`save_embeddings` → `read_embeddings`/
+`write_embeddings`; `EntityLinkingPipeline.save_outputs` → `write_outputs`. Outside `nel`, the
+CLI's `load_config` → `read_config`: files are read and written with `read_*`/`write_*`, models
+loaded and saved with `load_*`/`save_*`.
+
+Removed: `WhooshContextMatcher` and the `whoosh` method, an alias of `levenshtein`;
+`SimpleCrossEncoder`; the aliases `load_ontology_graph_pickle` (the old one),
+`evaluate_predictions` and `fit_with_progress_no_loss_logging`; `ontology_distance_and_direction`,
+whose `non_rel` label `ontology_summary_from_codes` now produces itself; `calculate_recall_at_k`,
+`first_code` and `_parse_codes`, duplicates of `retrieval_metrics_from_codes` and
+`parse_code_list`; the `train(df_hard_triplets, ...)` overload, so `CrossEncoderReranker.train`
+is PyTorch's `train(mode)` again and triplets go through `train_hard_triplets`; the dead
+`triplets.generator` import in `rerank_candidates`; the guards for scikit-learn, torch,
+sentence-transformers and pyarrow, which `lab[nel]` and the core install require.
+
+What breaks: code importing any old name, or the removed modules `nel/cross_encoder.py`,
+`nel/retrieval/{base,matrix,faiss,sentence_transformer}.py`; a config with `method: whoosh`. Two
+behaviour changes follow from the removals. `graph_metrics_for_dataframe` reads candidate lists
+with `parse_code_list`, so a Python-literal list string is parsed rather than raising, and empty
+or null codes are skipped. `SparseRetriever` and `SparseFaissRetriever` now carry a `method`, so
+RRF names them `matrix_biencoder` and `faiss_biencoder` instead of by class name.
+
+New modules: `matching/bm25.py` (the index and score both BM25s shared), `matching/dataframe.py`
+(the DataFrame retrievers, out of `lexical.py`), `retrieval/faiss_index.py` (index construction,
+out of the transformer retriever), `evaluation/graphs.py`, and the `cross_encoder/` package
+(`examples`, `training`, `reranker`).

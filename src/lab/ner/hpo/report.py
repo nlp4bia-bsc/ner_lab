@@ -258,28 +258,12 @@ def cost_lines(trials: pd.DataFrame) -> list[tuple[str, str]]:
     """Totals for what the whole sweep spent, out-of-memory trials included."""
     lines: list[tuple[str, str]] = []
 
-    def total(column: str) -> float | None:
-        if column not in trials.columns:
-            return None
-
-        values = trials[column].dropna()
-
-        return float(values.sum()) if not values.empty else None
-
-    def peak(column: str) -> float | None:
-        if column not in trials.columns:
-            return None
-
-        values = trials[column].dropna()
-
-        return float(values.max()) if not values.empty else None
-
-    duration = total("duration_sec")
+    duration = _total(trials, "duration_sec")
 
     if duration is not None:
         lines.append(("wall time", format_duration(duration)))
 
-    energy, emissions = total("energy_kwh"), total("emissions_kg_co2")
+    energy, emissions = _total(trials, "energy_kwh"), _total(trials, "emissions_kg_co2")
 
     if energy is not None or emissions is not None:
         parts = []
@@ -291,7 +275,8 @@ def cost_lines(trials: pd.DataFrame) -> list[tuple[str, str]]:
 
         lines.append(("energy", " · ".join(parts)))
 
-    allocated, reserved = peak("gpu_peak_vram_allocated_gb"), peak("gpu_peak_vram_reserved_gb")
+    allocated = _peak(trials, "gpu_peak_vram_allocated_gb")
+    reserved = _peak(trials, "gpu_peak_vram_reserved_gb")
 
     if allocated is not None or reserved is not None:
         parts = []
@@ -358,6 +343,44 @@ def summarize_sweep(
 
     ranked = completed.sort_values(metric, ascending=not greater_is_better)
     best = ranked.iloc[0]
+
+    standing, tie_notes = standing_lines(ranked, completed, metric)
+    winner_rows, edge_notes = winner_lines(best, search_space)
+    convergence_rows, convergence_notes = (
+        convergence_lines(trials, metric, epoch_cap, greater_is_better) if convergence else ([], [])
+    )
+    notes = [*tie_notes, *edge_notes, *convergence_notes]
+
+    if counts["oom"] and counts["oom"] / len(trials) >= OOM_NOTE_THRESHOLD:
+        notes.append(
+            f"{counts['oom'] / len(trials):.0%} of trials ran out of memory and scored worst — "
+            "the batch-size dimension or max_micro_batch_size is too generous"
+        )
+
+    sections = [
+        *render_block("Winner", winner_rows),
+        *render_block("Convergence", convergence_rows),
+        *render_block(
+            f"Dimension effects ({len(completed)} completed trials)",
+            dimension_effects(completed, metric, search_space, greater_is_better),
+        ),
+        *render_block("Cost", cost_lines(trials)),
+        *render_block("Notes", [("·", note) for note in notes]),
+    ]
+
+    return "\n".join([*header, *standing, *sections, ""])
+
+
+def standing_lines(
+    ranked: pd.DataFrame, completed: pd.DataFrame, metric: str
+) -> tuple[list[str], list[str]]:
+    """
+    The best trial's score, its runner-up, and how many trials tie with it.
+
+    Returns the header lines and any note: a tie set covering most of the sweep
+    means the ranking among those trials is noise.
+    """
+    best = ranked.iloc[0]
     notes: list[str] = []
 
     seeds = best.get("n_seeds")
@@ -371,19 +394,17 @@ def summarize_sweep(
         )
         if part
     )
-    header.append(f"Best        {best[metric]:.4f}   {identity}")
+    lines = [f"Best        {best[metric]:.4f}   {identity}"]
 
     if len(ranked) > 1:
         gap = abs(float(best[metric]) - float(ranked.iloc[1][metric]))
-        header.append(
-            f"Runner-up   {ranked.iloc[1][metric]:.4f}   gap {format_difference(gap)}"
-        )
+        lines.append(f"Runner-up   {ranked.iloc[1][metric]:.4f}   gap {format_difference(gap)}")
 
     noise = noise_scale(completed, metric)
 
     if noise is not None:
         tied = int((abs(completed[metric] - float(best[metric])) <= noise).sum()) - 1
-        header.append(
+        lines.append(
             f"Tie set     {tied} other trial{'' if tied == 1 else 's'} within one across-seed "
             f"std ({format_difference(noise)}) of the best"
         )
@@ -396,14 +417,22 @@ def summarize_sweep(
                 f"at this spread ({share:.0%}) — the ranking among them is noise, not signal"
             )
 
-    winner_rows: list[tuple[str, str]] = []
+    return lines, notes
+
+
+def winner_lines(
+    best: pd.Series, search_space: Mapping[str, Mapping[str, Any]]
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """The winning value of each searched dimension, and a note for each one at a range edge."""
+    rows: list[tuple[str, str]] = []
+    notes: list[str] = []
 
     for name in search_space:
         if name not in best.index or pd.isna(best[name]):
             continue
 
         annotation = edge_annotation(best[name], search_space[name])
-        winner_rows.append((name, f"{format_value(best[name])}{annotation}"))
+        rows.append((name, f"{format_value(best[name])}{annotation}"))
 
         if annotation:
             notes.append(
@@ -415,48 +444,53 @@ def summarize_sweep(
     accumulation = best.get("gradient_accumulation_steps")
 
     if pd.notna(micro) and pd.notna(accumulation):
-        winner_rows.append(("batch resolution", f"micro {int(micro)} x accum {int(accumulation)}"))
+        rows.append(("batch resolution", f"micro {int(micro)} x accum {int(accumulation)}"))
 
-    sections = render_block("Winner", winner_rows)
+    return rows, notes
 
-    if convergence:
-        stats = convergence_stats(trials, metric, epoch_cap, greater_is_better)
 
-        if stats is not None:
-            fraction = stats["at_cap"] / stats["runs"]
-            rows = [
-                ("seed runs", str(stats["runs"])),
-                (
-                    f"reached the {epoch_cap}-epoch cap",
-                    f"{stats['at_cap']}  ({fraction:.0%})",
-                ),
-            ]
+def convergence_lines(
+    trials: pd.DataFrame, metric: str, epoch_cap: int, greater_is_better: bool
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """How many seed runs hit the epoch cap, and a note when enough did to skew the ranking."""
+    stats = convergence_stats(trials, metric, epoch_cap, greater_is_better)
 
-            if stats["median_best_epoch"] is not None:
-                rows.append(("median best epoch", str(stats["median_best_epoch"])))
+    if stats is None:
+        return [], []
 
-            sections.extend(render_block("Convergence", rows))
+    fraction = stats["at_cap"] / stats["runs"]
+    rows = [
+        ("seed runs", str(stats["runs"])),
+        (f"reached the {epoch_cap}-epoch cap", f"{stats['at_cap']}  ({fraction:.0%})"),
+    ]
 
-            if fraction >= EPOCH_CAP_NOTE_THRESHOLD:
-                notes.append(
-                    f"{fraction:.0%} of seed runs hit the epoch cap — trials were scored "
-                    "before converging, so the sweep partly ranked convergence speed"
-                )
+    if stats["median_best_epoch"] is not None:
+        rows.append(("median best epoch", str(stats["median_best_epoch"])))
 
-    sections.extend(
-        render_block(
-            f"Dimension effects ({len(completed)} completed trials)",
-            dimension_effects(completed, metric, search_space, greater_is_better),
-        )
-    )
-    sections.extend(render_block("Cost", cost_lines(trials)))
+    notes = []
 
-    if counts["oom"] and counts["oom"] / len(trials) >= OOM_NOTE_THRESHOLD:
+    if fraction >= EPOCH_CAP_NOTE_THRESHOLD:
         notes.append(
-            f"{counts['oom'] / len(trials):.0%} of trials ran out of memory and scored worst — "
-            "the batch-size dimension or max_micro_batch_size is too generous"
+            f"{fraction:.0%} of seed runs hit the epoch cap — trials were scored "
+            "before converging, so the sweep partly ranked convergence speed"
         )
 
-    sections.extend(render_block("Notes", [("·", note) for note in notes]))
+    return rows, notes
 
-    return "\n".join([*header, *sections, ""])
+
+def _total(trials: pd.DataFrame, column: str) -> float | None:
+    if column not in trials.columns:
+        return None
+
+    values = trials[column].dropna()
+
+    return float(values.sum()) if not values.empty else None
+
+
+def _peak(trials: pd.DataFrame, column: str) -> float | None:
+    if column not in trials.columns:
+        return None
+
+    values = trials[column].dropna()
+
+    return float(values.max()) if not values.empty else None

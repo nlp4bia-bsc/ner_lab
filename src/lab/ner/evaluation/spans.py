@@ -167,7 +167,7 @@ def bio_to_spans(
 
     for index, span in enumerate(spans):
         if text is not None:
-            span["text"] = text[span["start_span"]:span["end_span"]]
+            span["text"] = text[span["start_span"] : span["end_span"]]
 
         if scores is not None:
             span["score"] = float(np.mean(collected[index]))
@@ -183,7 +183,7 @@ def softmax(logits: np.ndarray) -> np.ndarray:
     return exponentiated / exponentiated.sum(axis=-1, keepdims=True)
 
 
-def content_positions(input_ids: list[int], tokenizer) -> list[int]:
+def content_positions(input_ids: list[int], tokenizer: PreTrainedTokenizerBase) -> list[int]:
     """Positions in `input_ids` that are not special tokens."""
     mask = tokenizer.get_special_tokens_mask(input_ids, already_has_special_tokens=True)
 
@@ -263,7 +263,7 @@ def ensure_offsets(value: Any) -> list[tuple[int, int]]:
     return [(int(start), int(end)) for start, end in value]
 
 
-def _aligned_offsets(row, tokenizer) -> dict[int, tuple[int, int]]:
+def _aligned_offsets(row: Any, tokenizer: PreTrainedTokenizerBase) -> dict[int, tuple[int, int]]:
     offsets = expand_to_word_extent(
         ensure_offsets(row.token_offsets), ensure_int_list(row.word_ids)
     )

@@ -1,24 +1,27 @@
-"""Candidate retrieval methods, one module per method family."""
+"""Candidate retrieval: sparse, sparse-in-FAISS, dense and transformer-in-FAISS retrievers."""
 
-from lab.nel.retrieval.base import BaseBiEncoder
-from lab.nel.retrieval.faiss import FaissBiEncoder
-from lab.nel.retrieval.matrix import MatrixBiEncoder
-from lab.nel.retrieval.sentence_transformer import DenseRetriever, SentenceTransformerBiEncoder
-from lab.nel.retrieval.store import gazetteer_fingerprint, load_embeddings, save_embeddings
-from lab.nel.retrieval.transformer_faiss import HerbertFaissBiEncoder
+from __future__ import annotations
+
+from lab.nel.retrieval.dense import DenseRetriever, SentenceTransformerBiEncoder
+from lab.nel.retrieval.faiss_index import build_cpu_index, move_index_to_gpu
+from lab.nel.retrieval.sparse import SparseRetriever
+from lab.nel.retrieval.sparse_faiss import SparseFaissRetriever
+from lab.nel.retrieval.store import gazetteer_fingerprint, read_embeddings, write_embeddings
+from lab.nel.retrieval.transformer_faiss import TransformerFaissRetriever
 from lab.nel.retrieval.workflow import CandidateRetrievalPipeline, RetrievalResult, build_vocabulary
 
 __all__ = [
-    "BaseBiEncoder",
     "CandidateRetrievalPipeline",
     "DenseRetriever",
-    "FaissBiEncoder",
-    "HerbertFaissBiEncoder",
-    "MatrixBiEncoder",
     "RetrievalResult",
     "SentenceTransformerBiEncoder",
+    "SparseFaissRetriever",
+    "SparseRetriever",
+    "TransformerFaissRetriever",
+    "build_cpu_index",
     "build_vocabulary",
     "gazetteer_fingerprint",
-    "load_embeddings",
-    "save_embeddings",
+    "move_index_to_gpu",
+    "read_embeddings",
+    "write_embeddings",
 ]

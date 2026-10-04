@@ -133,9 +133,9 @@ def normalize_spans(spans: pd.DataFrame) -> pd.DataFrame:
     if not normalized.empty and (normalized["end_span"] <= normalized["start_span"]).any():
         raise ValueError("Invalid spans detected: end_span <= start_span.")
 
-    return normalized.rename(
-        columns={"start_span": "off0", "end_span": "off1", "text": "span"}
-    )[["filename", "label", "off0", "off1", "span"]]
+    renamed = normalized.rename(columns={"start_span": "off0", "end_span": "off1", "text": "span"})
+
+    return renamed[["filename", "label", "off0", "off1", "span"]]
 
 
 def group_by_document(spans: pd.DataFrame) -> dict[str, list[dict[str, Any]]]:

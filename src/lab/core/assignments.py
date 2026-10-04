@@ -137,7 +137,9 @@ def validate_assignments(
     expected_folds = set(range(len(recorded_ratios)))
 
     if observed_folds != expected_folds:
-        raise ValueError(f"Expected folds {sorted(expected_folds)}, found {sorted(observed_folds)}.")
+        raise ValueError(
+            f"Expected folds {sorted(expected_folds)}, found {sorted(observed_folds)}."
+        )
 
     recorded_holdout_index = manifest_holdout_index(manifest)
 
@@ -167,14 +169,11 @@ def assert_partition_integrity(assignments_df: pd.DataFrame) -> None:
     holdout_index = manifest_holdout_index(assignments_df)
     all_ids = set(assignments_df["doc_id"].astype(str))
 
-    def ids_where(mask: pd.Series) -> set[str]:
-        return set(assignments_df.loc[mask, "doc_id"].astype(str))
-
     if holdout_index is None:
         seen: set[str] = set()
 
         for fold_id in range(n_partitions):
-            fold_ids = ids_where(assignments_df["fold"] == fold_id)
+            fold_ids = _doc_ids(assignments_df, assignments_df["fold"] == fold_id)
 
             if fold_ids & seen:
                 raise AssertionError(f"Overlap detected involving fold {fold_id}.")
@@ -186,14 +185,16 @@ def assert_partition_integrity(assignments_df: pd.DataFrame) -> None:
 
         return
 
-    test_ids = ids_where(assignments_df["fold"] == holdout_index)
+    test_ids = _doc_ids(assignments_df, assignments_df["fold"] == holdout_index)
 
     for validation_fold in range(n_partitions):
         if validation_fold == holdout_index:
             continue
 
-        validation_ids = ids_where(assignments_df["fold"] == validation_fold)
-        train_ids = ids_where(~assignments_df["fold"].isin([holdout_index, validation_fold]))
+        validation_ids = _doc_ids(assignments_df, assignments_df["fold"] == validation_fold)
+        train_ids = _doc_ids(
+            assignments_df, ~assignments_df["fold"].isin([holdout_index, validation_fold])
+        )
 
         if test_ids & validation_ids or test_ids & train_ids or validation_ids & train_ids:
             raise AssertionError(f"Overlap detected for validation fold {validation_fold}.")
@@ -276,3 +277,7 @@ def manifest_partition_names(assignments_df: pd.DataFrame) -> dict[int, str]:
     pairs = assignments_df[["fold", "partition_name"]].drop_duplicates().sort_values("fold")
 
     return {int(fold): str(name) for fold, name in pairs.itertuples(index=False)}
+
+
+def _doc_ids(assignments_df: pd.DataFrame, mask: pd.Series) -> set[str]:
+    return set(assignments_df.loc[mask, "doc_id"].astype(str))

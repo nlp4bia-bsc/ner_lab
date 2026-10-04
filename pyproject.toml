@@ -47,3 +47,20 @@ lab = "lab.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lab"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src"]
+
+[tool.ruff.format]
+exclude = ["verification/**", "*.md"]
+
+[tool.ruff.lint]
+select = ["F", "E9", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/__init__.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["lab"]

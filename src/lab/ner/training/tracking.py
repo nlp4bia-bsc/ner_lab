@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 from transformers import (
@@ -94,7 +95,7 @@ class EpochMetricsLogger(TrainerCallback):
         row: dict[str, Any] = {"split": split, "epoch": epoch, "step": step}
 
         for key, value in metrics.items():
-            row[key[len(prefix):] if key.startswith(prefix) else key] = value
+            row[key.removeprefix(prefix)] = value
 
         self.rows.append(row)
 

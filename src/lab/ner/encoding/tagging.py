@@ -30,7 +30,9 @@ def build_iob2_labels(tokens: list[dict], entities: list[dict], target_label: st
             inside = False
 
         entity = target_entities[entity_index] if entity_index < len(target_entities) else None
-        overlaps = entity is not None and token["start"] < entity["end"] and token["end"] > entity["start"]
+        overlaps = (
+            entity is not None and token["start"] < entity["end"] and token["end"] > entity["start"]
+        )
 
         if overlaps:
             label = f"I-{target_label}" if inside else f"B-{target_label}"

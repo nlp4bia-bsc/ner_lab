@@ -13,27 +13,26 @@ from pathlib import Path
 
 import networkx as nx
 import pandas as pd
-
 from _harness import Checks, run
 
 from lab.nel import (
+    Candidate,
     EntityLinkingPipeline,
     GazetteerEntry,
-    MatchCandidate,
-    MentionAnnotation,
+    Mention,
     build_matcher,
     link_entities,
     reciprocal_rank_fusion,
 )
 from lab.nel.evaluation import (
     evaluate_candidate_dataframe,
-    load_snomed_graph_pickle,
+    graph_distance_and_direction,
+    read_ontology_graph_pickle,
     retrieval_metrics_from_codes,
-    snomed_graph_distance_and_direction,
 )
 from lab.nel.io import read_table, write_table
-from lab.nel.matching import MATCHER_REGISTRY, StringMatchMatcher
-from lab.nel.retrieval import FaissBiEncoder, MatrixBiEncoder
+from lab.nel.matching import MATCHER_REGISTRY, ExactMatcher
+from lab.nel.retrieval import SparseFaissRetriever, SparseRetriever
 
 NLP4BIA_ENV = "NLP4BIA_LINKING_ROOT"
 DEFAULT_NLP4BIA = Path.home() / "bsc" / "nlp4bia-linking"
@@ -115,24 +114,34 @@ def mentions_with(mention_class) -> list:
     ]
 
 
+def candidate_term(candidate) -> str | None:
+    return candidate.term if hasattr(candidate, "term") else candidate.candidate_term
+
+
+def record_fields(record) -> dict:
+    fields = asdict(record)
+
+    return {("term" if key == "candidate_term" else key): value for key, value in fields.items()}
+
+
 def candidate_tuples(candidates: list) -> list[tuple]:
-    return [(c.code, round(float(c.score), 6), c.rank, c.method, c.candidate_term) for c in candidates]
+    return [(c.code, round(float(c.score), 6), c.rank, c.method, candidate_term(c)) for c in candidates]
 
 
 def verify_ported_tests(checks: Checks) -> None:
     gazetteer = [GazetteerEntry("heart failure", "A", "DISEASE"), GazetteerEntry("renal failure", "B", "DISEASE")]
-    mention = MentionAnnotation("doc", "DISEASE", 0, 13, "heart failure", None)
-    result = EntityLinkingPipeline(StringMatchMatcher(gazetteer=gazetteer)).link_mentions([mention])[0]
+    mention = Mention("doc", "DISEASE", 0, 13, "heart failure", None)
+    result = EntityLinkingPipeline(ExactMatcher(gazetteer=gazetteer)).link_mentions([mention])[0]
     checks.equal("string match pipeline links the exact term", result.predicted_code, "A")
     checks.equal("the top candidate has rank 1", result.candidates[0].rank, 1)
 
-    retriever = MatrixBiEncoder(top_k=2, use_word_ngrams=False)
+    retriever = SparseRetriever(top_k=2, use_word_ngrams=False)
     retriever.build_index([GazetteerEntry("heart failure", "A"), GazetteerEntry("renal failure", "B")])
-    candidates = retriever.search([MentionAnnotation("doc", None, 0, 13, "heart failure", None)])[0]
+    candidates = retriever.search([Mention("doc", None, 0, 13, "heart failure", None)])[0]
     checks.equal("matrix retrieval ranks the exact term first", candidates[0].code, "A")
 
     def candidate(code, score, rank, method):
-        return MatchCandidate(None, "doc", "mention", None, code, code, score, method, rank=rank)
+        return Candidate(None, "doc", "mention", None, code, code, score, method, rank=rank)
 
     class StaticRetriever:
         def __init__(self, method, candidates):
@@ -145,7 +154,7 @@ def verify_ported_tests(checks: Checks) -> None:
     first = StaticRetriever("first", [candidate("A", 0.8, 1, "first"), candidate("B", 0.7, 2, "first")])
     second = StaticRetriever("second", [candidate("B", 0.9, 1, "second"), candidate("A", 0.6, 2, "second")])
     fused = EntityLinkingPipeline(candidate_generators=[first, second], top_k_candidates=2).link_mentions(
-        [MentionAnnotation("doc", None, 0, 7, "mention", None)]
+        [Mention("doc", None, 0, 7, "mention", None)]
     )[0]
     checks.equal("two generators are fused by RRF, ties broken by best rank", fused.predicted_code, "A")
     checks.equal("fused candidates carry the rrf method", [c.method for c in fused.candidates], ["rrf", "rrf"])
@@ -171,9 +180,9 @@ def verify_ported_tests(checks: Checks) -> None:
     graph = nx.DiGraph()
     graph.add_edge("PARENT", "CHILD")
     undirected = graph.to_undirected()
-    checks.equal("same code is exact", snomed_graph_distance_and_direction(graph, undirected, "PARENT", "PARENT")["direction"], "exact")
-    checks.equal("a child prediction is narrow", snomed_graph_distance_and_direction(graph, undirected, "PARENT", "CHILD")["direction"], "narrow")
-    checks.equal("a parent prediction is broad", snomed_graph_distance_and_direction(graph, undirected, "CHILD", "PARENT")["direction"], "broad")
+    checks.equal("same code is exact", graph_distance_and_direction(graph, undirected, "PARENT", "PARENT")["direction"], "exact")
+    checks.equal("a child prediction is narrow", graph_distance_and_direction(graph, undirected, "PARENT", "CHILD")["direction"], "narrow")
+    checks.equal("a parent prediction is broad", graph_distance_and_direction(graph, undirected, "CHILD", "PARENT")["direction"], "broad")
 
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "hierarchy.pkl"
@@ -181,7 +190,7 @@ def verify_ported_tests(checks: Checks) -> None:
         with path.open("wb") as handle:
             pickle.dump((graph, undirected), handle)
 
-        loaded_graph, loaded_undirected = load_snomed_graph_pickle(path)
+        loaded_graph, loaded_undirected = read_ontology_graph_pickle(path)
         checks.equal("a (graph, undirected) pickle loads", list(loaded_graph.edges()), [("PARENT", "CHILD")])
         checks.check("the undirected view is kept", loaded_undirected.has_edge("PARENT", "CHILD"))
 
@@ -207,18 +216,26 @@ def verify_equivalence(checks: Checks, original) -> None:
     from nlp4bia_linking.ensembling import reciprocal_rank_fusion as original_rrf
     from nlp4bia_linking.evaluation import (
         retrieval_metrics_from_codes as original_metrics,
+    )
+    from nlp4bia_linking.evaluation import (
         snomed_graph_distance_and_direction as original_distance,
     )
-    from nlp4bia_linking.matching import MATCHER_REGISTRY as ORIGINAL_REGISTRY, build_matcher as original_matcher
+    from nlp4bia_linking.matching import MATCHER_REGISTRY as ORIGINAL_REGISTRY
+    from nlp4bia_linking.matching import build_matcher as original_matcher
     from nlp4bia_linking.preprocessing import normalize_text as original_normalize
-    from nlp4bia_linking.retrieval import FaissBiEncoder as OriginalFaiss, MatrixBiEncoder as OriginalMatrix
+    from nlp4bia_linking.retrieval import FaissBiEncoder as OriginalFaiss
+    from nlp4bia_linking.retrieval import MatrixBiEncoder as OriginalMatrix
 
     from lab.nel.preprocessing import normalize_text
 
-    checks.equal("the same matcher names are registered", sorted(MATCHER_REGISTRY), sorted(ORIGINAL_REGISTRY))
+    checks.equal(
+        "the same matcher names are registered, less the whoosh alias",
+        sorted(MATCHER_REGISTRY),
+        sorted(set(ORIGINAL_REGISTRY) - {"whoosh"}),
+    )
 
     ours_entries, theirs_entries = entries_with(GazetteerEntry), entries_with(original.GazetteerEntry)
-    ours_mentions, theirs_mentions = mentions_with(MentionAnnotation), mentions_with(original.MentionAnnotation)
+    ours_mentions, theirs_mentions = mentions_with(Mention), mentions_with(original.MentionAnnotation)
 
     for name in sorted(MATCHER_REGISTRY):
         ours = build_matcher(name, gazetteer=ours_entries, top_k=5).fit().predict(ours_mentions)
@@ -230,10 +247,10 @@ def verify_equivalence(checks: Checks, original) -> None:
         )
 
     for label, ours_class, theirs_class, kwargs in (
-        ("matrix", MatrixBiEncoder, OriginalMatrix, {"top_k": 5}),
-        ("matrix without word n-grams", MatrixBiEncoder, OriginalMatrix, {"top_k": 5, "use_word_ngrams": False}),
-        ("matrix with a threshold", MatrixBiEncoder, OriginalMatrix, {"top_k": 5, "threshold": 0.3}),
-        ("faiss", FaissBiEncoder, OriginalFaiss, {"top_k": 5, "device": "cpu"}),
+        ("matrix", SparseRetriever, OriginalMatrix, {"top_k": 5}),
+        ("matrix without word n-grams", SparseRetriever, OriginalMatrix, {"top_k": 5, "use_word_ngrams": False}),
+        ("matrix with a threshold", SparseRetriever, OriginalMatrix, {"top_k": 5, "threshold": 0.3}),
+        ("faiss", SparseFaissRetriever, OriginalFaiss, {"top_k": 5, "device": "cpu"}),
     ):
         ours_retriever, theirs_retriever = ours_class(**kwargs), theirs_class(**kwargs)
         ours_retriever.build_index(ours_entries)
@@ -256,8 +273,8 @@ def verify_equivalence(checks: Checks, original) -> None:
 
     checks.equal(
         "rrf matches the original",
-        [asdict(c) for c in reciprocal_rank_fusion(rankings(MatchCandidate), k=60, top_k=3)],
-        [asdict(c) for c in original_rrf(rankings(original.MatchCandidate), k=60, top_k=3)],
+        [record_fields(c) for c in reciprocal_rank_fusion(rankings(Candidate), k=60, top_k=3)],
+        [record_fields(c) for c in original_rrf(rankings(original.MatchCandidate), k=60, top_k=3)],
     )
 
     gold = ["A", "B", "C", "D"]
@@ -282,17 +299,22 @@ def verify_equivalence(checks: Checks, original) -> None:
     pairs = [("A", "A"), ("A", "C"), ("C", "A"), ("B", "D"), ("D", "E"), ("A", "ZZZ"), ("A", None)]
     checks.equal(
         "graph distance and direction match the original",
-        [snomed_graph_distance_and_direction(graph, undirected, g, p) for g, p in pairs],
+        [graph_distance_and_direction(graph, undirected, g, p) for g, p in pairs],
         [original_distance(graph, undirected, g, p) for g, p in pairs],
     )
 
-    from lab.nel.brat import load_brat_ann
-    from lab.nel.io import load_annotations_tsv, load_gazetteer_tsv
     from nlp4bia_linking.data import (
         load_annotations_tsv as original_annotations,
+    )
+    from nlp4bia_linking.data import (
         load_brat_ann as original_brat,
+    )
+    from nlp4bia_linking.data import (
         load_gazetteer_tsv as original_gazetteer,
     )
+
+    from lab.nel.brat import read_brat_ann
+    from lab.nel.io import read_gazetteer_entries, read_mentions_tsv
 
     with tempfile.TemporaryDirectory() as tmp:
         annotations = Path(tmp) / "mentions.tsv"
@@ -305,9 +327,9 @@ def verify_equivalence(checks: Checks, original) -> None:
             "T2\tPROCEDURE 40 54\tecocardiograma\n",
             encoding="utf-8",
         )
-        checks.equal("annotation TSV reader matches the original", [asdict(m) for m in load_annotations_tsv(annotations)], [asdict(m) for m in original_annotations(annotations)])
-        checks.equal("gazetteer TSV reader matches the original", [asdict(e) for e in load_gazetteer_tsv(gazetteer)], [asdict(e) for e in original_gazetteer(gazetteer)])
-        checks.equal("BRAT reader matches the original", [asdict(m) for m in load_brat_ann(ann)], [asdict(m) for m in original_brat(ann)])
+        checks.equal("annotation TSV reader matches the original", [asdict(m) for m in read_mentions_tsv(annotations)], [asdict(m) for m in original_annotations(annotations)])
+        checks.equal("gazetteer TSV reader matches the original", [asdict(e) for e in read_gazetteer_entries(gazetteer)], [asdict(e) for e in original_gazetteer(gazetteer)])
+        checks.equal("BRAT reader matches the original", [asdict(m) for m in read_brat_ann(ann)], [asdict(m) for m in original_brat(ann)])
 
 
 def verify_link_entities(checks: Checks) -> None:
@@ -423,9 +445,9 @@ def verify_encoder_paths(checks: Checks, root: Path) -> None:
 @contextmanager
 def encoded_batches(method: str):
     """Record how many texts each call to the method's encoder receives."""
-    from lab.nel.retrieval import HerbertFaissBiEncoder, SentenceTransformerBiEncoder
+    from lab.nel.retrieval import SentenceTransformerBiEncoder, TransformerFaissRetriever
 
-    owner = HerbertFaissBiEncoder if method == "transformer_faiss" else SentenceTransformerBiEncoder
+    owner = TransformerFaissRetriever if method == "transformer_faiss" else SentenceTransformerBiEncoder
     original, sizes = owner.encode, []
 
     def encode(self, texts, *args, **kwargs):
@@ -447,7 +469,11 @@ def candidate_lists(spans: pd.DataFrame) -> tuple[list, list]:
 
 
 def verify_index_persistence(checks: Checks, root: Path, method: str, base_model: str, kwargs: dict, built) -> None:
-    from lab.nel.retrieval.store import EMBEDDINGS_FILENAME, INDEX_MANIFEST_FILENAME, VOCABULARY_FILENAME
+    from lab.nel.retrieval.store import (
+        EMBEDDINGS_FILENAME,
+        INDEX_MANIFEST_FILENAME,
+        VOCABULARY_FILENAME,
+    )
 
     index_dir = root / method / "gazetteer_index"
     link = dict(method=method, base_model=base_model, method_kwargs=kwargs, top_k=5, k_values=(1, 5))

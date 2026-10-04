@@ -1,10 +1,11 @@
-"""Mention extraction helpers for plain-text collections."""
+"""Finding dictionary terms in a directory of plain-text documents."""
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
-from lab.nel.schemas import MentionAnnotation
+from lab.nel.schemas import Mention
 
 
 def mentions_from_text_dictionary(
@@ -12,24 +13,24 @@ def mentions_from_text_dictionary(
     texts_dir: str | Path,
     label: str | None = None,
     code: str | None = None,
-) -> list[MentionAnnotation]:
-    """Find all case-insensitive dictionary occurrences in a directory of text files."""
-    mentions: list[MentionAnnotation] = []
+) -> list[Mention]:
+    """
+    Every case-insensitive occurrence of a dictionary term in the `.txt` files of `texts_dir`.
+
+    Occurrences may overlap, and each keeps the casing the document has.
+    """
     terms = [str(term).strip() for term in text_dictionary if str(term).strip()]
+    mentions: list[Mention] = []
 
     for path in Path(texts_dir).glob("*.txt"):
         content = path.read_text(encoding="utf-8")
         lowered_content = content.lower()
+
         for term in terms:
-            lowered_term = term.lower()
-            search_start = 0
-            while True:
-                start = lowered_content.find(lowered_term, search_start)
-                if start == -1:
-                    break
+            for start in _occurrences(lowered_content, term.lower()):
                 end = start + len(term)
                 mentions.append(
-                    MentionAnnotation(
+                    Mention(
                         filename=path.stem,
                         label=label,
                         start_span=start,
@@ -38,5 +39,13 @@ def mentions_from_text_dictionary(
                         code=code,
                     )
                 )
-                search_start = start + 1
+
     return mentions
+
+
+def _occurrences(content: str, term: str) -> Iterator[int]:
+    start = content.find(term)
+
+    while start != -1:
+        yield start
+        start = content.find(term, start + 1)

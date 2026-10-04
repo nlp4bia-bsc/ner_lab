@@ -1,30 +1,43 @@
-"""Lexical entity matching methods."""
+"""Lexical matching: scoring gazetteer terms against mentions, as records or as DataFrames."""
 
-from lab.nel.matching.base import BaseEntityMatcher
+from __future__ import annotations
+
+from lab.nel.matching.base import LexicalMatcher
+from lab.nel.matching.bm25 import bm25_index, bm25_term_score
+from lab.nel.matching.dataframe import (
+    BM25Retriever,
+    CandidateRecord,
+    DataFrameLexicalRetriever,
+    TfidfCharNgramRetriever,
+    combine_gazetteer_and_train,
+    default_normalizer,
+)
 from lab.nel.matching.lexical import (
     BM25Matcher,
-    BM25Retriever,
+    ExactMatcher,
     JaroWinklerMatcher,
     LevenshteinMatcher,
-    StringMatchMatcher,
     TfidfCharNgramMatcher,
-    TfidfCharNgramRetriever,
     TokenSetMatcher,
-    WhooshContextMatcher,
 )
 from lab.nel.matching.registry import MATCHER_REGISTRY, build_matcher
 
 __all__ = [
-    "BaseEntityMatcher",
     "BM25Matcher",
     "BM25Retriever",
+    "CandidateRecord",
+    "DataFrameLexicalRetriever",
+    "ExactMatcher",
     "JaroWinklerMatcher",
     "LevenshteinMatcher",
+    "LexicalMatcher",
     "MATCHER_REGISTRY",
-    "StringMatchMatcher",
     "TfidfCharNgramMatcher",
     "TfidfCharNgramRetriever",
     "TokenSetMatcher",
-    "WhooshContextMatcher",
+    "bm25_index",
+    "bm25_term_score",
     "build_matcher",
+    "combine_gazetteer_and_train",
+    "default_normalizer",
 ]

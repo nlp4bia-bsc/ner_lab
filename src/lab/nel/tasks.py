@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 TASKS: dict[str, tuple[str, str]] = {
-    "link_entities": ("lab.nel.linking", "link_entities"),
+    "link_entities": ("lab.nel.linking.link", "link_entities"),
 }
 
 REQUIRES = ("sklearn", "networkx")

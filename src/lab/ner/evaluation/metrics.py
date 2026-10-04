@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -17,7 +18,7 @@ from lab.ner.evaluation.tokens import (
 )
 
 if TYPE_CHECKING:
-    from transformers import PreTrainedTokenizerBase
+    from transformers import EvalPrediction, PreTrainedTokenizerBase
 
 BEST_METRIC = "span_strict_f1"
 
@@ -116,7 +117,7 @@ def build_compute_metrics(
     """
     rows = rows.reset_index(drop=True)
 
-    def compute_metrics(eval_prediction) -> dict[str, Any]:
+    def compute_metrics(eval_prediction: EvalPrediction) -> dict[str, Any]:
         predictions = eval_prediction.predictions
 
         if isinstance(predictions, tuple):
@@ -137,7 +138,7 @@ def build_compute_metrics(
     return compute_metrics
 
 
-def _padded(labels, width: int, ignore_index: int) -> list[int]:
+def _padded(labels: Iterable[int], width: int, ignore_index: int) -> list[int]:
     values = [int(label) for label in labels][:width]
 
     return values + [ignore_index] * (width - len(values))

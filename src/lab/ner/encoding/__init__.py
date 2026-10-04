@@ -7,6 +7,7 @@ from lab.ner.encoding.encoder import (
     Encoder,
     WindowStrategy,
     describe_encoder,
+    encode_partition,
     encoder_from_description,
     strategy_name,
 )
@@ -37,6 +38,7 @@ __all__ = [
     "build_window",
     "compute_max_content_length",
     "describe_encoder",
+    "encode_partition",
     "encoder_from_description",
     "resolve_entities",
     "select_context_windows",

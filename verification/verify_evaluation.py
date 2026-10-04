@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from _harness import Checks, run
 from fixtures import samples_root, synthetic_corpus
 
-from lab.core import safe_f1
+from lab.core import safe_f1, score_characters, spans_from_corpus
 from lab.ner.evaluation import (
     bio_to_spans,
     entity_tags,
@@ -28,7 +28,6 @@ from lab.ner.evaluation import (
     token_metrics,
     token_metrics_by_entity,
 )
-from lab.core import score_characters, spans_from_corpus
 
 NER_API_ENV = "NER_API_ROOT"
 DEFAULT_NER_API = Path.home() / "bsc" / "NER-API"

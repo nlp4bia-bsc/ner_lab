@@ -91,9 +91,8 @@ class SweepProgress(Callback):
         parts.append(self.elapsed(trial))
 
         if isinstance(score, (int, float)) and math.isfinite(score):
-            better = (
-                self.best is None
-                or (score > self.best if self.greater_is_better else score < self.best)
+            better = self.best is None or (
+                score > self.best if self.greater_is_better else score < self.best
             )
 
             if better:

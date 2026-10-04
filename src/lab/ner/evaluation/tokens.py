@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 
-from lab.ner.encoding.rows import IGNORE_INDEX
 from lab.core.scoring import safe_f1
+from lab.ner.encoding.rows import IGNORE_INDEX
 from lab.ner.evaluation.spans import strip_bio_prefix
 
 TOKEN_METRIC_NAMES = (
@@ -142,7 +144,9 @@ def decode_pairs(
     return predicted, gold
 
 
-def _counts(predicted: list[str], gold: list[str], matches) -> dict[str, float | int]:
+def _counts(
+    predicted: list[str], gold: list[str], matches: Callable[[str], bool]
+) -> dict[str, float | int]:
     tp = fp = fn = 0
 
     for predicted_label, gold_label in zip(predicted, gold):

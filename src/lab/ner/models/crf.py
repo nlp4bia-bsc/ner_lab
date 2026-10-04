@@ -92,8 +92,11 @@ class CRFForTokenClassification(nn.Module):
         loss = None
 
         if labels is not None:
-            mask = torch.ones_like(labels, dtype=torch.bool) if attention_mask is None \
+            mask = (
+                torch.ones_like(labels, dtype=torch.bool)
+                if attention_mask is None
                 else attention_mask.bool()
+            )
 
             crf_labels = labels.masked_fill(labels == self.ignore_index, self.outside_label_id)
 
@@ -177,7 +180,9 @@ def decoded_paths_to_logits(
     logit tensor. Rebuilding that shape here keeps CRF and non-CRF models on one
     metrics path instead of forking it.
     """
-    decoded_ids = torch.zeros((len(decoded_paths), sequence_length), dtype=torch.long, device=device)
+    decoded_ids = torch.zeros(
+        (len(decoded_paths), sequence_length), dtype=torch.long, device=device
+    )
 
     for row, path in enumerate(decoded_paths):
         length = min(len(path), sequence_length)

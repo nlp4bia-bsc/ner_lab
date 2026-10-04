@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from transformers import AutoModelForTokenClassification
 
@@ -60,3 +61,11 @@ def build_linear_model(base_model: str, label2id: dict, id2label: dict, **kwargs
         id2label=normalize_id2label(id2label),
         **kwargs,
     )
+
+
+def architecture_name(architecture: str | Architecture) -> str:
+    """A recordable name for a builtin architecture or a user-supplied callable."""
+    if isinstance(architecture, str):
+        return architecture
+
+    return getattr(architecture, "__name__", type(architecture).__name__)

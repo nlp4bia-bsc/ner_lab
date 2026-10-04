@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+from collections.abc import Callable
 from types import ModuleType
-from typing import Any, Callable
+from typing import Any
 
 NAMESPACES = ("core", "ner", "nel")
 

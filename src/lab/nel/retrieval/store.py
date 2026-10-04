@@ -26,7 +26,7 @@ def gazetteer_fingerprint(vocabulary: pd.DataFrame) -> str:
     return hasher.hexdigest()
 
 
-def load_embeddings(
+def read_embeddings(
     index_dir: str | Path,
     vocabulary: pd.DataFrame,
     settings: dict[str, Any],
@@ -75,7 +75,7 @@ def load_embeddings(
     return embeddings
 
 
-def save_embeddings(
+def write_embeddings(
     index_dir: str | Path,
     embeddings: np.ndarray,
     vocabulary: pd.DataFrame,
@@ -99,4 +99,7 @@ def save_embeddings(
 
 
 def _vocabulary_fields(vocabulary: pd.DataFrame) -> dict[str, Any]:
-    return {"gazetteer_fingerprint": gazetteer_fingerprint(vocabulary), "n_terms": int(len(vocabulary))}
+    return {
+        "gazetteer_fingerprint": gazetteer_fingerprint(vocabulary),
+        "n_terms": int(len(vocabulary)),
+    }

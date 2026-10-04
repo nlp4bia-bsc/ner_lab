@@ -308,19 +308,19 @@ def verify_winner_configuration(checks: Checks) -> None:
 
 
 def verify_winner_config_file(checks: Checks, block: dict) -> None:
-    from lab.cli import load_config
+    from lab.cli import read_config
     from lab.ner.hpo import write_winner_config
 
     with tempfile.TemporaryDirectory() as tmp:
         path = write_winner_config(block, Path(tmp) / "winner.yaml")
 
         checks.check("the winner config is written", path.exists())
-        checks.equal("the CLI reads it back unchanged", load_config(path), block)
+        checks.equal("the CLI reads it back unchanged", read_config(path), block)
 
 
 def verify_task_registration(checks: Checks) -> None:
-    from lab.ner.hpo import search_hyperparameters
     from lab.core.tasks import resolve_task
+    from lab.ner.hpo import search_hyperparameters
 
     checks.check(
         "the task name resolves to the search",
@@ -329,12 +329,12 @@ def verify_task_registration(checks: Checks) -> None:
 
 
 def verify_run_trial(checks: Checks) -> None:
-    from transformers import AutoTokenizer
-
     from fixtures import tiny_base_model
+    from transformers import AutoTokenizer
+    from verify_assessment import prepare_split
+
     from lab.core.split import split_paths
     from lab.ner.hpo import build_variants, encode_variants, resolve_base_arguments, run_trial
-    from verify_assessment import prepare_split
 
     shared = tempfile.TemporaryDirectory()
     root = Path(shared.name)
@@ -420,12 +420,12 @@ def verify_run_trial(checks: Checks) -> None:
 
 def verify_end_to_end(checks: Checks) -> None:
     import torch
-    from transformers import AutoTokenizer
-
     from fixtures import tiny_base_model
+    from transformers import AutoTokenizer
+    from verify_assessment import prepare_split
+
     from lab.ner.hpo import search_hyperparameters
     from lab.ner.training import train_model
-    from verify_assessment import prepare_split
 
     shared = tempfile.TemporaryDirectory()
     root = Path(shared.name)
@@ -489,12 +489,12 @@ def verify_end_to_end(checks: Checks) -> None:
     checks.equal("it points at the searched split", best["split_dir"], str(split_dir))
     checks.check("it carries a sampled learning rate", 1e-5 <= best["training_arguments"]["learning_rate"] <= 1e-4)
 
-    from lab.cli import load_config
+    from lab.cli import read_config
 
     checks.check("the winner config is written", result.paths["winner"].exists())
     checks.equal(
         "the winner config holds the winner block",
-        load_config(result.paths["winner"]),
+        read_config(result.paths["winner"]),
         best,
     )
 

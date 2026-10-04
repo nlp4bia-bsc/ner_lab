@@ -27,7 +27,7 @@ def torch_available() -> bool:
 
 
 def verify_rotations(checks: Checks) -> None:
-    from lab.ner.training.assessment import fold_rotations
+    from lab.ner.training.runs import fold_rotations
 
     checks.equal(
         "a train/validation split has one rotation",
@@ -78,7 +78,8 @@ def verify_rotations(checks: Checks) -> None:
 
 
 def verify_naming(checks: Checks) -> None:
-    from lab.ner.training.assessment import architecture_name, run_directory_name
+    from lab.ner.models.registry import architecture_name
+    from lab.ner.training.runs import run_directory_name
 
     checks.equal(
         "the run directory names what was trained",
@@ -99,7 +100,7 @@ def verify_naming(checks: Checks) -> None:
 
 def verify_run_dir_claim(checks: Checks) -> None:
     from lab.core.provenance import write_manifest
-    from lab.ner.training.assessment import RUN_MANIFEST_FILENAME, claim_run_dir
+    from lab.ner.training.runs import RUN_MANIFEST_FILENAME, claim_run_dir
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -134,7 +135,7 @@ def verify_run_dir_claim(checks: Checks) -> None:
 
 
 def verify_aggregation(checks: Checks) -> None:
-    from lab.ner.training.assessment import aggregate_metrics, best_epoch_metrics
+    from lab.ner.training.folds import aggregate_metrics, best_epoch_metrics
 
     frame = pd.DataFrame(
         {"validation_fold": [1, 2], "best_metric": [0.4, 0.6], "label": ["a", "b"]}
@@ -218,7 +219,7 @@ def verify_task_registration(checks: Checks) -> None:
 
 
 def verify_manifest_reading(checks: Checks) -> None:
-    from lab.ner.training.assessment import read_data_manifest, split_provenance
+    from lab.ner.training.runs import read_data_manifest, split_provenance
 
     with tempfile.TemporaryDirectory() as tmp:
         checks.raises(
@@ -251,6 +252,7 @@ def fold_directories(run_dir: Path) -> list[Path]:
 def prepare_split(root: Path, kfolds: int | None) -> Path:
     """Write a synthetic corpus and split it, returning the split directory."""
     from fixtures import synthetic_corpus
+
     from lab.core import prepare_dataset, write_corpus
 
     source = write_corpus(synthetic_corpus(24), root / "source" / "documents.parquet")
@@ -265,9 +267,9 @@ def prepare_split(root: Path, kfolds: int | None) -> Path:
 
 
 def verify_end_to_end(checks: Checks) -> None:
+    from fixtures import tiny_base_model
     from transformers import AutoTokenizer
 
-    from fixtures import tiny_base_model
     from lab.ner.training import train_model
 
     shared = tempfile.TemporaryDirectory()

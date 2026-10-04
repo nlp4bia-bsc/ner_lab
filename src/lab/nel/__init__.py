@@ -6,16 +6,16 @@ import importlib
 from typing import Any
 
 _EXPORTS: dict[str, str] = {
+    "Candidate": "lab.nel.schemas",
     "Concept": "lab.nel.schemas",
     "EntityLinkingPipeline": "lab.nel.pipeline",
     "GazetteerEntry": "lab.nel.schemas",
     "HierarchyEdge": "lab.nel.schemas",
     "LinkedEntity": "lab.nel.schemas",
-    "LinkingResult": "lab.nel.linking",
-    "MatchCandidate": "lab.nel.schemas",
-    "MentionAnnotation": "lab.nel.schemas",
+    "LinkingResult": "lab.nel.linking.link",
+    "Mention": "lab.nel.schemas",
     "build_matcher": "lab.nel.matching",
-    "link_entities": "lab.nel.linking",
+    "link_entities": "lab.nel.linking.link",
     "reciprocal_rank_fusion": "lab.nel.rrf",
 }
 

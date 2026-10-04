@@ -21,6 +21,7 @@ config, namespaced task names, exit codes, cluster submission.
 |---|---|---|
 | [DESIGN.md](dev/DESIGN.md) | Why the library is shaped this way: the governing principle, the hard rules, the layering and the two tables, verification, how we work. | Rarely. |
 | [DECISIONS.md](dev/DECISIONS.md) | What was decided, one line each, numbered `D1`–`Dn`; the argument under the same number for the ones that need it. | Append-only. |
+| [CODE_STYLE.md](dev/CODE_STYLE.md) | How library code is written: function and module size, naming, docstrings, errors. | Rarely. |
 | [ROADMAP.md](dev/ROADMAP.md) | Where things stand, what is next, what is still open. | Every stage. |
 
 Rules of thumb when updating:

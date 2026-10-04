@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import dataclasses
-import math
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -11,25 +10,28 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import yaml
 from transformers import TrainingArguments
 
+from lab.core.provenance import write_manifest
+from lab.core.split import split_paths
 from lab.ner.encoding.encoder import WindowStrategy
 from lab.ner.encoding.overlaps import OverlapPolicy
-from lab.core.split import split_paths
+from lab.ner.hpo.arguments import resolve_base_arguments, user_argument_overrides
 from lab.ner.hpo.progress import SweepProgress
 from lab.ner.hpo.report import summarize_sweep
-from lab.ner.hpo.space import (
-    DEFAULT_SEARCH_SPACE,
-    build_search_space,
-    describe_search_space,
-    smoke_configuration,
-)
+from lab.ner.hpo.space import build_search_space, describe_search_space, smoke_configuration
 from lab.ner.hpo.trial import (
-    RESERVED_DIMENSIONS,
     metric_greater_is_better,
     run_trial,
     validate_search_space,
+)
+from lab.ner.hpo.trials import (
+    TRIALS_SUMMARY_FILENAME,
+    best_trial,
+    optional_int,
+    trial_directory_name,
+    trials_table,
+    write_trials_table,
 )
 from lab.ner.hpo.variants import (
     EncodedVariant,
@@ -37,42 +39,23 @@ from lab.ner.hpo.variants import (
     describe_variants,
     encode_variants,
 )
-from lab.ner.models.registry import Architecture
-from lab.core.provenance import write_manifest
-from lab.ner.training.arguments import training_arguments as build_training_arguments
-from lab.ner.training.assessment import (
+from lab.ner.hpo.winner import (
+    FINAL_TRAIN_DIRNAME,
+    WINNER_CONFIG_FILENAME,
+    winner_configuration,
+    write_winner_config,
+)
+from lab.ner.models.registry import Architecture, architecture_name
+from lab.ner.training.runs import (
     RUN_MANIFEST_FILENAME,
-    architecture_name,
     claim_run_dir,
     fold_rotations,
     read_data_manifest,
 )
 from lab.ner.training.tracking import gpu_hardware_info
 
-TRIALS_SUMMARY_FILENAME = "trials_summary.parquet"
 HPO_SUMMARY_FILENAME = "hpo_summary.json"
-FINAL_TRAIN_DIRNAME = "final_train"
-WINNER_CONFIG_FILENAME = "winner.yaml"
 TUNE_VERBOSITY = 0
-
-HPO_ARGUMENT_DEFAULTS: dict[str, Any] = {
-    "num_train_epochs": 40,
-    "save_strategy": "no",
-    "load_best_model_at_end": False,
-}
-
-DERIVED_ARGUMENT_KEYS = ("output_dir", "run_name", "logging_dir")
-
-RESOURCE_COLUMNS = (
-    "duration_sec",
-    "energy_kwh",
-    "emissions_kg_co2",
-    "cpu_utilization_percent",
-    "gpu_utilization_percent",
-    "ram_used_gb",
-    "gpu_peak_vram_allocated_gb",
-    "gpu_peak_vram_reserved_gb",
-)
 
 
 @dataclass(frozen=True)
@@ -165,8 +148,6 @@ def search_hyperparameters(
     """
     import ray
     from ray import tune
-    from ray.air import FailureConfig
-    from ray.tune.search.optuna import OptunaSearch
 
     sweep_start = time.monotonic()
 
@@ -181,26 +162,10 @@ def search_hyperparameters(
     base_models = [base_models] if isinstance(base_models, str) else list(base_models)
 
     variants = build_variants(base_models, strategies, context_tokens, max_lengths)
-    space = build_search_space(search_space)
-
-    if "variant" in space:
-        raise ValueError(
-            "variant is a reserved search dimension, built from base_models/strategies/"
-            "context_tokens/max_lengths."
-        )
-
-    validate_search_space(space)
+    space = _validated_search_space(search_space)
 
     base_arguments = resolve_base_arguments(training_arguments, run_dir, random_state)
-    metric = base_arguments.metric_for_best_model
-
-    if not metric:
-        raise ValueError(
-            "training_arguments must set metric_for_best_model — it is the sweep's objective."
-        )
-
-    metric_key = metric[len("eval_"):] if metric.startswith("eval_") else metric
-    greater_is_better = metric_greater_is_better(base_arguments)
+    metric_key, greater_is_better = _objective(base_arguments)
 
     full_space = {**space, "variant": tune.choice(list(variants))}
 
@@ -242,159 +207,93 @@ def search_hyperparameters(
     manifest_path = write_manifest(manifest, run_dir / RUN_MANIFEST_FILENAME)
     paths: dict[str, Path] = {"run_manifest": manifest_path}
 
-    encoded = encode_variants(
-        partitions=partitions,
-        variants=variants,
-        target_label=target_label,
-        language=language,
-        overlap_policy=overlap_policy,
-        min_sentence_tokens=min_sentence_tokens,
-    )
-
-    def build_trainable(seeds: int, arguments: TrainingArguments = base_arguments) -> Any:
-        trainable = tune.with_parameters(
-            _reported_trial,
-            variants=encoded,
-            base_arguments=arguments,
-            architecture=architecture,
-            architecture_kwargs=architecture_kwargs,
-            max_micro_batch_size=max_micro_batch_size,
-            seeds_per_trial=seeds,
-            top_k_epochs=top_k_epochs,
-            min_overlap_percentage=min_overlap_percentage,
-            early_stopping_patience=early_stopping_patience,
-            pad_to_multiple_of=pad_to_multiple_of,
-            track_resources=track_resources,
-        )
-
-        if gpus_per_trial:
-            trainable = tune.with_resources(trainable, {"gpu": gpus_per_trial})
-
-        return trainable
+    trial_settings = {
+        "variants": encode_variants(
+            partitions=partitions,
+            variants=variants,
+            target_label=target_label,
+            language=language,
+            overlap_policy=overlap_policy,
+            min_sentence_tokens=min_sentence_tokens,
+        ),
+        "architecture": architecture,
+        "architecture_kwargs": architecture_kwargs,
+        "max_micro_batch_size": max_micro_batch_size,
+        "top_k_epochs": top_k_epochs,
+        "min_overlap_percentage": min_overlap_percentage,
+        "early_stopping_patience": early_stopping_patience,
+        "pad_to_multiple_of": pad_to_multiple_of,
+        "track_resources": track_resources,
+    }
 
     if smoke_test:
-        smoke_result = tune.Tuner(
-            build_trainable(
-                seeds=1, arguments=dataclasses.replace(base_arguments, num_train_epochs=1)
+        _run_smoke_test(
+            trainable=_trainable(
+                trial_settings,
+                arguments=dataclasses.replace(base_arguments, num_train_epochs=1),
+                seeds_per_trial=1,
+                gpus_per_trial=gpus_per_trial,
             ),
-            param_space={
-                **smoke_configuration(space),
-                "variant": tune.grid_search(list(variants)),
-            },
-            tune_config=tune.TuneConfig(num_samples=1),
-            run_config=tune.RunConfig(
-                name="smoke_test",
-                storage_path=str(run_dir),
-                verbose=TUNE_VERBOSITY,
-                callbacks=[
-                    SweepProgress(
-                        metric=metric_key,
-                        greater_is_better=greater_is_better,
-                        total=len(variants),
-                        stage="smoke",
-                    )
-                ]
-                if report
-                else [],
+            space=space,
+            variants=variants,
+            run_dir=run_dir,
+            callbacks=_progress_callbacks(
+                report, metric_key, greater_is_better, total=len(variants), stage="smoke"
             ),
-        ).fit()
+        )
 
-        if smoke_result.num_errors:
-            raise RuntimeError(
-                "Pre-flight smoke test failed, aborting before the real sweep: "
-                f"{smoke_result.errors[0]}"
-            )
-
-    search_algorithm = OptunaSearch(
-        metric=metric_key,
-        mode="max" if greater_is_better else "min",
+    result_grid = _run_sweep(
+        trainable=_trainable(
+            trial_settings,
+            arguments=base_arguments,
+            seeds_per_trial=seeds_per_trial,
+            gpus_per_trial=gpus_per_trial,
+        ),
+        full_space=full_space,
+        n_trials=n_trials,
+        metric_key=metric_key,
+        greater_is_better=greater_is_better,
         seed=base_arguments.seed,
         study_name=study_name,
         storage=storage,
+        run_dir=run_dir,
+        callbacks=_progress_callbacks(
+            report, metric_key, greater_is_better, total=n_trials, stage="trial"
+        ),
     )
-
-    result_grid = tune.Tuner(
-        build_trainable(seeds=seeds_per_trial),
-        param_space=full_space,
-        tune_config=tune.TuneConfig(
-            search_alg=search_algorithm,
-            num_samples=n_trials,
-            trial_dirname_creator=trial_directory_name,
-        ),
-        run_config=tune.RunConfig(
-            name="trials",
-            storage_path=str(run_dir),
-            verbose=TUNE_VERBOSITY,
-            callbacks=[
-                SweepProgress(
-                    metric=metric_key,
-                    greater_is_better=greater_is_better,
-                    total=n_trials,
-                    stage="trial",
-                )
-            ]
-            if report
-            else [],
-            failure_config=FailureConfig(max_failures=0, fail_fast=True),
-        ),
-    ).fit()
 
     trials = trials_table(result_grid, metric_key)
     paths["trials_summary"] = write_trials_table(trials, run_dir / TRIALS_SUMMARY_FILENAME)
 
     best = best_trial(result_grid, metric_key, greater_is_better)
+    winner = None
 
-    summary: dict[str, Any] = {
-        "success": best is not None,
-        "metric": metric_key,
-        "greater_is_better": greater_is_better,
-        "n_trials": len(result_grid),
-        "num_errors": result_grid.num_errors,
-    }
-
-    if best is None:
-        summary["error"] = "No successful trial was completed."
-    else:
-        summary.update(
-            {
-                "best_metric": best.metrics.get(metric_key),
-                "best_metric_std": best.metrics.get(f"{metric_key}_std"),
-                "n_seeds": best.metrics.get("n_seeds"),
-                "per_seed_scores": best.metrics.get("per_seed_scores"),
-                "best_trial_path": best.path,
-                "sampled": dict(best.config),
-                "train_model": winner_configuration(
-                    split_dir=split_dir,
-                    output_dir=run_dir / FINAL_TRAIN_DIRNAME,
-                    variant=variants[best.config["variant"]],
-                    sampled=best.config,
-                    micro_batch_size=optional_int(
-                        best.metrics.get("per_device_train_batch_size")
-                    ),
-                    accumulation_steps=optional_int(
-                        best.metrics.get("gradient_accumulation_steps")
-                    ),
-                    target_label=target_label,
-                    language=language,
-                    architecture=architecture,
-                    architecture_kwargs=architecture_kwargs,
-                    overlap_policy=overlap_policy,
-                    min_sentence_tokens=min_sentence_tokens,
-                    min_overlap_percentage=min_overlap_percentage,
-                    early_stopping_patience=early_stopping_patience,
-                    base_arguments=base_arguments,
-                    user_overrides=user_argument_overrides(training_arguments),
-                ),
-            }
+    if best is not None:
+        winner = winner_configuration(
+            split_dir=split_dir,
+            output_dir=run_dir / FINAL_TRAIN_DIRNAME,
+            variant=variants[best.config["variant"]],
+            sampled=best.config,
+            micro_batch_size=optional_int(best.metrics.get("per_device_train_batch_size")),
+            accumulation_steps=optional_int(best.metrics.get("gradient_accumulation_steps")),
+            target_label=target_label,
+            language=language,
+            architecture=architecture,
+            architecture_kwargs=architecture_kwargs,
+            overlap_policy=overlap_policy,
+            min_sentence_tokens=min_sentence_tokens,
+            min_overlap_percentage=min_overlap_percentage,
+            early_stopping_patience=early_stopping_patience,
+            base_arguments=base_arguments,
+            user_overrides=user_argument_overrides(training_arguments),
         )
 
+    summary = _sweep_summary(result_grid, best, metric_key, greater_is_better, winner)
     summary["total_wall_time_sec"] = time.monotonic() - sweep_start
     paths["hpo_summary"] = write_manifest(summary, run_dir / HPO_SUMMARY_FILENAME)
 
-    if best is not None:
-        paths["winner"] = write_winner_config(
-            summary["train_model"], run_dir / WINNER_CONFIG_FILENAME
-        )
+    if winner is not None:
+        paths["winner"] = write_winner_config(winner, run_dir / WINNER_CONFIG_FILENAME)
 
     sweep_report = summarize_sweep(
         trials=trials,
@@ -411,7 +310,7 @@ def search_hyperparameters(
         run_dir=run_dir,
         metric=metric_key,
         summary=summary,
-        best=None if best is None else summary["train_model"],
+        best=winner,
         trials=trials,
         manifest=manifest,
         paths=paths,
@@ -419,234 +318,170 @@ def search_hyperparameters(
     )
 
 
-def user_argument_overrides(
-    arguments: TrainingArguments | Mapping[str, Any] | None,
-) -> dict[str, Any]:
-    """
-    What the caller changed from this library's defaults, for the winner block.
+def _validated_search_space(search_space: Mapping[str, Any] | None) -> dict[str, Any]:
+    space = build_search_space(search_space)
 
-    A mapping already says exactly that. An instance has every field populated, so
-    the caller's intent is only recoverable by diffing it against a default-built
-    one — without which the winner block would silently fall back to the defaults
-    for everything the sweep was actually run with.
-    """
-    if arguments is None:
-        return {}
-
-    if not isinstance(arguments, TrainingArguments):
-        return dict(arguments)
-
-    baseline = build_training_arguments(arguments.output_dir).to_dict()
-    current = arguments.to_dict()
-
-    return {
-        key: value
-        for key, value in current.items()
-        if not key.startswith("_")
-        and key not in DERIVED_ARGUMENT_KEYS
-        and baseline.get(key) != value
-    }
-
-
-def resolve_base_arguments(
-    arguments: TrainingArguments | Mapping[str, Any] | None,
-    output_dir: str | Path,
-    random_state: int | None = None,
-) -> TrainingArguments:
-    """
-    The `TrainingArguments` every trial starts from.
-
-    A mapping is applied over the library defaults plus `HPO_ARGUMENT_DEFAULTS` — a
-    high epoch cap with no checkpointing, since the trial score is read from the epoch
-    metrics and the weights are discarded. An instance is used as given, except for
-    those same sweep defaults, which are forced: every field of an instance is
-    populated, so a deliberate `num_train_epochs=10` cannot be told apart from the
-    library default of the same value. Pass a mapping to override them per key.
-    """
-    overrides: dict[str, Any] = {} if random_state is None else {"seed": random_state}
-
-    if isinstance(arguments, TrainingArguments):
-        return dataclasses.replace(
-            arguments, output_dir=str(output_dir), **HPO_ARGUMENT_DEFAULTS, **overrides
+    if "variant" in space:
+        raise ValueError(
+            "variant is a reserved search dimension, built from base_models/strategies/"
+            "context_tokens/max_lengths."
         )
 
-    merged = {**HPO_ARGUMENT_DEFAULTS, **(dict(arguments) if arguments else {})}
+    validate_search_space(space)
 
-    return build_training_arguments(output_dir, **{**merged, **overrides})
+    return space
 
 
-def trial_directory_name(trial: Any) -> str:
-    """A readable per-trial directory: the id plus the dimensions that vary most."""
-    configuration = trial.config
+def _objective(base_arguments: TrainingArguments) -> tuple[str, bool]:
+    metric = base_arguments.metric_for_best_model
 
-    return (
-        f"trial{trial.trial_id}"
-        f"_lr{configuration.get('learning_rate', 0):.1e}"
-        f"_bs{configuration.get('effective_train_batch_size', 0)}"
-        f"_wd{configuration.get('weight_decay', 0):.3f}"
+    if not metric:
+        raise ValueError(
+            "training_arguments must set metric_for_best_model — it is the sweep's objective."
+        )
+
+    metric_key = metric.removeprefix("eval_")
+
+    return metric_key, metric_greater_is_better(base_arguments)
+
+
+def _trainable(
+    trial_settings: dict[str, Any],
+    arguments: TrainingArguments,
+    seeds_per_trial: int,
+    gpus_per_trial: int,
+) -> Any:
+    from ray import tune
+
+    trainable = tune.with_parameters(
+        _reported_trial,
+        base_arguments=arguments,
+        seeds_per_trial=seeds_per_trial,
+        **trial_settings,
     )
 
+    if gpus_per_trial:
+        trainable = tune.with_resources(trainable, {"gpu": gpus_per_trial})
 
-def trials_table(result_grid: Any, metric_key: str) -> pd.DataFrame:
-    """
-    One row per trial: sampled values, score and spread, batch resolution, resources.
+    return trainable
 
-    Everything needed to compare trials without opening each trial's own
-    artifacts individually.
-    """
-    reported_columns = [
-        metric_key,
-        f"{metric_key}_std",
-        "n_seeds",
-        "per_seed_scores",
-        "oom",
-        "per_device_train_batch_size",
-        "gradient_accumulation_steps",
-        *RESOURCE_COLUMNS,
+
+def _progress_callbacks(
+    report: bool, metric_key: str, greater_is_better: bool, total: int, stage: str
+) -> list[SweepProgress]:
+    if not report:
+        return []
+
+    return [
+        SweepProgress(
+            metric=metric_key, greater_is_better=greater_is_better, total=total, stage=stage
+        )
     ]
 
-    rows: list[dict[str, Any]] = []
 
-    for result in result_grid:
-        metrics = result.metrics or {}
-        row: dict[str, Any] = {
-            "trial_id": metrics.get("trial_id"),
-            "trial_path": result.path,
-            "error": str(result.error) if result.error else None,
-        }
-        row.update(result.config or {})
+def _run_smoke_test(
+    trainable: Any,
+    space: dict[str, Any],
+    variants: dict[str, Any],
+    run_dir: Path,
+    callbacks: list[SweepProgress],
+) -> None:
+    from ray import tune
 
-        for column in reported_columns:
-            row[column] = metrics.get(column)
-
-        rows.append(row)
-
-    return pd.DataFrame(rows)
-
-
-def write_trials_table(trials: pd.DataFrame, path: str | Path) -> Path:
-    """Write the per-trial table to parquet."""
-    table_path = Path(path)
-    table_path.parent.mkdir(parents=True, exist_ok=True)
-
-    trials.to_parquet(table_path, index=False)
-
-    return table_path
-
-
-def best_trial(result_grid: Any, metric_key: str, greater_is_better: bool = True) -> Any | None:
-    """The finished trial with the best finite score, or None when there is none."""
-    scored = []
-
-    for result in result_grid:
-        value = (result.metrics or {}).get(metric_key)
-
-        if value is not None and math.isfinite(value):
-            scored.append((value, result))
-
-    if not scored:
-        return None
-
-    scored.sort(key=lambda pair: pair[0], reverse=greater_is_better)
-
-    return scored[0][1]
-
-
-def winner_configuration(
-    split_dir: str | Path,
-    output_dir: str | Path,
-    variant: dict[str, Any],
-    sampled: dict[str, Any],
-    micro_batch_size: int | None,
-    accumulation_steps: int | None,
-    target_label: str,
-    language: str,
-    architecture: str | Architecture,
-    architecture_kwargs: dict[str, Any] | None,
-    overlap_policy: str,
-    min_sentence_tokens: int,
-    min_overlap_percentage: float,
-    early_stopping_patience: int | None,
-    base_arguments: TrainingArguments,
-    user_overrides: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """
-    The winning trial as a ready-to-run `train_model` YAML config.
-
-    An output only — `train_model` never reads it back, so no file format enters
-    the API. Sweep-only settings (no checkpointing) are dropped; everything else
-    the user overrode for the sweep is carried through, as reported by
-    `user_argument_overrides`.
-
-    `output_dir` becomes the config's own `output_dir`, and `train_model` writes
-    into it directly, so this must name a directory no run owns yet — the sweep
-    passes `<its own directory>/final_train`.
-    """
-    hyperparameters = {
-        key: value for key, value in sampled.items() if key not in RESERVED_DIMENSIONS
-    }
-    carried = {
-        key: value
-        for key, value in (user_overrides or {}).items()
-        if key not in ("save_strategy", "load_best_model_at_end")
-    }
-
-    configuration: dict[str, Any] = {
-        "task": "ner.train_model",
-        "split_dir": str(split_dir),
-        "output_dir": str(output_dir),
-        "base_model": variant["base_model"],
-        "target_label": target_label,
-        "language": language,
-        "architecture": architecture_name(architecture),
-        "max_length": variant["max_length"],
-        "strategy": (
-            variant["strategy"]
-            if isinstance(variant["strategy"], str)
-            else architecture_name(variant["strategy"])
+    smoke_result = tune.Tuner(
+        trainable,
+        param_space={**smoke_configuration(space), "variant": tune.grid_search(list(variants))},
+        tune_config=tune.TuneConfig(num_samples=1),
+        run_config=tune.RunConfig(
+            name="smoke_test",
+            storage_path=str(run_dir),
+            verbose=TUNE_VERBOSITY,
+            callbacks=callbacks,
         ),
-        "context_tokens": variant["context_tokens"],
-        "overlap_policy": overlap_policy,
-        "min_sentence_tokens": min_sentence_tokens,
-        "min_overlap_percentage": min_overlap_percentage,
-        "early_stopping_patience": early_stopping_patience,
-        "training_arguments": {
-            **carried,
-            "num_train_epochs": base_arguments.num_train_epochs,
-            **hyperparameters,
-            "per_device_train_batch_size": micro_batch_size,
-            "gradient_accumulation_steps": accumulation_steps,
-        },
+    ).fit()
+
+    if smoke_result.num_errors:
+        raise RuntimeError(
+            "Pre-flight smoke test failed, aborting before the real sweep: "
+            f"{smoke_result.errors[0]}"
+        )
+
+
+def _run_sweep(
+    trainable: Any,
+    full_space: dict[str, Any],
+    n_trials: int,
+    metric_key: str,
+    greater_is_better: bool,
+    seed: int,
+    study_name: str | None,
+    storage: str | None,
+    run_dir: Path,
+    callbacks: list[SweepProgress],
+) -> Any:
+    from ray import tune
+    from ray.air import FailureConfig
+    from ray.tune.search.optuna import OptunaSearch
+
+    search_algorithm = OptunaSearch(
+        metric=metric_key,
+        mode="max" if greater_is_better else "min",
+        seed=seed,
+        study_name=study_name,
+        storage=storage,
+    )
+
+    return tune.Tuner(
+        trainable,
+        param_space=full_space,
+        tune_config=tune.TuneConfig(
+            search_alg=search_algorithm,
+            num_samples=n_trials,
+            trial_dirname_creator=trial_directory_name,
+        ),
+        run_config=tune.RunConfig(
+            name="trials",
+            storage_path=str(run_dir),
+            verbose=TUNE_VERBOSITY,
+            callbacks=callbacks,
+            failure_config=FailureConfig(max_failures=0, fail_fast=True),
+        ),
+    ).fit()
+
+
+def _sweep_summary(
+    result_grid: Any,
+    best: Any | None,
+    metric_key: str,
+    greater_is_better: bool,
+    winner: dict[str, Any] | None,
+) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "success": best is not None,
+        "metric": metric_key,
+        "greater_is_better": greater_is_better,
+        "n_trials": len(result_grid),
+        "num_errors": result_grid.num_errors,
     }
 
-    if architecture_kwargs:
-        configuration["architecture_kwargs"] = architecture_kwargs
+    if best is None:
+        summary["error"] = "No successful trial was completed."
 
-    return configuration
+        return summary
 
+    summary.update(
+        {
+            "best_metric": best.metrics.get(metric_key),
+            "best_metric_std": best.metrics.get(f"{metric_key}_std"),
+            "n_seeds": best.metrics.get("n_seeds"),
+            "per_seed_scores": best.metrics.get("per_seed_scores"),
+            "best_trial_path": best.path,
+            "sampled": dict(best.config),
+            "train_model": winner,
+        }
+    )
 
-def write_winner_config(configuration: Mapping[str, Any], path: str | Path) -> Path:
-    """
-    Write the winner block as a YAML config `lab run` accepts unchanged.
-
-    The same content `hpo_summary.json` already records, in the form the CLI
-    takes, so the winning trial reaches `train_model` without being retyped.
-    Still an output only: nothing reads it back, and `output_dir` is the sweep's
-    own, so the training run lands beside the sweep unless `--output-dir` says
-    otherwise.
-    """
-    config_path = Path(path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with config_path.open("w", encoding="utf-8") as file:
-        yaml.safe_dump(dict(configuration), file, sort_keys=False, allow_unicode=True)
-
-    return config_path
-
-
-def optional_int(value: Any) -> int | None:
-    """Coerce a metric Ray reported back to a plain `int`, leaving a missing one alone."""
-    return None if value is None else int(value)
+    return summary
 
 
 def _reported_trial(

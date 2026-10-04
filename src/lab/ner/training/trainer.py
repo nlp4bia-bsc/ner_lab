@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import shutil
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 import torch
@@ -24,6 +24,9 @@ from transformers.trainer_utils import TrainOutput
 from lab.ner.encoding.rows import IGNORE_INDEX
 from lab.ner.training.dataset import to_dataset, validate_rows
 from lab.ner.training.tracking import EpochMetricsLogger, ResourceTracker, gpu_hardware_info
+
+if TYPE_CHECKING:
+    from datasets import Dataset
 
 EPOCH_METRICS_FILENAME = "epoch_metrics.parquet"
 SUMMARY_FILENAME = "training_summary.json"
@@ -89,13 +92,13 @@ class CRFTrainer(Trainer):
         return loss, logits.detach(), labels.detach() if labels is not None else None
 
 
-def resolve_trainer_class(model) -> type[Trainer]:
+def resolve_trainer_class(model: nn.Module) -> type[Trainer]:
     """Pick `CRFTrainer` for a model that can Viterbi-decode, `Trainer` otherwise."""
     return CRFTrainer if hasattr(model, "decode_from_emissions") else Trainer
 
 
 def train(
-    model,
+    model: nn.Module,
     tokenizer: PreTrainedTokenizerBase,
     train_rows: pd.DataFrame,
     validation_rows: pd.DataFrame,
@@ -140,17 +143,7 @@ def train(
     validate_rows(validation_rows, "validation_rows")
 
     _check_best_metric(training_arguments, compute_metrics)
-
-    if (
-        save_model
-        and early_stopping_patience is not None
-        and not training_arguments.load_best_model_at_end
-    ):
-        raise ValueError(
-            "save_model=True with early stopping requires load_best_model_at_end=True on "
-            "the training arguments — otherwise the saved weights are the last epoch's, "
-            "not the best epoch's. Enable it, or pass early_stopping_patience=None."
-        )
+    _check_save_model(training_arguments, save_model, early_stopping_patience)
 
     output_dir = Path(training_arguments.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -199,15 +192,7 @@ def train(
             paths["epoch_metrics"] = epoch_metrics_path
 
         if save_model:
-            best_model_dir = output_dir / BEST_MODEL_DIRNAME
-            best_model_dir.mkdir(parents=True, exist_ok=True)
-
-            trainer.save_model(str(best_model_dir))
-            tokenizer.save_pretrained(best_model_dir)
-            paths["best_model"] = best_model_dir
-
-            if model_encoding is not None:
-                paths["model_encoding"] = write_model_encoding(model_encoding, best_model_dir)
+            paths.update(_save_best_model(trainer, tokenizer, output_dir, model_encoding))
     finally:
         if tracker is not None:
             resources = tracker.stop()
@@ -326,7 +311,9 @@ def remove_checkpoints(output_dir: str | Path) -> list[Path]:
     return removed
 
 
-def _check_best_metric(training_arguments: TrainingArguments, compute_metrics) -> None:
+def _check_best_metric(
+    training_arguments: TrainingArguments, compute_metrics: Callable[[Any], dict] | None
+) -> None:
     metric = training_arguments.metric_for_best_model
 
     if compute_metrics is not None or metric in (None, "loss", "eval_loss"):
@@ -339,13 +326,47 @@ def _check_best_metric(training_arguments: TrainingArguments, compute_metrics) -
     )
 
 
+def _check_save_model(
+    training_arguments: TrainingArguments, save_model: bool, early_stopping_patience: int | None
+) -> None:
+    if (
+        save_model
+        and early_stopping_patience is not None
+        and not training_arguments.load_best_model_at_end
+    ):
+        raise ValueError(
+            "save_model=True with early stopping requires load_best_model_at_end=True on "
+            "the training arguments — otherwise the saved weights are the last epoch's, "
+            "not the best epoch's. Enable it, or pass early_stopping_patience=None."
+        )
+
+
+def _save_best_model(
+    trainer: Trainer,
+    tokenizer: PreTrainedTokenizerBase,
+    output_dir: Path,
+    model_encoding: Mapping[str, Any] | None,
+) -> dict[str, Path]:
+    best_model_dir = output_dir / BEST_MODEL_DIRNAME
+    best_model_dir.mkdir(parents=True, exist_ok=True)
+
+    trainer.save_model(str(best_model_dir))
+    tokenizer.save_pretrained(best_model_dir)
+    paths = {"best_model": best_model_dir}
+
+    if model_encoding is not None:
+        paths["model_encoding"] = write_model_encoding(model_encoding, best_model_dir)
+
+    return paths
+
+
 def _build_trainer(
-    model,
-    tokenizer,
+    model: nn.Module,
+    tokenizer: PreTrainedTokenizerBase,
     training_arguments: TrainingArguments,
-    train_dataset,
-    validation_dataset,
-    compute_metrics,
+    train_dataset: Dataset,
+    validation_dataset: Dataset,
+    compute_metrics: Callable[[Any], dict] | None,
     trainer_class: type[Trainer],
     early_stopping_patience: int | None,
     pad_to_multiple_of: int | None,
@@ -372,8 +393,6 @@ def _build_trainer(
         trainer = trainer_class(tokenizer=tokenizer, **arguments)
 
     if early_stopping_patience is not None:
-        trainer.add_callback(
-            EarlyStoppingCallback(early_stopping_patience=early_stopping_patience)
-        )
+        trainer.add_callback(EarlyStoppingCallback(early_stopping_patience=early_stopping_patience))
 
     return trainer

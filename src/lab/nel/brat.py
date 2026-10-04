@@ -1,14 +1,19 @@
-"""BRAT annotation readers."""
+"""Reading mentions and their normalization codes from a BRAT `.ann` file."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from lab.nel.schemas import MentionAnnotation
+from lab.nel.schemas import Mention
 
 
-def load_brat_ann(path: str | Path) -> list[MentionAnnotation]:
-    """Load text-bound BRAT annotations and normalization references."""
+def read_brat_ann(path: str | Path) -> list[Mention]:
+    """
+    The text-bound annotations of a `.ann` file, each with the code its `N` line gives it.
+
+    A `T` line is one mention; an `N` line with at least four fields attaches its fourth
+    field as the code of the mention it references. Every other line is ignored.
+    """
     annotation_path = Path(path)
     text_bound: dict[str, tuple[str, int, int, str]] = {}
     references: dict[str, str] = {}
@@ -20,11 +25,12 @@ def load_brat_ann(path: str | Path) -> list[MentionAnnotation]:
             text_bound[annotation_id] = (label, int(start), int(end), mention)
         elif line.startswith("N"):
             parts = line.split()
+
             if len(parts) >= 4:
                 references[parts[2]] = parts[3]
 
     return [
-        MentionAnnotation(
+        Mention(
             filename=annotation_path.stem,
             label=label,
             start_span=start,

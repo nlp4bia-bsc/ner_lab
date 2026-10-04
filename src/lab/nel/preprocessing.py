@@ -1,4 +1,4 @@
-"""Text normalization utilities."""
+"""Normalizing mention and gazetteer text before it is compared."""
 
 from __future__ import annotations
 
@@ -12,27 +12,25 @@ def normalize_text(
     strip_accents: bool = False,
     normalize_punct: bool = False,
 ) -> str:
-    """Normalize whitespace, case, accents and punctuation.
+    """
+    Collapse whitespace and, optionally, lowercase, strip accents and blank out punctuation.
 
-    Args:
-        text: Input text.
-        lowercase: Convert text to lowercase.
-        strip_accents: Remove Unicode combining accent marks.
-        normalize_punct: Replace punctuation with spaces.
-
-    Returns:
-        The normalized text.
+    `strip_accents` drops the Unicode combining marks left by NFD decomposition;
+    `normalize_punct` replaces every non-word, non-space character with a space.
     """
     normalized = " ".join(str(text).split())
+
     if lowercase:
         normalized = normalized.lower()
+
     if strip_accents:
         normalized = "".join(
             character
             for character in unicodedata.normalize("NFD", normalized)
             if unicodedata.category(character) != "Mn"
         )
+
     if normalize_punct:
-        normalized = re.sub(r"[^\w\s]", " ", normalized)
-        normalized = " ".join(normalized.split())
+        normalized = " ".join(re.sub(r"[^\w\s]", " ", normalized).split())
+
     return normalized

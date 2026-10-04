@@ -41,14 +41,11 @@ def split_documents(
     """Partition a corpus in memory, keyed by partition name."""
     assert_partition_integrity(assignments_df)
 
-    unassigned = set(documents_df["doc_id"].astype(str)) - set(
-        assignments_df["doc_id"].astype(str)
-    )
+    unassigned = set(documents_df["doc_id"].astype(str)) - set(assignments_df["doc_id"].astype(str))
 
     if unassigned:
         raise ValueError(
-            f"{len(unassigned)} document(s) have no partition assignment: "
-            f"{sorted(unassigned)[:10]}"
+            f"{len(unassigned)} document(s) have no partition assignment: {sorted(unassigned)[:10]}"
         )
 
     fold_by_doc_id = assignments_df.set_index(assignments_df["doc_id"].astype(str))["fold"]
@@ -155,7 +152,9 @@ def create_split(
     An existing manifest in `output_dir` is reused unless `reuse_assignments` is
     False, and is validated against the corpus before being trusted.
     """
-    documents_df = validate_corpus(corpus) if isinstance(corpus, pd.DataFrame) else read_corpus(corpus)
+    documents_df = (
+        validate_corpus(corpus) if isinstance(corpus, pd.DataFrame) else read_corpus(corpus)
+    )
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -306,7 +305,7 @@ def read_split(
     names = list(id_sets)
 
     for index, first in enumerate(names):
-        for second in names[index + 1:]:
+        for second in names[index + 1 :]:
             if id_sets[first] & id_sets[second]:
                 raise AssertionError(f"{first} and {second} are not disjoint.")
 

@@ -160,7 +160,7 @@ runs before a stage is called done; it is what gives the rules above teeth.
 
 Every migrated piece was diffed against its NER-API original on real data before it was
 allowed to behave differently (`core`, `Encoder`, every metric family, exact), and `nel`
-against `nlp4bia-linking` call for call. The one exception is `ner/inference.py`: its script
+against `nlp4bia-linking` call for call. The one exception is `ner/inference/`: its script
 cannot run against a checkpoint both implementations can read, so it was verified through
 the pieces it is built from plus direct checks on what is new in it.
 

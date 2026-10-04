@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 import gc
 import statistics
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
@@ -84,16 +84,14 @@ def top_k_epoch_mean(
     statistic of a noisy signal and rewards a lucky epoch as much as a good
     configuration.
     """
-    column = metric[len("eval_"):] if metric.startswith("eval_") else metric
+    column = metric.removeprefix("eval_")
     evaluated = epoch_metrics
 
     if "split" in epoch_metrics.columns:
         evaluated = epoch_metrics[epoch_metrics["split"] == "eval"]
 
     values = (
-        evaluated[column].dropna().astype(float).tolist()
-        if column in evaluated.columns
-        else []
+        evaluated[column].dropna().astype(float).tolist() if column in evaluated.columns else []
     )
 
     if not values:
@@ -173,17 +171,13 @@ def run_trial(
     if not metric:
         raise ValueError("base_arguments.metric_for_best_model must name the trial objective.")
 
-    metric_key = metric[len("eval_"):] if metric.startswith("eval_") else metric
+    metric_key = metric.removeprefix("eval_")
     greater_is_better = metric_greater_is_better(base_arguments)
     variant = variants[sampled["variant"]]
 
-    if "effective_train_batch_size" in sampled:
-        micro_batch_size, accumulation_steps = resolve_batch_sizes(
-            int(sampled["effective_train_batch_size"]), max_micro_batch_size
-        )
-    else:
-        micro_batch_size = base_arguments.per_device_train_batch_size
-        accumulation_steps = base_arguments.gradient_accumulation_steps
+    micro_batch_size, accumulation_steps = _batch_sizes(
+        sampled, base_arguments, max_micro_batch_size
+    )
 
     hyperparameters = {
         key: value for key, value in sampled.items() if key not in RESERVED_DIMENSIONS
@@ -218,33 +212,20 @@ def run_trial(
                 **hyperparameters,
             )
 
-            set_seed(seed)
-
-            model = build_model(
-                base_model=variant.base_model,
-                label2id=variant.label2id,
-                id2label=variant.id2label,
-                architecture=architecture,
-                **(architecture_kwargs or {}),
-            )
-
-            result = train(
-                model=model,
-                tokenizer=variant.tokenizer,
-                train_rows=variant.train_rows,
-                validation_rows=variant.validation_rows,
-                training_arguments=arguments,
-                compute_metrics=compute_metrics,
-                early_stopping_patience=early_stopping_patience,
-                pad_to_multiple_of=pad_to_multiple_of,
-                track_resources=False,
-            )
-
             scores.append(
-                top_k_epoch_mean(result.epoch_metrics, metric, top_k_epochs, greater_is_better)
+                _seed_score(
+                    variant=variant,
+                    arguments=arguments,
+                    architecture=architecture,
+                    architecture_kwargs=architecture_kwargs,
+                    compute_metrics=compute_metrics,
+                    early_stopping_patience=early_stopping_patience,
+                    pad_to_multiple_of=pad_to_multiple_of,
+                    metric=metric,
+                    top_k_epochs=top_k_epochs,
+                    greater_is_better=greater_is_better,
+                )
             )
-
-            del result, model
             release_trial_memory()
     except Exception as error:
         if not is_oom_error(error):
@@ -268,3 +249,49 @@ def run_trial(
         f"{metric_key}_std": statistics.stdev(scores) if len(scores) > 1 else 0.0,
         metric_key: statistics.mean(scores) if scores else worst,
     }
+
+
+def _batch_sizes(
+    sampled: dict[str, Any], base_arguments: TrainingArguments, max_micro_batch_size: int
+) -> tuple[int, int]:
+    if "effective_train_batch_size" in sampled:
+        return resolve_batch_sizes(int(sampled["effective_train_batch_size"]), max_micro_batch_size)
+
+    return base_arguments.per_device_train_batch_size, base_arguments.gradient_accumulation_steps
+
+
+def _seed_score(
+    variant: EncodedVariant,
+    arguments: TrainingArguments,
+    architecture: str | Architecture,
+    architecture_kwargs: dict[str, Any] | None,
+    compute_metrics: Callable[[Any], dict],
+    early_stopping_patience: int | None,
+    pad_to_multiple_of: int | None,
+    metric: str,
+    top_k_epochs: int,
+    greater_is_better: bool,
+) -> float:
+    set_seed(arguments.seed)
+
+    model = build_model(
+        base_model=variant.base_model,
+        label2id=variant.label2id,
+        id2label=variant.id2label,
+        architecture=architecture,
+        **(architecture_kwargs or {}),
+    )
+
+    result = train(
+        model=model,
+        tokenizer=variant.tokenizer,
+        train_rows=variant.train_rows,
+        validation_rows=variant.validation_rows,
+        training_arguments=arguments,
+        compute_metrics=compute_metrics,
+        early_stopping_patience=early_stopping_patience,
+        pad_to_multiple_of=pad_to_multiple_of,
+        track_resources=False,
+    )
+
+    return top_k_epoch_mean(result.epoch_metrics, metric, top_k_epochs, greater_is_better)

@@ -3,21 +3,22 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Iterable, Iterator
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 import pyarrow.parquet as pq
 
-from lab.ner.encoding.overlaps import OverlapPolicy, resolve_entities
-from lab.ner.encoding.rows import build_row, compute_max_content_length, special_token_template
 from lab.core.segmentation import (
     merge_sentences_crossing_entities,
     sentence_token_ranges,
     split_into_sentences,
     tokenize_document,
 )
+from lab.ner.encoding.overlaps import OverlapPolicy, resolve_entities
+from lab.ner.encoding.rows import build_row, compute_max_content_length, special_token_template
 from lab.ner.encoding.tagging import build_iob2_labels, build_label_vocabulary
 from lab.ner.encoding.windowing import select_context_windows, select_greedy_windows
 
@@ -103,19 +104,7 @@ class Encoder:
         """
         parquet_file = pq.ParquetFile(path)
 
-        def documents():
-            for batch in parquet_file.iter_batches(
-                batch_size=self.documents_per_batch,
-                columns=["doc_id", "text", "entities_json"],
-            ):
-                for document in batch.to_pylist():
-                    yield (
-                        document["doc_id"],
-                        document["text"],
-                        json.loads(document["entities_json"]),
-                    )
-
-        return self._encode(documents())
+        return self._encode(_parquet_documents(parquet_file, self.documents_per_batch))
 
     def encode_document(self, doc_id: str, text: str, entities: list[dict]) -> list[dict]:
         """Encode one document into its window rows."""
@@ -130,7 +119,7 @@ class Encoder:
 
         return [self._row(tokens, window, entities, doc_id) for window in windows]
 
-    def _encode(self, documents) -> pd.DataFrame:
+    def _encode(self, documents: Iterable[tuple[str, str, list[dict]]]) -> pd.DataFrame:
         rows: list[dict] = []
         labels_seen: set[str] = set()
 
@@ -149,17 +138,17 @@ class Encoder:
     def _row(self, tokens: list[dict], window: dict, entities: list[dict], doc_id: str) -> dict:
         if "core_token_start" in window:
             labelled = [
-                *tokens[window["token_start"]:window["core_token_start"]],
+                *tokens[window["token_start"] : window["core_token_start"]],
                 *build_iob2_labels(
-                    tokens[window["core_token_start"]:window["core_token_end"]],
+                    tokens[window["core_token_start"] : window["core_token_end"]],
                     entities,
                     self.target_label,
                 ),
-                *tokens[window["core_token_end"]:window["token_end"]],
+                *tokens[window["core_token_end"] : window["token_end"]],
             ]
         else:
             labelled = build_iob2_labels(
-                tokens[window["token_start"]:window["token_end"]], entities, self.target_label
+                tokens[window["token_start"] : window["token_end"]], entities, self.target_label
             )
 
         row = build_row(labelled, self.label2id, self.prefix_ids, self.suffix_ids)
@@ -250,3 +239,49 @@ def strategy_name(strategy: str | WindowStrategy) -> str:
         return strategy
 
     return getattr(strategy, "__name__", type(strategy).__name__)
+
+
+def encode_partition(
+    encoder: Encoder,
+    path_or_paths: Path | list[Path],
+    cache: dict[str, pd.DataFrame] | None = None,
+) -> pd.DataFrame:
+    """
+    Encode one partition, or concatenate several into one training frame.
+
+    `cache` keeps each fold parquet's rows keyed by path, so a fold that is train
+    in one rotation and validation in another is encoded once.
+    """
+    paths = path_or_paths if isinstance(path_or_paths, list) else [path_or_paths]
+    frames = []
+
+    for path in paths:
+        key = str(path)
+
+        if cache is None:
+            frames.append(encoder.encode_parquet(path))
+        else:
+            if key not in cache:
+                cache[key] = encoder.encode_parquet(path)
+
+            frames.append(cache[key])
+
+    if len(frames) == 1:
+        return frames[0].reset_index(drop=True)
+
+    return pd.concat(frames, ignore_index=True)
+
+
+def _parquet_documents(
+    parquet_file: pq.ParquetFile, documents_per_batch: int
+) -> Iterator[tuple[str, str, list[dict]]]:
+    for batch in parquet_file.iter_batches(
+        batch_size=documents_per_batch,
+        columns=["doc_id", "text", "entities_json"],
+    ):
+        for document in batch.to_pylist():
+            yield (
+                document["doc_id"],
+                document["text"],
+                json.loads(document["entities_json"]),
+            )

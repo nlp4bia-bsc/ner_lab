@@ -153,9 +153,9 @@ def verify_encoder_description(checks: Checks) -> None:
 
 
 def verify_unannotated_encoding(checks: Checks) -> None:
+    from fixtures import synthetic_corpus
     from transformers import AutoTokenizer
 
-    from fixtures import synthetic_corpus
     from lab.ner.encoding import Encoder
     from lab.ner.encoding.rows import IGNORE_INDEX
 
@@ -194,11 +194,11 @@ def verify_unannotated_encoding(checks: Checks) -> None:
 
 
 def verify_empty_predictions(checks: Checks) -> None:
+    from fixtures import synthetic_corpus
     from transformers import AutoTokenizer
 
-    from fixtures import synthetic_corpus
-    from lab.ner.encoding import Encoder
     from lab.core.spans import SCORED_SPAN_COLUMNS
+    from lab.ner.encoding import Encoder
     from lab.ner.inference import decode_spans, write_predictions
 
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
@@ -273,6 +273,7 @@ def verify_inference_arguments(checks: Checks) -> None:
 
 def verify_document_reading(checks: Checks) -> None:
     from fixtures import synthetic_corpus
+
     from lab.ner.inference import has_gold, read_documents
 
     corpus = synthetic_corpus(4)
@@ -316,6 +317,7 @@ def verify_document_reading(checks: Checks) -> None:
 
 def verify_reference_reading(checks: Checks) -> None:
     from fixtures import synthetic_corpus
+
     from lab.ner.inference import read_reference, write_gold
 
     corpus = synthetic_corpus(4)
@@ -346,8 +348,8 @@ def verify_reference_reading(checks: Checks) -> None:
 
 
 def verify_task_registration(checks: Checks) -> None:
-    from lab.ner.inference import predict_entities
     from lab.core.tasks import resolve_task
+    from lab.ner.inference import predict_entities
 
     checks.check(
         "the task name resolves to inference",
@@ -370,9 +372,9 @@ def verify_missing_encoding(checks: Checks) -> None:
 
 def train_saved_model(root: Path, architecture: str) -> Path:
     """Train the miniature BERT for one epoch with weights kept, returning best_model/."""
+    from fixtures import synthetic_corpus, tiny_base_model
     from transformers import AutoTokenizer
 
-    from fixtures import synthetic_corpus, tiny_base_model
     from lab.core import prepare_dataset, write_corpus
     from lab.ner.training import train_model
 
@@ -408,6 +410,7 @@ def train_saved_model(root: Path, architecture: str) -> Path:
 
 def verify_end_to_end(checks: Checks) -> None:
     from fixtures import synthetic_corpus
+
     from lab.core.spans import SCORED_SPAN_COLUMNS, SPAN_COLUMNS
     from lab.ner.inference import load_model, predict_entities
 

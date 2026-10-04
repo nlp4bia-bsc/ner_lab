@@ -186,12 +186,12 @@ def verify_end_to_end(checks: Checks) -> None:
 
     import tempfile
 
+    from fixtures import synthetic_corpus, tiny_base_model
     from transformers import AutoTokenizer
 
-    from fixtures import synthetic_corpus, tiny_base_model
     from lab.ner.encoding import Encoder
-    from lab.ner.models import build_model
     from lab.ner.evaluation import build_compute_metrics
+    from lab.ner.models import build_model
     from lab.ner.training import CRFTrainer, resolve_trainer_class, train, training_arguments
 
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")

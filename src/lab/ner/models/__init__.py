@@ -12,6 +12,7 @@ from lab.ner.models.bio import (
 from lab.ner.models.registry import (
     BUILTIN_ARCHITECTURES,
     Architecture,
+    architecture_name,
     build_linear_model,
     build_model,
 )
@@ -19,6 +20,7 @@ from lab.ner.models.registry import (
 __all__ = [
     "BUILTIN_ARCHITECTURES",
     "Architecture",
+    "architecture_name",
     "bio_constraint_masks",
     "bio_entity",
     "build_linear_model",

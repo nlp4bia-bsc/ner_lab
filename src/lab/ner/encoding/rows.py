@@ -24,8 +24,8 @@ def special_token_template(tokenizer: PreTrainedTokenizerBase) -> tuple[list[int
     formatted = tokenizer.encode("a", add_special_tokens=True)
 
     for start in range(len(formatted) - len(probe) + 1):
-        if formatted[start:start + len(probe)] == probe:
-            return formatted[:start], formatted[start + len(probe):]
+        if formatted[start : start + len(probe)] == probe:
+            return formatted[:start], formatted[start + len(probe) :]
 
     raise ValueError(
         f"Could not locate probe {probe} inside {formatted}; "

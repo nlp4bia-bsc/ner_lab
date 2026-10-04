@@ -1,4 +1,4 @@
-"""Scoring NER predictions: span reconstruction from rows, span and character metrics, token diagnostics."""
+"""Scoring NER predictions: span and character metrics, token diagnostics, span rebuilding."""
 
 from __future__ import annotations
 

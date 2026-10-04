@@ -20,20 +20,11 @@ from lab.core.brat import (
     resolve_documents,
 )
 from lab.core.corpus import (
-    CodeMismatchPolicy,
-    CodeResolution,
-    ConflictPolicy,
     DOCUMENT_COLUMNS,
-    MismatchPolicy,
-    SourceConflict,
-    SourceMismatch,
     build_corpus,
     count_codes,
     count_labels,
     document_fingerprints,
-    resolve_codes,
-    resolve_conflicts,
-    resolve_mismatch,
     validate_corpus,
 )
 from lab.core.dataset import (
@@ -68,6 +59,17 @@ from lab.core.segmentation import (
     sentence_token_ranges,
     split_into_sentences,
     tokenize_document,
+)
+from lab.core.sources import (
+    CodeMismatchPolicy,
+    CodeResolution,
+    ConflictPolicy,
+    MismatchPolicy,
+    SourceConflict,
+    SourceMismatch,
+    resolve_codes,
+    resolve_conflicts,
+    resolve_mismatch,
 )
 from lab.core.spans import SCORED_SPAN_COLUMNS, SPAN_COLUMNS, span_dataframe, spans_from_corpus
 from lab.core.split import (

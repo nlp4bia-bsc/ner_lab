@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import product
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from transformers import AutoTokenizer
 
-from lab.ner.encoding.encoder import Encoder, WindowStrategy
+from lab.ner.encoding.encoder import Encoder, WindowStrategy, encode_partition, strategy_name
 from lab.ner.encoding.overlaps import OverlapPolicy
-from lab.ner.training.assessment import architecture_name, encode_partition
 
 
 @dataclass(frozen=True)
@@ -37,9 +37,7 @@ def variant_key(
     max_length: int,
 ) -> str:
     """The readable string one variant is sampled and recorded as."""
-    strategy_name = strategy if isinstance(strategy, str) else architecture_name(strategy)
-
-    return f"{Path(base_model).name}|{strategy_name}|{context_tokens}|{max_length}"
+    return f"{Path(base_model).name}|{strategy_name(strategy)}|{context_tokens}|{max_length}"
 
 
 def build_variants(
@@ -65,26 +63,24 @@ def build_variants(
 
     variants: dict[str, dict[str, Any]] = {}
 
-    for base_model in base_models:
-        for max_length in max_lengths:
-            for strategy in strategies:
-                context_options = list(context_tokens) if strategy == "context" else [None]
+    for base_model, max_length, strategy in product(base_models, max_lengths, strategies):
+        context_options = list(context_tokens) if strategy == "context" else [None]
 
-                for context in context_options:
-                    key = variant_key(base_model, strategy, context, max_length)
+        for context in context_options:
+            key = variant_key(base_model, strategy, context, max_length)
 
-                    if key in variants:
-                        raise ValueError(
-                            f"Duplicate variant {key!r} — two base models share the "
-                            "name the key is built from."
-                        )
+            if key in variants:
+                raise ValueError(
+                    f"Duplicate variant {key!r} — two base models share the "
+                    "name the key is built from."
+                )
 
-                    variants[key] = {
-                        "base_model": base_model,
-                        "strategy": strategy,
-                        "context_tokens": context,
-                        "max_length": max_length,
-                    }
+            variants[key] = {
+                "base_model": base_model,
+                "strategy": strategy,
+                "context_tokens": context,
+                "max_length": max_length,
+            }
 
     return variants
 
@@ -94,11 +90,7 @@ def describe_variants(variants: dict[str, dict[str, Any]]) -> dict[str, dict[str
     return {
         key: {
             **specification,
-            "strategy": (
-                specification["strategy"]
-                if isinstance(specification["strategy"], str)
-                else architecture_name(specification["strategy"])
-            ),
+            "strategy": strategy_name(specification["strategy"]),
         }
         for key, specification in variants.items()
     }

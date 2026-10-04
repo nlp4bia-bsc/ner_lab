@@ -9,25 +9,23 @@ from typing import Any, Literal
 import pandas as pd
 
 from lab.core.brat import read_annotations, resolve_documents
-from lab.core.corpus import (
+from lab.core.corpus import build_corpus, count_codes, count_labels
+from lab.core.io import DEFAULT_PARQUET_COMPRESSION, read_corpus, write_corpus
+from lab.core.provenance import file_sha256, read_manifest, write_manifest
+from lab.core.sources import (
     CodeMismatchPolicy,
     CodeResolution,
     ConflictPolicy,
     MismatchPolicy,
     SourceConflict,
     SourceMismatch,
-    build_corpus,
-    count_codes,
-    count_labels,
     resolve_codes,
     resolve_conflicts,
     resolve_mismatch,
 )
-from lab.core.io import DEFAULT_PARQUET_COMPRESSION, read_corpus, write_corpus
 from lab.core.split import ASSIGNMENTS_FILENAME, SplitResult, create_split
 from lab.core.stats import compute_annotation_stats, compute_text_stats
 from lab.core.stratification import DEFAULT_RANDOM_STATE
-from lab.core.provenance import file_sha256, read_manifest, write_manifest
 
 StatsChoice = Literal["none", "text", "both"]
 
@@ -195,7 +193,76 @@ def prepare_dataset(
         corpus = build_corpus(documents_dict, annotations_df)
         corpus_path = write_corpus(corpus, dataset_root / corpus_filename, compression)
 
-    source_manifest: dict[str, Any] = {
+    source_manifest = _source_manifest(
+        dataset_name=dataset_name,
+        documents=documents,
+        annotations=annotations,
+        codes=codes,
+        source_parquet=source_parquet,
+        corpus=corpus,
+        corpus_path=corpus_path,
+        normalize_labels=normalize_labels,
+        on_mismatch=on_mismatch,
+        on_conflict=on_conflict,
+        on_code_mismatch=on_code_mismatch,
+        mismatch=mismatch,
+        conflict=conflict,
+        code_resolution=code_resolution,
+        metadata=metadata,
+    )
+    write_manifest(source_manifest, dataset_root / SOURCE_MANIFEST_FILENAME)
+
+    _write_stats(corpus, dataset_root, stats, base_model, language, normalize_labels)
+
+    if not split:
+        return PreparedDataset(
+            corpus=corpus,
+            corpus_path=corpus_path,
+            dataset_root=dataset_root,
+            source_manifest=source_manifest,
+        )
+
+    split_dir, split_result, data_manifest = _split_dataset(
+        corpus=corpus,
+        dataset_root=dataset_root,
+        validation_size=validation_size,
+        kfolds=kfolds,
+        holdout_fold=holdout_fold,
+        random_state=random_state,
+        n_restarts=n_restarts,
+        reuse_assignments=reuse_assignments,
+        compression=compression,
+    )
+
+    return PreparedDataset(
+        corpus=corpus,
+        corpus_path=corpus_path,
+        dataset_root=dataset_root,
+        source_manifest=source_manifest,
+        split=split_result,
+        split_dir=split_dir,
+        data_manifest=data_manifest,
+    )
+
+
+def _source_manifest(
+    dataset_name: str,
+    documents: str | Path | None,
+    annotations: pd.DataFrame | str | Path | None,
+    codes: pd.DataFrame | str | Path | None,
+    source_parquet: str | Path | None,
+    corpus: pd.DataFrame,
+    corpus_path: Path,
+    normalize_labels: bool,
+    on_mismatch: MismatchPolicy,
+    on_conflict: ConflictPolicy,
+    on_code_mismatch: CodeMismatchPolicy,
+    mismatch: SourceMismatch | None,
+    conflict: SourceConflict | None,
+    code_resolution: CodeResolution | None,
+    metadata: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
         "dataset_name": dataset_name,
         "documents": str(documents) if documents is not None else None,
         "annotations": str(annotations) if isinstance(annotations, (str, Path)) else None,
@@ -209,9 +276,7 @@ def prepare_dataset(
         ),
         "on_conflict": on_conflict if source_parquet is None else None,
         "rewritten_documents": conflict.rewritten_documents if conflict is not None else None,
-        "n_rewritten_entities": (
-            conflict.n_rewritten_entities if conflict is not None else None
-        ),
+        "n_rewritten_entities": (conflict.n_rewritten_entities if conflict is not None else None),
         "dropped_conflicting_documents": (
             conflict.dropped_documents if conflict is not None else None
         ),
@@ -232,18 +297,19 @@ def prepare_dataset(
         **count_codes(corpus),
         "upstream_metadata": _upstream_metadata(source_parquet, metadata),
     }
-    write_manifest(source_manifest, dataset_root / SOURCE_MANIFEST_FILENAME)
 
-    _write_stats(corpus, dataset_root, stats, base_model, language, normalize_labels)
 
-    if not split:
-        return PreparedDataset(
-            corpus=corpus,
-            corpus_path=corpus_path,
-            dataset_root=dataset_root,
-            source_manifest=source_manifest,
-        )
-
+def _split_dataset(
+    corpus: pd.DataFrame,
+    dataset_root: Path,
+    validation_size: float,
+    kfolds: int | None,
+    holdout_fold: int,
+    random_state: int,
+    n_restarts: int,
+    reuse_assignments: bool,
+    compression: str,
+) -> tuple[Path, SplitResult, dict[str, Any]]:
     split_dir = dataset_root / split_descriptor(validation_size, kfolds, holdout_fold)
     reused = reuse_assignments and (split_dir / ASSIGNMENTS_FILENAME).exists()
 
@@ -272,15 +338,7 @@ def prepare_dataset(
     }
     write_manifest(data_manifest, split_dir / DATA_MANIFEST_FILENAME)
 
-    return PreparedDataset(
-        corpus=corpus,
-        corpus_path=corpus_path,
-        dataset_root=dataset_root,
-        source_manifest=source_manifest,
-        split=split_result,
-        split_dir=split_dir,
-        data_manifest=data_manifest,
-    )
+    return split_dir, split_result, data_manifest
 
 
 def _validate_inputs(

@@ -228,7 +228,7 @@ def _split_discontinuous_text(
     cursor = 0
 
     for fragment_length in fragment_lengths:
-        fragments.append(annotation_text[cursor:cursor + fragment_length])
+        fragments.append(annotation_text[cursor : cursor + fragment_length])
         cursor += fragment_length + 1
 
     return fragments
@@ -241,7 +241,11 @@ def _canonicalize_annotations(
 ) -> pd.DataFrame:
     _require_columns(annotations, ANNOTATION_COLUMNS, "annotations")
 
-    columns = [*ANNOTATION_COLUMNS, "code"] if keep_code and "code" in annotations.columns else ANNOTATION_COLUMNS
+    columns = (
+        [*ANNOTATION_COLUMNS, "code"]
+        if keep_code and "code" in annotations.columns
+        else ANNOTATION_COLUMNS
+    )
     canonical = annotations[columns].copy()
     canonical["filename"] = canonical["filename"].astype(str)
     canonical["label"] = canonical["label"].astype(str)

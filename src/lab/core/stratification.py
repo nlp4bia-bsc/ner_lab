@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -158,24 +159,22 @@ def _assign_once(
         scores: list[float] = []
 
         for fold_id in candidate_folds:
-            label_before = (fold_labels[fold_id] - target_labels[fold_id]) / label_scale[fold_id]
-            label_after = (
-                fold_labels[fold_id] + label_vector - target_labels[fold_id]
-            ) / label_scale[fold_id]
+            label_before, label_after = _before_and_after(
+                fold_labels[fold_id], label_vector, target_labels[fold_id], label_scale[fold_id]
+            )
             label_delta = np.square(label_after).sum() - np.square(label_before).sum()
 
-            entity_before = (
-                fold_entities[fold_id] - target_entities[fold_id]
-            ) / entity_scale[fold_id]
-            entity_after = (
-                fold_entities[fold_id] + entity_count - target_entities[fold_id]
-            ) / entity_scale[fold_id]
+            entity_before, entity_after = _before_and_after(
+                fold_entities[fold_id],
+                entity_count,
+                target_entities[fold_id],
+                entity_scale[fold_id],
+            )
             entity_delta = entity_after**2 - entity_before**2
 
-            document_before = (fold_docs[fold_id] - target_docs[fold_id]) / document_scale[fold_id]
-            document_after = (
-                fold_docs[fold_id] + 1 - target_docs[fold_id]
-            ) / document_scale[fold_id]
+            document_before, document_after = _before_and_after(
+                fold_docs[fold_id], 1, target_docs[fold_id], document_scale[fold_id]
+            )
             document_delta = document_after**2 - document_before**2
 
             scores.append(label_delta + 0.25 * entity_delta + 0.10 * document_delta)
@@ -218,3 +217,7 @@ def _partition_capacities(
         capacities[order[:remainder]] += 1
 
     return capacities
+
+
+def _before_and_after(current: Any, added: Any, target: Any, scale: Any) -> tuple[Any, Any]:
+    return (current - target) / scale, (current + added - target) / scale
