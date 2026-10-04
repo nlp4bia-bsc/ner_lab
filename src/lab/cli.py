@@ -168,11 +168,20 @@ def selection_methods() -> None:
     from lab.selection.methods import list_methods
 
     rows = list_methods()
-    headers = ("Method", "Family", "Representation", "Scores", "Probabilities", "Previous")
+    headers = (
+        "Method",
+        "Family",
+        "Methodologies",
+        "Representation",
+        "Scores",
+        "Probabilities",
+        "Previous",
+    )
     values = [
         (
             row.name,
             row.family,
+            ",".join(row.methodologies) or "-",
             _yes_no(row.requires_representation),
             _yes_no(row.requires_scores),
             _yes_no(row.requires_probabilities),
@@ -181,19 +190,47 @@ def selection_methods() -> None:
         for row in rows
     ]
     widths = [
-        max(len(headers[i]), *(len(str(row[i])) for row in values))
+        max(
+            len(headers[i]),
+            *(len(str(row[i])) for row in values),
+        )
         for i in range(len(headers))
     ]
-    typer.echo("  ".join(headers[i].ljust(widths[i]) for i in range(len(headers))))
-    typer.echo("  ".join("-" * width for width in widths))
+    typer.echo(
+        "  ".join(
+            headers[i].ljust(widths[i])
+            for i in range(len(headers))
+        )
+    )
+    typer.echo(
+        "  ".join(
+            "-" * width
+            for width in widths
+        )
+    )
     for row in values:
-        typer.echo("  ".join(str(row[i]).ljust(widths[i]) for i in range(len(headers))))
-    typer.echo("\nUse `lab selection method NAME` for parameters, notes and references.")
+        typer.echo(
+            "  ".join(
+                str(row[i]).ljust(widths[i])
+                for i in range(len(headers))
+            )
+        )
+
+    typer.echo(
+        "\nMethodology tags are descriptive only; every method contributes "
+        "equally in consensus rank aggregation."
+    )
+    typer.echo(
+        "Use `lab selection method NAME` for parameters, notes and references."
+    )
 
 
 @selection_app.command("method")
 def selection_method(
-    name: str = typer.Argument(..., help="Registered method name, e.g. typiclust or kcenter."),
+    name: str = typer.Argument(
+        ...,
+        help="Registered method name, e.g. typiclust or kcenter.",
+    ),
 ) -> None:
     """Explain one method, including scientific status and configurable parameters."""
     from lab.selection.methods import method_info
@@ -202,21 +239,55 @@ def selection_method(
     typer.echo(info.name)
     typer.echo("=" * len(info.name))
     typer.echo(f"Family: {info.family}")
+    typer.echo(
+        "Methodologies: "
+        + (
+            ", ".join(info.methodologies)
+            if info.methodologies
+            else "-"
+        )
+    )
     typer.echo(f"Description: {info.description}")
-    typer.echo(f"Requires representation: {_yes_no(info.requires_representation)}")
-    typer.echo(f"Requires scores: {_yes_no(info.requires_scores)}")
-    typer.echo(f"Requires probabilities: {_yes_no(info.requires_probabilities)}")
-    typer.echo(f"Supports previous selections: {_yes_no(info.supports_previous_selection)}")
+    typer.echo(
+        f"Requires representation: "
+        f"{_yes_no(info.requires_representation)}"
+    )
+    typer.echo(
+        f"Requires scores: "
+        f"{_yes_no(info.requires_scores)}"
+    )
+    typer.echo(
+        f"Requires probabilities: "
+        f"{_yes_no(info.requires_probabilities)}"
+    )
+    typer.echo(
+        f"Supports previous selections: "
+        f"{_yes_no(info.supports_previous_selection)}"
+    )
+
     if info.default_representation:
-        typer.echo(f"Default representation: {info.default_representation}")
+        typer.echo(
+            f"Default representation: "
+            f"{info.default_representation}"
+        )
     if info.implementation_note:
-        typer.echo(f"Implementation note: {info.implementation_note}")
+        typer.echo(
+            f"Implementation note: "
+            f"{info.implementation_note}"
+        )
     if info.reference:
-        typer.echo(f"Reference: {info.reference}")
+        typer.echo(
+            f"Reference: {info.reference}"
+        )
+
     if info.parameters:
         typer.echo("Parameters:")
         for key, description in info.parameters.items():
-            typer.echo(f"  {key}: {description}")
+            typer.echo(
+                f"  {key}: {description}"
+            )
+    else:
+        typer.echo("Parameters: none")
 
 
 @selection_app.command("representations")
@@ -386,7 +457,7 @@ def selection_compare(
     scores_path: Optional[Path] = typer.Option(None, "--scores", exists=True, dir_okay=False, help="Shared doc_id | score Parquet."),
     probabilities_path: Optional[Path] = typer.Option(None, "--probabilities", exists=True, dir_okay=False, help="Shared doc_id | probabilities Parquet."),
     seed: int = typer.Option(13, "--seed", "--random-state", help="Shared random seed."),
-    method_param: list[str] = typer.Option([], "--method-param", metavar="KEY=VALUE", help="Parameter applied to each compatible method."),
+    method_param: list[str] = typer.Option([], "--method-param", metavar="METHOD.PARAM=VALUE", help=("Strict method-specific parameter for a multi-method workflow. Repeat as needed, e.g. --method-param typiclust.typicality_knn=20."),),
     representation_param: list[str] = typer.Option([], "--representation-param", metavar="KEY=VALUE", help="Shared representation parameter."),
 ) -> None:
     """Run several selectors on the same pool and write pairwise intersection/Jaccard."""
@@ -411,25 +482,107 @@ def selection_compare(
 
 @selection_app.command("consensus")
 def selection_consensus(
-    input_path: Path = typer.Option(..., "--input", exists=True, dir_okay=False, readable=True, help="Canonical lab Parquet containing the full document pool."),
-    method: list[str] = typer.Option(..., "--method", help="Method contributing to the consensus. Repeat at least twice."),
-    n_select: int = typer.Option(..., "--n", min=1, help="Exact FINAL number of NEW consensus documents to select."),
-    output_dir: Path = typer.Option(..., "--output-dir", help="Directory for consensus selected.parquet, ranking.parquet, history.parquet and manifest.json."),
-    selected: list[Path] = typer.Option([], "--selected", help="Previous canonical selected.parquet or selection history/ranking Parquet. Repeat to union several previous selections."),
-    representation: Optional[str] = typer.Option(None, "--representation", help="Shared representation computed for compatible methods."),
-    representations_path: Optional[Path] = typer.Option(None, "--representations", exists=True, dir_okay=False, help="Shared precomputed doc_id | embedding Parquet."),
-    scores_path: Optional[Path] = typer.Option(None, "--scores", exists=True, dir_okay=False, help="Shared doc_id | score Parquet for model-based methods."),
-    probabilities_path: Optional[Path] = typer.Option(None, "--probabilities", exists=True, dir_okay=False, help="Shared doc_id | probabilities Parquet for methods such as PATRON and DEUCE."),
-    seed: int = typer.Option(13, "--seed", "--random-state", help="Shared random seed recorded in the run manifest."),
-    round_number: Optional[int] = typer.Option(None, "--round", min=1, help="Annotation round. Inferred from previous history when omitted."),
-    method_weight: list[str] = typer.Option([], "--method-weight", metavar="METHOD=WEIGHT", help="Optional positive vote weight for one participating method. Repeat as needed; unspecified methods have weight 1."),
-    method_param: list[str] = typer.Option([], "--method-param", metavar="KEY=VALUE", help="Parameter applied to each compatible method."),
-    representation_param: list[str] = typer.Option([], "--representation-param", metavar="KEY=VALUE", help="Shared representation parameter."),
+    input_path: Path = typer.Option(
+        ...,
+        "--input",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="Canonical lab Parquet containing the full document pool.",
+    ),
+    method: list[str] = typer.Option(
+        ...,
+        "--method",
+        help=(
+            "Method contributing one ordered Top-N list to rank aggregation. "
+            "Repeat at least twice."
+        ),
+    ),
+    n_select: int = typer.Option(
+        ...,
+        "--n",
+        min=1,
+        help="Exact FINAL number of NEW consensus documents to select.",
+    ),
+    output_dir: Path = typer.Option(
+        ...,
+        "--output-dir",
+        help=(
+            "Directory for consensus selected.parquet, ranking.parquet, "
+            "history.parquet and manifest.json."
+        ),
+    ),
+    selected: list[Path] = typer.Option(
+        [],
+        "--selected",
+        help=(
+            "Previous canonical selected.parquet or selection "
+            "history/ranking Parquet. Repeat to union several previous selections."
+        ),
+    ),
+    representation: Optional[str] = typer.Option(
+        None,
+        "--representation",
+        help="Shared representation computed for compatible methods.",
+    ),
+    representations_path: Optional[Path] = typer.Option(
+        None,
+        "--representations",
+        exists=True,
+        dir_okay=False,
+        help="Shared precomputed doc_id | embedding Parquet.",
+    ),
+    scores_path: Optional[Path] = typer.Option(
+        None,
+        "--scores",
+        exists=True,
+        dir_okay=False,
+        help=(
+            "Shared doc_id | score Parquet required by model-based methods. "
+            "Raw method scores are never used by consensus rank aggregation."
+        ),
+    ),
+    probabilities_path: Optional[Path] = typer.Option(
+        None,
+        "--probabilities",
+        exists=True,
+        dir_okay=False,
+        help=(
+            "Shared doc_id | probabilities Parquet for methods such as "
+            "PATRON and DEUCE."
+        ),
+    ),
+    seed: int = typer.Option(
+        13,
+        "--seed",
+        "--random-state",
+        help="Shared random seed recorded in the run manifest.",
+    ),
+    round_number: Optional[int] = typer.Option(
+        None,
+        "--round",
+        min=1,
+        help="Annotation round. Inferred from previous history when omitted.",
+    ),
+    method_param: list[str] = typer.Option(
+        [],
+        "--method-param",
+        metavar="METHOD.PARAM=VALUE",
+        help=(
+            "Strict method-specific parameter. Repeat as needed, e.g. "
+            "--method-param typiclust.typicality_knn=20."
+        ),
+    ),
+    representation_param: list[str] = typer.Option(
+        [],
+        "--representation-param",
+        metavar="KEY=VALUE",
+        help="Shared representation parameter.",
+    ),
 ) -> None:
-    """Select one exact batch by majority voting across several methods."""
+    """Select one exact batch by equal-weight partial Borda rank aggregation."""
     from lab.selection.api import consensus_select_documents
 
-    weights = _parse_key_values(method_weight, "--method-weight")
     run = consensus_select_documents(
         input_path,
         output_dir,
@@ -442,18 +595,41 @@ def selection_consensus(
         probabilities_path=probabilities_path,
         random_state=seed,
         round_number=round_number,
-        method_params=_parse_key_values(method_param, "--method-param"),
-        representation_params=_parse_key_values(representation_param, "--representation-param"),
-        method_weights=weights or None,
+        method_params=_parse_key_values(
+            method_param,
+            "--method-param",
+        ),
+        representation_params=_parse_key_values(
+            representation_param,
+            "--representation-param",
+        ),
     )
+
     typer.echo(f"round: {run.round_number}")
-    typer.echo(f"consensus selected: {len(run.selected_doc_ids)}")
-    for rank, doc_id in enumerate(run.selected_doc_ids, start=1):
-        typer.echo(f"  {rank:02d}. {doc_id}")
-    typer.echo(f"selected parquet: {run.selected_path}")
-    typer.echo(f"ranking parquet: {run.ranking_path}")
-    typer.echo(f"history parquet: {run.history_path}")
-    typer.echo(f"manifest: {run.manifest_path}")
+    typer.echo(
+        f"rank-aggregation selected: "
+        f"{len(run.selected_doc_ids)}"
+    )
+    for rank, doc_id in enumerate(
+        run.selected_doc_ids,
+        start=1,
+    ):
+        typer.echo(
+            f"  {rank:02d}. {doc_id}"
+        )
+
+    typer.echo(
+        f"selected parquet: {run.selected_path}"
+    )
+    typer.echo(
+        f"ranking parquet: {run.ranking_path}"
+    )
+    typer.echo(
+        f"history parquet: {run.history_path}"
+    )
+    typer.echo(
+        f"manifest: {run.manifest_path}"
+    )
 
 
 # ---------------------------------------------------------------------------

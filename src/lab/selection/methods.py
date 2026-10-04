@@ -27,6 +27,7 @@ class MethodInfo:
     name: str
     family: str
     description: str
+    methodologies: tuple[str, ...] = ()
     requires_representation: bool = False
     requires_scores: bool = False
     requires_probabilities: bool = False
@@ -88,6 +89,92 @@ def _require_representations(value: np.ndarray | None, n_candidates: int) -> np.
         )
     return _l2_normalize(matrix)
 
+_FRAMEWORK_SELECT_KWARGS = frozenset(
+    {
+        "representations",
+        "selected_representations",
+        "scores",
+        "probabilities",
+        "random_state",
+    }
+)
+
+
+def _reject_unknown_params(
+    method_name: str,
+    params: Mapping[str, Any],
+) -> None:
+    """Reject unknown method-specific kwargs while allowing shared API plumbing.
+
+    The high-level selection API calls every selector through the common
+    SelectionMethod interface and may therefore pass generic inputs such as
+    representations, scores or probabilities even when a concrete selector
+    does not use them.
+
+    Those common interface arguments are not method-specific parameters and
+    must not be rejected here. Any remaining keyword is treated as an
+    unsupported method parameter and fails loudly.
+    """
+    if not params:
+        return
+
+    unknown = {
+        str(key): value
+        for key, value in params.items()
+        if str(key) not in _FRAMEWORK_SELECT_KWARGS
+    }
+
+    if not unknown:
+        return
+
+    allowed = sorted(
+        method_info(method_name).parameters
+    )
+    allowed_text = (
+        ", ".join(allowed)
+        if allowed
+        else "none"
+    )
+
+    unknown_text = ", ".join(
+        sorted(unknown)
+    )
+
+    raise ValueError(
+        f"Unknown parameter(s) for selection method "
+        f"{method_name!r}: {unknown_text}. "
+        f"Allowed method-specific parameters: "
+        f"{allowed_text}. "
+        "Run-level options such as random_state must "
+        "be passed through the selection API/CLI "
+        "rather than --method-param."
+    )
+
+
+def validate_method_params(
+    method_name: str,
+    params: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Validate method-specific parameters against the registered public contract."""
+    values = dict(params or {})
+    if not values:
+        return {}
+
+    if "random_state" in values:
+        raise ValueError(
+            "random_state is a run-level option; use --seed/--random-state "
+            "instead of --method-param random_state=...."
+        )
+
+    allowed = set(method_info(method_name).parameters)
+    unknown = sorted(set(values) - allowed)
+    if unknown:
+        allowed_text = ", ".join(sorted(allowed)) if allowed else "none"
+        raise ValueError(
+            f"Unknown method parameter(s) for {method_name!r}: {unknown}. "
+            f"Allowed: {allowed_text}."
+        )
+    return values
 
 def _require_scores(value: np.ndarray | None, n_candidates: int) -> np.ndarray:
     if value is None:
@@ -149,8 +236,16 @@ def _entropy(probabilities: np.ndarray, normalized: bool = False) -> np.ndarray:
 class RandomSelection(SelectionMethod):
     """Seeded random baseline."""
 
-    def select(self, candidate_ids: Sequence[str], n: int, *, random_state: int = 13, **_: Any) -> MethodResult:
+    def select(
+        self,
+        candidate_ids: Sequence[str],
+        n: int,
+        *,
+        random_state: int = 13,
+        **params: Any,
+    ) -> MethodResult:
         _validate_budget(n, len(candidate_ids))
+        _reject_unknown_params("random", params)
         rng = np.random.default_rng(random_state)
         priority = rng.random(len(candidate_ids))
         chosen = np.argsort(-priority, kind="stable")[:n].astype(int).tolist()
@@ -172,60 +267,203 @@ class KMedoidsSelection(SelectionMethod):
         representations: np.ndarray | None = None,
         selected_representations: np.ndarray | None = None,
         max_swap_passes: int = 10,
-        **_: Any,
+        **params: Any,
     ) -> MethodResult:
         _validate_budget(n, len(candidate_ids))
+        _reject_unknown_params("kmedoids", params)
+
         x = _require_representations(representations, len(candidate_ids))
         distance = _cosine_distance(x)
+
         fixed = None
+        fixed_distance = None
         if selected_representations is not None and len(selected_representations):
-            fixed = _l2_normalize(np.asarray(selected_representations, dtype=np.float32))
-            fixed_distance = np.clip(1.0 - x @ fixed.T, 0.0, 2.0)
+            fixed = _l2_normalize(
+                np.asarray(selected_representations, dtype=np.float32)
+            )
+            fixed_distance = np.clip(
+                1.0 - x @ fixed.T,
+                0.0,
+                2.0,
+            )
             nearest = fixed_distance.min(axis=1)
         else:
-            nearest = np.full(len(x), np.inf, dtype=np.float64)
+            nearest = np.full(
+                len(x),
+                np.inf,
+                dtype=np.float64,
+            )
 
         chosen: list[int] = []
-        build_gain = np.full(len(x), np.nan, dtype=np.float64)
+        build_gain = np.full(
+            len(x),
+            np.nan,
+            dtype=np.float64,
+        )
+
         for _rank in range(n):
-            current_cost = float(nearest.sum()) if np.isfinite(nearest).all() else math.inf
+            current_cost = (
+                float(nearest.sum())
+                if np.isfinite(nearest).all()
+                else math.inf
+            )
+
             best_index = -1
             best_cost = math.inf
             best_nearest = None
+
             for candidate in range(len(x)):
                 if candidate in chosen:
                     continue
+
                 proposal = distance[:, candidate]
-                proposal_nearest = proposal if not np.isfinite(nearest).all() else np.minimum(nearest, proposal)
+                proposal_nearest = (
+                    proposal
+                    if not np.isfinite(nearest).all()
+                    else np.minimum(nearest, proposal)
+                )
                 cost = float(proposal_nearest.sum())
+
                 if cost < best_cost:
-                    best_index, best_cost, best_nearest = candidate, cost, proposal_nearest
+                    best_index = candidate
+                    best_cost = cost
+                    best_nearest = proposal_nearest
+
             if best_index < 0 or best_nearest is None:
                 break
+
             chosen.append(best_index)
-            build_gain[best_index] = math.nan if not math.isfinite(current_cost) else current_cost - best_cost
+            build_gain[best_index] = (
+                math.nan
+                if not math.isfinite(current_cost)
+                else current_cost - best_cost
+            )
             nearest = best_nearest
 
-        # PAM-style swap refinement.  Previously selected documents remain fixed.
+        # PAM-style swap refinement. Previously selected documents remain fixed.
         swap_passes = 0
-        for swap_passes in range(max(0, int(max_swap_passes))):
+        for swap_passes in range(
+            max(0, int(max_swap_passes))
+        ):
             current_cost = float(nearest.sum())
-            best: tuple[int, int, float, np.ndarray] | None = None
-            remaining = [index for index in range(len(x)) if index not in chosen]
+            best: tuple[
+                int,
+                int,
+                float,
+                np.ndarray,
+            ] | None = None
+
+            remaining = [
+                index
+                for index in range(len(x))
+                if index not in chosen
+            ]
+
             for position, _old in enumerate(chosen):
                 for new in remaining:
                     proposal = chosen.copy()
                     proposal[position] = new
-                    candidate_nearest = distance[:, proposal].min(axis=1)
-                    if fixed is not None:
-                        candidate_nearest = np.minimum(candidate_nearest, fixed_distance.min(axis=1))
+
+                    candidate_nearest = distance[
+                        :,
+                        proposal,
+                    ].min(axis=1)
+
+                    if fixed_distance is not None:
+                        candidate_nearest = np.minimum(
+                            candidate_nearest,
+                            fixed_distance.min(axis=1),
+                        )
+
                     cost = float(candidate_nearest.sum())
-                    if cost + 1e-12 < current_cost and (best is None or cost < best[2]):
-                        best = (position, new, cost, candidate_nearest)
+
+                    if (
+                        cost + 1e-12 < current_cost
+                        and (
+                            best is None
+                            or cost < best[2]
+                        )
+                    ):
+                        best = (
+                            position,
+                            new,
+                            cost,
+                            candidate_nearest,
+                        )
+
             if best is None:
                 break
+
             position, new, _cost, nearest = best
             chosen[position] = new
+
+        # IMPORTANT FOR PARTIAL RANK AGGREGATION:
+        #
+        # After PAM swaps, `chosen` is a FINAL SET of medoids. The list position
+        # is no longer a meaningful acquisition rank because a new medoid may
+        # have replaced an older medoid in an arbitrary slot.
+        #
+        # We therefore rank only the FINAL selected medoids by their
+        # leave-one-out contribution to the final k-medoids objective:
+        #
+        #   importance(m) =
+        #       objective(without m) - objective(with all final medoids)
+        #
+        # A larger value means removing that medoid would worsen representation
+        # of the pool more strongly, so it receives a better within-selected
+        # rank. This DOES NOT change the selected set; it only defines the order
+        # used by truncated-Borda consensus.
+        final_cost = float(nearest.sum())
+        selected_importance = np.full(
+            len(x),
+            np.nan,
+            dtype=np.float64,
+        )
+
+        for medoid in chosen:
+            other_medoids = [
+                index
+                for index in chosen
+                if index != medoid
+            ]
+
+            if other_medoids:
+                without = distance[
+                    :,
+                    other_medoids,
+                ].min(axis=1)
+
+                if fixed_distance is not None:
+                    without = np.minimum(
+                        without,
+                        fixed_distance.min(axis=1),
+                    )
+
+                selected_importance[medoid] = (
+                    float(without.sum())
+                    - final_cost
+                )
+
+            elif fixed_distance is not None:
+                without = fixed_distance.min(axis=1)
+                selected_importance[medoid] = (
+                    float(without.sum())
+                    - final_cost
+                )
+
+            else:
+                # n == 1 and there are no previous fixed medoids.
+                # The selected set contains one element, so its within-selected
+                # rank is trivial. Keep a finite diagnostic value.
+                selected_importance[medoid] = 0.0
+
+        chosen = sorted(
+            chosen,
+            key=lambda index: (
+                -float(selected_importance[index]),
+                int(index),
+            ),
+        )
 
         return MethodResult(
             chosen,
@@ -233,12 +471,23 @@ class KMedoidsSelection(SelectionMethod):
             extras={
                 "distance_to_nearest_final_medoid": nearest,
                 "build_marginal_cost_reduction": build_gain,
+                "selected_leave_one_out_importance": selected_importance,
             },
             diagnostics={
                 "objective": float(nearest.sum()),
                 "mean_distance_to_nearest_medoid": float(nearest.mean()),
-                "swap_passes_attempted": int(swap_passes + 1 if max_swap_passes else 0),
-                "previous_selections_fixed": bool(fixed is not None),
+                "swap_passes_attempted": int(
+                    swap_passes + 1
+                    if max_swap_passes
+                    else 0
+                ),
+                "previous_selections_fixed": bool(
+                    fixed is not None
+                ),
+                "selected_rank_semantics": (
+                    "descending leave-one-out contribution "
+                    "to the final k-medoids objective"
+                ),
             },
         )
 
@@ -253,7 +502,7 @@ class FacilityLocationSelection(SelectionMethod):
         *,
         representations: np.ndarray | None = None,
         selected_representations: np.ndarray | None = None,
-        **_: Any,
+        **params: Any,
     ) -> MethodResult:
         _validate_budget(n, len(candidate_ids))
         x = _require_representations(representations, len(candidate_ids))
@@ -308,7 +557,7 @@ class KCenterSelection(SelectionMethod):
         *,
         representations: np.ndarray | None = None,
         selected_representations: np.ndarray | None = None,
-        **_: Any,
+        **params: Any,
     ) -> MethodResult:
         _validate_budget(n, len(candidate_ids))
         x = _require_representations(representations, len(candidate_ids))
@@ -382,7 +631,7 @@ class TypiClustSelection(SelectionMethod):
         n_clusters: int | None = None,
         typicality_knn: int = 20,
         random_state: int = 13,
-        **_: Any,
+        **params: Any,
     ) -> MethodResult:
         _validate_budget(n, len(candidate_ids))
         candidates = _require_representations(representations, len(candidate_ids))
@@ -452,7 +701,7 @@ class ALPSSelection(SelectionMethod):
         selected_representations: np.ndarray | None = None,
         n_clusters: int | None = None,
         random_state: int = 13,
-        **_: Any,
+        **params: Any,
     ) -> MethodResult:
         _validate_budget(n, len(candidate_ids))
         candidates = _require_representations(representations, len(candidate_ids))
@@ -514,7 +763,7 @@ class UncertaintySelection(SelectionMethod):
         n: int,
         *,
         scores: np.ndarray | None = None,
-        **_: Any,
+        **params: Any,
     ) -> MethodResult:
         _validate_budget(n, len(candidate_ids))
         uncertainty = _require_scores(scores, len(candidate_ids))
@@ -534,7 +783,7 @@ class UncertaintyFacilitySelection(SelectionMethod):
         selected_representations: np.ndarray | None = None,
         scores: np.ndarray | None = None,
         candidate_multiplier: float = 5.0,
-        **_: Any,
+        **params: Any,
     ) -> MethodResult:
         _validate_budget(n, len(candidate_ids))
         x = _require_representations(representations, len(candidate_ids))
@@ -588,73 +837,304 @@ class PatronSelection(SelectionMethod):
         gamma: float = 0.5,
         refine_rounds: int = 1,
         random_state: int = 13,
-        **_: Any,
+        **params: Any,
     ) -> MethodResult:
         _validate_budget(n, len(candidate_ids))
-        x = _require_representations(representations, len(candidate_ids))
-        probs = _require_probabilities(probabilities, len(candidate_ids))
+        _reject_unknown_params("patron", params)
+
+        x = _require_representations(
+            representations,
+            len(candidate_ids),
+        )
+        probs = _require_probabilities(
+            probabilities,
+            len(candidate_ids),
+        )
+
         uncertainty = _entropy(probs)
         distance = _pairwise_euclidean(x)
-        k = min(max(1, int(k_neighbors)), max(1, len(x) - 1))
-        neighbours = np.argsort(distance, axis=1)[:, : min(k + 1, len(x))]
-        neighbour_distance = np.take_along_axis(distance, neighbours, axis=1)
-        propagated = np.mean(uncertainty[neighbours] * np.exp(-neighbour_distance * float(rho)), axis=1)
+
+        k = min(
+            max(1, int(k_neighbors)),
+            max(1, len(x) - 1),
+        )
+
+        neighbours = np.argsort(
+            distance,
+            axis=1,
+        )[:, : min(k + 1, len(x))]
+
+        neighbour_distance = np.take_along_axis(
+            distance,
+            neighbours,
+            axis=1,
+        )
+
+        propagated = np.mean(
+            uncertainty[neighbours]
+            * np.exp(
+                -neighbour_distance
+                * float(rho)
+            ),
+            axis=1,
+        )
 
         try:
             from sklearn.cluster import KMeans
             from sklearn.metrics import pairwise_distances
         except ImportError as error:
-            raise ImportError("PATRON requires scikit-learn: pip install 'lab[selection]'.") from error
+            raise ImportError(
+                "PATRON requires scikit-learn: "
+                "pip install 'lab[selection]'."
+            ) from error
 
-        clusterer = KMeans(n_clusters=n, random_state=random_state, n_init=20, max_iter=300)
+        clusterer = KMeans(
+            n_clusters=n,
+            random_state=random_state,
+            n_init=20,
+            max_iter=300,
+        )
         labels = clusterer.fit_predict(x)
+
         chosen: list[int] = []
+
         for cluster in range(n):
             ids = np.where(labels == cluster)[0]
             if not len(ids):
                 continue
-            centroid_distance = np.linalg.norm(x[ids] - clusterer.cluster_centers_[cluster], axis=1)
-            objective = propagated[ids] - float(beta) * centroid_distance
-            chosen.append(int(ids[int(np.argmax(objective))]))
+
+            centroid_distance = np.linalg.norm(
+                x[ids]
+                - clusterer.cluster_centers_[cluster],
+                axis=1,
+            )
+
+            objective = (
+                propagated[ids]
+                - float(beta) * centroid_distance
+            )
+
+            chosen.append(
+                int(
+                    ids[
+                        int(np.argmax(objective))
+                    ]
+                )
+            )
 
         fixed = (
-            _l2_normalize(np.asarray(selected_representations, dtype=np.float32))
-            if selected_representations is not None and len(selected_representations)
-            else np.empty((0, x.shape[1]), dtype=np.float32)
+            _l2_normalize(
+                np.asarray(
+                    selected_representations,
+                    dtype=np.float32,
+                )
+            )
+            if (
+                selected_representations is not None
+                and len(selected_representations)
+            )
+            else np.empty(
+                (0, x.shape[1]),
+                dtype=np.float32,
+            )
         )
-        for _round in range(max(0, int(refine_rounds))):
+
+        for _round in range(
+            max(0, int(refine_rounds))
+        ):
             anchors = x[chosen]
+
             if len(fixed):
-                anchors = np.vstack([fixed, anchors])
+                anchors = np.vstack(
+                    [fixed, anchors]
+                )
+
             refined: list[int] = []
+
             for cluster in range(n):
-                ids = np.where(labels == cluster)[0]
+                ids = np.where(
+                    labels == cluster
+                )[0]
+
                 if not len(ids):
                     continue
-                local_mean = x[ids].mean(axis=0, keepdims=True)
-                local_distance = np.linalg.norm(x[ids] - local_mean, axis=1)
-                if len(anchors):
-                    near = pairwise_distances(x[ids], anchors, metric="euclidean").min(axis=1)
-                    near = np.clip(near, 0.0, float(mu))
-                else:
-                    near = np.zeros(len(ids))
-                objective = propagated[ids] - float(beta) * local_distance + float(gamma) * near
-                refined.append(int(ids[int(np.argmax(objective))]))
-            chosen = list(dict.fromkeys(refined)) or chosen
 
-        remaining = [index for index in np.argsort(-propagated) if int(index) not in chosen]
-        chosen.extend(int(index) for index in remaining[: max(0, n - len(chosen))])
+                local_mean = x[ids].mean(
+                    axis=0,
+                    keepdims=True,
+                )
+                local_distance = np.linalg.norm(
+                    x[ids] - local_mean,
+                    axis=1,
+                )
+
+                if len(anchors):
+                    near = pairwise_distances(
+                        x[ids],
+                        anchors,
+                        metric="euclidean",
+                    ).min(axis=1)
+                    near = np.clip(
+                        near,
+                        0.0,
+                        float(mu),
+                    )
+                else:
+                    near = np.zeros(
+                        len(ids)
+                    )
+
+                objective = (
+                    propagated[ids]
+                    - float(beta)
+                    * local_distance
+                    + float(gamma)
+                    * near
+                )
+
+                refined.append(
+                    int(
+                        ids[
+                            int(
+                                np.argmax(
+                                    objective
+                                )
+                            )
+                        ]
+                    )
+                )
+
+            chosen = (
+                list(dict.fromkeys(refined))
+                or chosen
+            )
+
+        remaining = [
+            index
+            for index in np.argsort(
+                -propagated
+            )
+            if int(index) not in chosen
+        ]
+
+        chosen.extend(
+            int(index)
+            for index in remaining[
+                : max(0, n - len(chosen))
+            ]
+        )
         chosen = chosen[:n]
-        centroid_distance = np.linalg.norm(x - clusterer.cluster_centers_[labels], axis=1)
+
+        centroid_distance = np.linalg.norm(
+            x
+            - clusterer.cluster_centers_[labels],
+            axis=1,
+        )
+
+        # IMPORTANT FOR PARTIAL RANK AGGREGATION:
+        #
+        # PATRON selects/refines one representative per partition, but KMeans
+        # cluster labels (0, 1, 2, ...) are arbitrary. Therefore the order in
+        # which clusters are iterated is NOT a meaningful scientific ranking.
+        #
+        # Once the final batch is known, rank only those selected documents
+        # using the same three ingredients used by the PATRON adaptation:
+        #
+        #   propagated uncertainty
+        #   - beta * local representativeness distance
+        #   + gamma * diversity from the rest of the final batch / previous set
+        #
+        # This DOES NOT change which documents were selected. It only defines
+        # their within-selected order for truncated-Borda consensus.
+        selected_priority = np.full(
+            len(x),
+            np.nan,
+            dtype=np.float64,
+        )
+
+        for index in chosen:
+            cluster = int(labels[index])
+            cluster_ids = np.where(
+                labels == cluster
+            )[0]
+
+            local_mean = x[
+                cluster_ids
+            ].mean(
+                axis=0,
+                keepdims=True,
+            )
+
+            local_distance = float(
+                np.linalg.norm(
+                    x[index]
+                    - local_mean[0]
+                )
+            )
+
+            other_selected = [
+                item
+                for item in chosen
+                if item != index
+            ]
+
+            anchor_parts: list[np.ndarray] = []
+
+            if len(fixed):
+                anchor_parts.append(fixed)
+
+            if other_selected:
+                anchor_parts.append(
+                    x[other_selected]
+                )
+
+            if anchor_parts:
+                anchors = np.vstack(
+                    anchor_parts
+                )
+                near = float(
+                    pairwise_distances(
+                        x[[index]],
+                        anchors,
+                        metric="euclidean",
+                    ).min()
+                )
+                near = min(
+                    near,
+                    float(mu),
+                )
+            else:
+                near = 0.0
+
+            selected_priority[index] = (
+                float(propagated[index])
+                - float(beta)
+                * local_distance
+                + float(gamma)
+                * near
+            )
+
+        chosen = sorted(
+            chosen,
+            key=lambda index: (
+                -float(
+                    selected_priority[index]
+                ),
+                int(index),
+            ),
+        )
 
         return MethodResult(
             chosen,
             scores=propagated,
             extras={
-                "cluster": labels.astype(np.int32),
+                "cluster": labels.astype(
+                    np.int32
+                ),
                 "local_uncertainty": uncertainty,
                 "propagated_uncertainty": propagated,
                 "distance_to_cluster_centroid": centroid_distance,
+                "selected_priority": selected_priority,
             },
             diagnostics={
                 "k_neighbors": k,
@@ -662,7 +1142,13 @@ class PatronSelection(SelectionMethod):
                 "beta": float(beta),
                 "mu": float(mu),
                 "gamma": float(gamma),
-                "refine_rounds": int(refine_rounds),
+                "refine_rounds": int(
+                    refine_rounds
+                ),
+                "selected_rank_semantics": (
+                    "descending final PATRON-style "
+                    "uncertainty/representativeness/diversity priority"
+                ),
             },
         )
 
@@ -711,7 +1197,7 @@ class DeuceSelection(SelectionMethod):
         dual_bonus: float = 0.5,
         propagation_alpha: float = 1.0,
         min_cluster_size: int = 3,
-        **_: Any,
+        **params: Any,
     ) -> MethodResult:
         _validate_budget(n, len(candidate_ids))
         x = _require_representations(representations, len(candidate_ids))
@@ -819,29 +1305,47 @@ METHODS: dict[str, type[SelectionMethod]] = {
 
 METHOD_INFO: dict[str, MethodInfo] = {
     "random": MethodInfo(
-        "random", "baseline", "Seeded random document sampling.",
-        parameters={"random_state": "Random seed shared by the selection run."},
+        "random",
+        "baseline",
+        "Seeded random document sampling.",
+        methodologies=("baseline",),
     ),
     "kmedoids": MethodInfo(
-        "kmedoids", "diversity", "Conditional PAM-style k-medoids over document representations.",
+        "kmedoids",
+        "diversity",
+        "Conditional PAM-style k-medoids over document representations.",
+        methodologies=("geometry",),
         requires_representation=True,
         reference="Kaufman & Rousseeuw, Finding Groups in Data (1990).",
-        parameters={"max_swap_passes": "Maximum PAM-style refinement passes (default: 10)."},
+        parameters={
+            "max_swap_passes": "Maximum PAM-style refinement passes (default: 10).",
+        },
     ),
     "facility-location": MethodInfo(
-        "facility-location", "representativeness", "Greedy conditional facility-location maximisation.",
+        "facility-location",
+        "representativeness",
+        "Greedy conditional facility-location maximisation.",
+        methodologies=("geometry",),
         requires_representation=True,
         reference="Wei, Iyer & Bilmes, ICML 2015.",
     ),
     "kcenter": MethodInfo(
-        "kcenter", "diversity", "Greedy farthest-first core-set selection.",
+        "kcenter",
+        "diversity",
+        "Greedy farthest-first core-set selection.",
+        methodologies=("geometry",),
         requires_representation=True,
         reference="Sener & Savarese, ICLR 2018.",
     ),
     "typiclust": MethodInfo(
-        "typiclust", "representativeness", "Select typical documents from underrepresented clusters.",
+        "typiclust",
+        "representativeness",
+        "Select typical documents from underrepresented clusters.",
+        methodologies=("geometry",),
         requires_representation=True,
-        implementation_note="Document-level adaptation; previous selections contribute cluster occupancy.",
+        implementation_note=(
+            "Document-level adaptation; previous selections contribute cluster occupancy."
+        ),
         reference="Hacohen, Dekel & Weinshall, ICML 2022.",
         parameters={
             "n_clusters": "Number of clusters; defaults to previous selections + requested budget.",
@@ -849,18 +1353,30 @@ METHOD_INFO: dict[str, MethodInfo] = {
         },
     ),
     "alps": MethodInfo(
-        "alps", "cold-start", "Cluster MLM-surprisal representations and sample centroid-near documents.",
+        "alps",
+        "cold-start",
+        "Cluster MLM-surprisal representations and sample centroid-near documents.",
+        methodologies=("surprisal", "geometry"),
         requires_representation=True,
         default_representation="alps",
-        implementation_note="Uses ALPS surprisal embeddings; previous selections affect cluster occupancy.",
+        implementation_note=(
+            "Uses ALPS surprisal embeddings; previous selections affect cluster occupancy."
+        ),
         reference="Yuan, Lin & Boyd-Graber, EMNLP 2020.",
-        parameters={"n_clusters": "Optional number of surprisal-space clusters."},
+        parameters={
+            "n_clusters": "Optional number of surprisal-space clusters.",
+        },
     ),
     "patron": MethodInfo(
-        "patron", "cold-start", "PATRON-style uncertainty propagation, partitioning and refinement.",
+        "patron",
+        "cold-start",
+        "PATRON-style uncertainty propagation, partitioning and refinement.",
+        methodologies=("uncertainty", "geometry"),
         requires_representation=True,
         requires_probabilities=True,
-        implementation_note="Document-level adaptation; probabilities must be supplied explicitly.",
+        implementation_note=(
+            "Document-level adaptation; probabilities must be supplied explicitly."
+        ),
         reference="Yu et al., ACL 2023.",
         parameters={
             "k_neighbors": "Neighbours for uncertainty propagation (default: 50).",
@@ -872,10 +1388,15 @@ METHOD_INFO: dict[str, MethodInfo] = {
         },
     ),
     "deuce": MethodInfo(
-        "deuce", "cold-start", "DEUCE-style dual text/class graph selection.",
+        "deuce",
+        "cold-start",
+        "DEUCE-style dual text/class graph selection.",
+        methodologies=("uncertainty", "geometry"),
         requires_representation=True,
         requires_probabilities=True,
-        implementation_note="Document-level adaptation; probabilities must be supplied explicitly.",
+        implementation_note=(
+            "Document-level adaptation; probabilities must be supplied explicitly."
+        ),
         parameters={
             "k_neighbors": "Neighbours in each graph (default: 10).",
             "dual_bonus": "Extra weight for edges present in both graphs (default: 0.5).",
@@ -884,15 +1405,25 @@ METHOD_INFO: dict[str, MethodInfo] = {
         },
     ),
     "uncertainty": MethodInfo(
-        "uncertainty", "model-based", "Select highest externally supplied document uncertainty.",
+        "uncertainty",
+        "model-based",
+        "Select highest externally supplied document uncertainty.",
+        methodologies=("uncertainty",),
         requires_scores=True,
-        implementation_note="Scores are task-agnostic and supplied as doc_id | score Parquet.",
+        implementation_note=(
+            "Scores are task-agnostic and supplied as doc_id | score Parquet."
+        ),
     ),
     "uncertainty-facility": MethodInfo(
-        "uncertainty-facility", "hybrid", "Uncertainty filtering followed by conditional facility location.",
+        "uncertainty-facility",
+        "hybrid",
+        "Uncertainty filtering followed by conditional facility location.",
+        methodologies=("uncertainty", "geometry"),
         requires_representation=True,
         requires_scores=True,
-        parameters={"candidate_multiplier": "Uncertain candidate-pool size as n × multiplier (default: 5)."},
+        parameters={
+            "candidate_multiplier": "Uncertain candidate-pool size as n × multiplier (default: 5).",
+        },
     ),
 }
 
@@ -900,6 +1431,51 @@ METHOD_INFO: dict[str, MethodInfo] = {
 def list_methods() -> list[MethodInfo]:
     """Return metadata for all registered methods in registry order."""
     return [METHOD_INFO[name] for name in METHODS]
+
+def list_methodologies() -> tuple[str, ...]:
+    """Return every registered methodology tag in stable order."""
+    tags: list[str] = []
+    for info in list_methods():
+        for tag in info.methodologies:
+            if tag not in tags:
+                tags.append(tag)
+    return tuple(tags)
+
+
+def methods_by_methodology(methodology: str) -> tuple[str, ...]:
+    """Return registered method names carrying one methodology tag."""
+    methodology = str(methodology).strip()
+    if not methodology:
+        raise ValueError("methodology must be a non-empty string.")
+    return tuple(
+        info.name
+        for info in list_methods()
+        if methodology in info.methodologies
+    )
+
+
+def group_methods_by_methodology(
+    methods: Sequence[str] | None = None,
+) -> dict[str, tuple[str, ...]]:
+    """Group selected/all methods by methodology without changing their weights."""
+    names = list(METHODS) if methods is None else list(methods)
+
+    unknown = sorted(set(names) - set(METHODS))
+    if unknown:
+        raise ValueError(
+            f"Unknown selection method(s): {unknown}. "
+            f"Available: {', '.join(METHODS)}."
+        )
+
+    grouped: dict[str, list[str]] = {}
+    for name in names:
+        for tag in method_info(name).methodologies:
+            grouped.setdefault(tag, []).append(name)
+
+    return {
+        tag: tuple(values)
+        for tag, values in grouped.items()
+    }
 
 
 def method_info(name: str) -> MethodInfo:

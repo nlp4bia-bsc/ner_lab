@@ -10,13 +10,20 @@ from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+import math
 
 import numpy as np
 import pandas as pd
 
 from lab.core import DOCUMENT_COLUMNS, file_sha256, read_corpus, validate_corpus, write_corpus, write_manifest
 from lab.core.io import DEFAULT_PARQUET_COMPRESSION
-from lab.selection.methods import MethodResult, get_method, method_info
+from lab.selection.methods import (
+    MethodResult,
+    get_method,
+    group_methods_by_methodology,
+    method_info,
+    validate_method_params,
+)
 from lab.selection.representations import RepresentationOutput, get_representation
 
 
@@ -286,6 +293,51 @@ def _validate_method_result(result: MethodResult, n: int, n_candidates: int) -> 
         if len(values) != n_candidates:
             raise ValueError(f"Selection extra column {name!r} must contain one value per candidate.")
 
+def _resolve_multi_method_params(
+    methods: Sequence[str],
+    method_params: Mapping[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    """Resolve METHOD.PARAM values for compare/consensus workflows.
+
+    Multi-method workflows deliberately reject unscoped method parameters.
+    This prevents a parameter intended for one selector from being silently
+    applied to, or ignored by, another selector.
+    """
+    names = list(methods)
+    resolved = {name: {} for name in names}
+
+    if not method_params:
+        return resolved
+
+    for key, value in method_params.items():
+        raw = str(key).strip()
+        if "." not in raw:
+            raise ValueError(
+                "Multi-method workflows require scoped method parameters in "
+                "METHOD.PARAM=VALUE form; received "
+                f"{raw!r}. Example: typiclust.typicality_knn=20."
+            )
+
+        method_name, parameter = raw.split(".", 1)
+        method_name = method_name.strip()
+        parameter = parameter.strip()
+
+        if method_name not in resolved:
+            raise ValueError(
+                f"Method parameter {raw!r} targets {method_name!r}, which is not "
+                f"participating in this workflow. Participating methods: {names}."
+            )
+        if not parameter:
+            raise ValueError(
+                f"Invalid scoped method parameter {raw!r}: parameter name is empty."
+            )
+
+        resolved[method_name][parameter] = value
+
+    return {
+        name: validate_method_params(name, values)
+        for name, values in resolved.items()
+    }
 
 def _ranking_frame(candidate_ids: Sequence[str], method: str, result: MethodResult) -> pd.DataFrame:
     frame = pd.DataFrame({"doc_id": list(candidate_ids)})
@@ -334,6 +386,10 @@ def select_documents(
         )
 
     info = method_info(method)
+    resolved_method_params = validate_method_params(
+        method,
+        method_params,
+    )
     candidate_rep, selected_rep, representation_metadata = _resolve_representations(
         corpus,
         candidate_ids,
@@ -366,7 +422,7 @@ def select_documents(
         scores=scores,
         probabilities=probabilities,
         random_state=random_state,
-        **(method_params or {}),
+        **resolved_method_params,
     )
     _validate_method_result(result, int(n_select), len(candidate_ids))
     selected_doc_ids = [candidate_ids[index] for index in result.selected_indices]
@@ -464,93 +520,113 @@ def selection_history(path: str | Path) -> pd.DataFrame:
 
 
 
-def _consensus_method_ranking(
+def _partial_borda_ranking(
     result: MethodResult,
     n_candidates: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Expand one selector result into a full-pool ranking.
+    n_select: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Represent one selector by its actual Top-N ranking only.
 
-    The selector's actual selected order always occupies ranks 1..N. Remaining
-    candidates are ordered by the selector's document score (descending).
-    This guarantees that consensus respects each method's real batch decision
-    while still giving every method a rank-based vote for every candidate.
+    Rank 1 receives N points, rank 2 receives N-1, ..., rank N receives 1.
+    Unselected candidates receive zero points and no method rank.
+
+    `result.scores` are preserved only as diagnostics; they never affect
+    truncated-Borda consensus.
     """
+    selected = list(
+        map(int, result.selected_indices)
+    )
+
+    if len(selected) != n_select:
+        raise ValueError(
+            f"Expected {n_select} selected indices for rank aggregation; "
+            f"received {len(selected)}."
+        )
+
+    ranks = np.full(
+        n_candidates,
+        np.nan,
+        dtype=np.float64,
+    )
+    rank_points = np.zeros(
+        n_candidates,
+        dtype=np.float64,
+    )
+    votes = np.zeros(
+        n_candidates,
+        dtype=bool,
+    )
+
+    for position, index in enumerate(
+        selected,
+        start=1,
+    ):
+        ranks[index] = float(position)
+        rank_points[index] = float(
+            n_select - position + 1
+        )
+        votes[index] = True
+
+    rank_scores = (
+        rank_points
+        / float(max(n_select, 1))
+    )
+
     if result.scores is None:
-        raise ValueError(
-            "Consensus requires every participating method to return one score "
-            "per candidate document."
+        raw_scores = np.full(
+            n_candidates,
+            np.nan,
+            dtype=np.float64,
         )
+    else:
+        raw_scores = np.asarray(
+            result.scores,
+            dtype=np.float64,
+        ).reshape(-1)
 
-    raw_scores = np.asarray(result.scores, dtype=np.float64).reshape(-1)
-    if len(raw_scores) != n_candidates:
-        raise ValueError(
-            "Consensus requires one method score per candidate document; "
-            f"received {len(raw_scores)} scores for {n_candidates} candidates."
-        )
-    if not np.isfinite(raw_scores).all():
-        raise ValueError(
-            "Consensus requires finite method scores for every candidate document."
-        )
+        if len(raw_scores) != n_candidates:
+            raise ValueError(
+                "Method diagnostic scores must contain one value per candidate "
+                f"when present; received {len(raw_scores)} for {n_candidates}."
+            )
 
-    selected = list(map(int, result.selected_indices))
-    selected_set = set(selected)
-    remaining = np.asarray(
-        [index for index in range(n_candidates) if index not in selected_set],
-        dtype=np.int64,
+    return (
+        raw_scores,
+        ranks,
+        rank_points,
+        rank_scores,
+        votes,
     )
 
-    if len(remaining):
-        ordered_remaining = remaining[
-            np.argsort(-raw_scores[remaining], kind="stable")
-        ].astype(int).tolist()
-    else:
-        ordered_remaining = []
 
-    full_order = selected + ordered_remaining
-    ranks = np.empty(n_candidates, dtype=np.int32)
-    ranks[np.asarray(full_order, dtype=np.int64)] = np.arange(
-        1,
-        n_candidates + 1,
-        dtype=np.int32,
-    )
-
-    if n_candidates == 1:
-        rank_scores = np.ones(1, dtype=np.float64)
-    else:
-        rank_scores = 1.0 - (
-            (ranks.astype(np.float64) - 1.0) / float(n_candidates - 1)
-        )
-
-    votes = np.zeros(n_candidates, dtype=bool)
-    votes[np.asarray(selected, dtype=np.int64)] = True
-
-    return raw_scores, ranks, rank_scores, votes
-
-
-def _consensus_weights(
+def _validate_equal_method_weights(
     methods: Sequence[str],
     method_weights: Mapping[str, float] | None,
 ) -> dict[str, float]:
-    """Validate optional per-method vote weights and fill omitted methods with 1."""
-    weights = {name: 1.0 for name in methods}
+    """Backward-compatible guard: rank aggregation is intentionally unweighted."""
+    equal = {name: 1.0 for name in methods}
+    if not method_weights:
+        return equal
 
-    if method_weights:
-        unknown = sorted(set(method_weights) - set(methods))
-        if unknown:
-            raise ValueError(
-                "Method weights were supplied for methods not participating in "
-                f"the consensus: {unknown}."
-            )
+    unknown = sorted(set(method_weights) - set(methods))
+    if unknown:
+        raise ValueError(
+            "Method weights were supplied for methods not participating in "
+            f"the consensus: {unknown}."
+        )
 
-        for name, value in method_weights.items():
-            weight = float(value)
-            if not np.isfinite(weight) or weight <= 0:
-                raise ValueError(
-                    f"Consensus weight for {name!r} must be a finite value > 0."
-                )
-            weights[name] = weight
-
-    return weights
+    non_unit = {
+        name: float(value)
+        for name, value in method_weights.items()
+        if not np.isclose(float(value), 1.0)
+    }
+    if non_unit:
+        raise ValueError(
+            "Weighted consensus is no longer supported. All participating "
+            "methods contribute equally to partial rank aggregation. "
+            f"Non-unit weights received: {non_unit}."
+        )
+    return equal
 
 
 def consensus_select_documents(
@@ -570,25 +646,41 @@ def consensus_select_documents(
     representation_params: dict[str, Any] | None = None,
     method_weights: Mapping[str, float] | None = None,
 ) -> SelectionRun:
-    """Select exactly N documents by majority voting across several selectors.
+    """Select exactly N documents by equal-weight partial rank aggregation.
 
-    Every method independently selects ``n_select`` documents from the same
-    candidate pool and must also return one score for every candidate.
+    Each participating selector independently returns its actual ordered Top-N
+    batch from the same candidate pool. Consensus ignores method-specific raw
+    scores and aggregates only these selected ranks using truncated Borda points:
 
-    Consensus is determined in two stages:
+        rank 1 -> N points
+        rank 2 -> N-1 points
+        ...
+        rank N -> 1 point
+        unselected -> 0 points
 
-    1. majority vote: a method casts a binary vote for each document it selected;
-    2. rank fusion: ties are resolved with a weighted Borda-style score computed
-       from each method's full candidate ranking.
-
-    Previous selections are excluded from the candidate pool and are also passed
-    to conditional selectors through their representation-aware interfaces.
+    All methods contribute equally. `method_weights` remains in the Python API
+    only for backwards compatibility and rejects any non-unit weight.
     """
     method_names = list(methods)
     if len(method_names) < 2:
-        raise ValueError("consensus_select_documents requires at least two methods.")
+        raise ValueError(
+            "consensus_select_documents requires at least two methods."
+        )
     if len(method_names) != len(set(method_names)):
         raise ValueError("Consensus method names must be unique.")
+
+    # Validate method names early.
+    for name in method_names:
+        method_info(name)
+
+    equal_weights = _validate_equal_method_weights(
+        method_names,
+        method_weights,
+    )
+    params_by_method = _resolve_multi_method_params(
+        method_names,
+        method_params,
+    )
 
     corpus = read_corpus(input_path)
     corpus_ids = corpus["doc_id"].astype(str).tolist()
@@ -612,9 +704,6 @@ def consensus_select_documents(
             "remain after exclusions."
         )
 
-    weights = _consensus_weights(method_names, method_weights)
-    total_weight = float(sum(weights.values()))
-
     scores = (
         _read_scores(scores_path, candidate_ids)
         if scores_path is not None
@@ -627,10 +716,26 @@ def consensus_select_documents(
     )
 
     n_candidates = len(candidate_ids)
+    n_methods = len(method_names)
+
     ranking = pd.DataFrame({"doc_id": candidate_ids})
-    weighted_vote = np.zeros(n_candidates, dtype=np.float64)
-    vote_count = np.zeros(n_candidates, dtype=np.int32)
-    weighted_rank_score = np.zeros(n_candidates, dtype=np.float64)
+    rank_aggregation_points = np.zeros(
+        n_candidates,
+        dtype=np.float64,
+    )
+    vote_count = np.zeros(
+        n_candidates,
+        dtype=np.int32,
+    )
+    selected_rank_sum = np.zeros(
+        n_candidates,
+        dtype=np.float64,
+    )
+    best_selected_rank = np.full(
+        n_candidates,
+        np.inf,
+        dtype=np.float64,
+    )
 
     diagnostics: dict[str, Any] = {}
     representation_metadata: dict[str, Any] = {}
@@ -671,54 +776,115 @@ def consensus_select_documents(
             scores=scores,
             probabilities=probabilities,
             random_state=random_state,
-            **(method_params or {}),
+            **params_by_method[name],
         )
-        _validate_method_result(result, int(n_select), n_candidates)
-
-        raw, ranks, rank_scores, votes = _consensus_method_ranking(
+        _validate_method_result(
             result,
+            int(n_select),
             n_candidates,
         )
 
-        weight = weights[name]
-        weighted_vote += weight * votes.astype(np.float64)
+        raw, ranks, points, rank_scores, votes = _partial_borda_ranking(
+            result,
+            n_candidates,
+            int(n_select),
+        )
+
+        rank_aggregation_points += points
         vote_count += votes.astype(np.int32)
-        weighted_rank_score += weight * rank_scores
+        selected_rank_sum += np.nan_to_num(
+            ranks,
+            nan=0.0,
+        )
+        best_selected_rank = np.minimum(
+            best_selected_rank,
+            np.where(votes, ranks, np.inf),
+        )
 
         prefix = name.replace("-", "_")
         ranking[f"{prefix}__vote"] = votes
         ranking[f"{prefix}__score"] = raw
-        ranking[f"{prefix}__rank"] = ranks
+        ranking[f"{prefix}__rank"] = pd.array(
+            [
+                int(value) if np.isfinite(value) else pd.NA
+                for value in ranks
+            ],
+            dtype="Int64",
+        )
+        ranking[f"{prefix}__rank_points"] = points
+        # Backwards-compatible name, now meaning truncated Borda points / N.
         ranking[f"{prefix}__rank_score"] = rank_scores
 
         diagnostics[name] = result.diagnostics
 
-    consensus_score = weighted_rank_score / total_weight
-    vote_fraction = weighted_vote / total_weight
-    majority_threshold = total_weight / 2.0
-    has_majority = weighted_vote > majority_threshold
+    mean_selected_rank = np.divide(
+        selected_rank_sum,
+        vote_count,
+        out=np.full(n_candidates, np.nan, dtype=np.float64),
+        where=vote_count > 0,
+    )
+    best_selected_rank[
+        ~np.isfinite(best_selected_rank)
+    ] = np.nan
 
+    max_possible_points = float(
+        n_methods * int(n_select)
+    )
+    consensus_score = (
+        rank_aggregation_points / max_possible_points
+        if max_possible_points > 0
+        else np.zeros(n_candidates, dtype=np.float64)
+    )
+
+    vote_fraction = (
+        vote_count.astype(np.float64) / float(n_methods)
+    )
+    majority_threshold = n_methods / 2.0
+    has_majority = vote_count > majority_threshold
+
+    ranking["rank_aggregation_points"] = rank_aggregation_points
     ranking["vote_count"] = vote_count
-    ranking["weighted_vote"] = weighted_vote
+
+    # Backwards-compatible equal-weight diagnostic aliases.
+    ranking["weighted_vote"] = vote_count.astype(np.float64)
     ranking["vote_fraction"] = vote_fraction
     ranking["consensus_score"] = consensus_score
     ranking["has_majority"] = has_majority
 
+    ranking["mean_selected_rank"] = mean_selected_rank
+    ranking["best_selected_rank"] = best_selected_rank
+
     order = sorted(
         range(n_candidates),
         key=lambda index: (
-            -float(weighted_vote[index]),
+            -float(rank_aggregation_points[index]),
             -int(vote_count[index]),
-            -float(consensus_score[index]),
+            (
+                float(mean_selected_rank[index])
+                if np.isfinite(mean_selected_rank[index])
+                else math.inf
+            ),
+            (
+                float(best_selected_rank[index])
+                if np.isfinite(best_selected_rank[index])
+                else math.inf
+            ),
             str(candidate_ids[index]),
         ),
     )
+
     selected_indices = order[: int(n_select)]
-    selected_doc_ids = [candidate_ids[index] for index in selected_indices]
+    selected_doc_ids = [
+        candidate_ids[index]
+        for index in selected_indices
+    ]
 
     if round_number is None:
         numeric_round = pd.to_numeric(
-            previous_history.get("round", pd.Series(dtype=float)),
+            previous_history.get(
+                "round",
+                pd.Series(dtype=float),
+            ),
             errors="coerce",
         )
         maximum = (
@@ -726,9 +892,16 @@ def consensus_select_documents(
             if not numeric_round.dropna().empty
             else 0
         )
-        round_number = maximum + 1 if previous_ids else 1
+        round_number = (
+            maximum + 1
+            if previous_ids
+            else 1
+        )
+
     if round_number <= 0:
-        raise ValueError("round_number must be greater than zero.")
+        raise ValueError(
+            "round_number must be greater than zero."
+        )
 
     ranking.insert(1, "round", int(round_number))
     ranking.insert(2, "method", "consensus")
@@ -736,11 +909,17 @@ def consensus_select_documents(
     ranking.insert(
         4,
         "rank",
-        pd.Series([pd.NA] * len(ranking), dtype="Int64"),
+        pd.Series(
+            [pd.NA] * len(ranking),
+            dtype="Int64",
+        ),
     )
     ranking.insert(5, "score", consensus_score)
 
-    for rank, index in enumerate(selected_indices, start=1):
+    for rank, index in enumerate(
+        selected_indices,
+        start=1,
+    ):
         ranking.at[int(index), "selected"] = True
         ranking.at[int(index), "rank"] = rank
 
@@ -748,17 +927,29 @@ def consensus_select_documents(
         [
             "selected",
             "rank",
-            "weighted_vote",
+            "rank_aggregation_points",
             "vote_count",
-            "consensus_score",
+            "mean_selected_rank",
+            "best_selected_rank",
             "doc_id",
         ],
-        ascending=[False, True, False, False, False, True],
+        ascending=[
+            False,
+            True,
+            False,
+            False,
+            True,
+            True,
+            True,
+        ],
         na_position="last",
     ).reset_index(drop=True)
 
     output_root = Path(output_dir)
-    output_root.mkdir(parents=True, exist_ok=True)
+    output_root.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     selected_path = output_root / "selected.parquet"
     ranking_path = output_root / "ranking.parquet"
@@ -773,8 +964,15 @@ def consensus_select_documents(
         selected_doc_ids,
         DOCUMENT_COLUMNS,
     ].reset_index(drop=True)
-    write_corpus(selected_corpus, selected_path)
-    _write_parquet(ranking, ranking_path)
+
+    write_corpus(
+        selected_corpus,
+        selected_path,
+    )
+    _write_parquet(
+        ranking,
+        ranking_path,
+    )
 
     score_lookup = dict(
         zip(
@@ -787,7 +985,10 @@ def consensus_select_documents(
             "doc_id": selected_doc_ids,
             "round": int(round_number),
             "method": "consensus",
-            "rank": range(1, len(selected_doc_ids) + 1),
+            "rank": range(
+                1,
+                len(selected_doc_ids) + 1,
+            ),
             "score": [
                 score_lookup.get(doc_id, np.nan)
                 for doc_id in selected_doc_ids
@@ -804,24 +1005,53 @@ def consensus_select_documents(
         "doc_id",
         keep="first",
     ).reset_index(drop=True)
-    _write_parquet(history, history_path)
 
-    selected_ranking = ranking.loc[ranking["selected"]]
+    _write_parquet(
+        history,
+        history_path,
+    )
+
+    selected_ranking = ranking.loc[
+        ranking["selected"]
+    ]
+    methodology_groups = group_methods_by_methodology(
+        method_names
+    )
+
     manifest: dict[str, Any] = {
         "artifact": "document_selection_consensus",
         "input_path": str(input_path),
         "input_sha256": file_sha256(input_path),
         "methods": method_names,
-        "method_weights": weights,
+        "method_weights": equal_weights,
+        "method_methodologies": {
+            name: list(method_info(name).methodologies)
+            for name in method_names
+        },
+        "methodology_groups": {
+            name: list(values)
+            for name, values in methodology_groups.items()
+        },
         "consensus_rule": (
-            "weighted majority vote over each method's selected batch; "
-            "weighted full-ranking Borda score breaks ties"
+            "equal-weight truncated Borda partial rank aggregation over "
+            "each selector's actual ordered Top-N batch; unselected "
+            "candidates receive zero points; method raw scores are "
+            "diagnostic only and never affect consensus"
         ),
+        "consensus_reference": (
+            "Borda count / rank aggregation; de Borda (1781). "
+            "Modern rank-aggregation framing: Dwork et al. (2001), "
+            "Rank aggregation methods for the Web."
+        ),
+        "raw_method_scores_used_for_consensus": False,
+        "strict_majority_method_threshold": majority_threshold,
+        # Legacy manifest key retained for readers expecting it.
         "strict_majority_weight_threshold": majority_threshold,
         "n_selected_with_strict_majority": int(
             selected_ranking["has_majority"].sum()
         ),
         "method_params": method_params or {},
+        "resolved_method_params": params_by_method,
         "representation": representation,
         "representations_path": (
             str(representations_path)
@@ -847,7 +1077,9 @@ def consensus_select_documents(
         "n_candidates": int(n_candidates),
         "n_requested": int(n_select),
         "n_selected": int(len(selected_doc_ids)),
-        "n_remaining_after": int(n_candidates - len(selected_doc_ids)),
+        "n_remaining_after": int(
+            n_candidates - len(selected_doc_ids)
+        ),
         "previous_selection_sources": previous_provenance,
         "method_diagnostics": diagnostics,
         "outputs": {
@@ -856,7 +1088,11 @@ def consensus_select_documents(
             "history": str(history_path),
         },
     }
-    write_manifest(manifest, manifest_path)
+
+    write_manifest(
+        manifest,
+        manifest_path,
+    )
 
     return SelectionRun(
         output_root,
@@ -884,12 +1120,34 @@ def compare_methods(
     representation_params: dict[str, Any] | None = None,
 ) -> Path:
     """Run several methods on the same corpus and write pairwise selection overlap."""
-    if len(methods) < 2:
-        raise ValueError("compare_methods requires at least two methods.")
+    method_names = list(methods)
+
+    if len(method_names) < 2:
+        raise ValueError(
+            "compare_methods requires at least two methods."
+        )
+    if len(method_names) != len(set(method_names)):
+        raise ValueError(
+            "compare_methods method names must be unique."
+        )
+
+    for name in method_names:
+        method_info(name)
+
+    params_by_method = _resolve_multi_method_params(
+        method_names,
+        method_params,
+    )
+
     root = Path(output_dir)
-    root.mkdir(parents=True, exist_ok=True)
+    root.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
     selections: dict[str, set[str]] = {}
-    for name in methods:
+
+    for name in method_names:
         run = select_documents(
             input_path,
             root / name,
@@ -901,37 +1159,69 @@ def compare_methods(
             scores_path=scores_path,
             probabilities_path=probabilities_path,
             random_state=random_state,
-            method_params=method_params,
+            method_params=params_by_method[name],
             representation_params=representation_params,
         )
-        selections[name] = set(run.selected_doc_ids)
+        selections[name] = set(
+            run.selected_doc_ids
+        )
 
     rows: list[dict[str, Any]] = []
-    for left in methods:
-        for right in methods:
-            intersection = selections[left] & selections[right]
-            union = selections[left] | selections[right]
+    for left in method_names:
+        for right in method_names:
+            intersection = (
+                selections[left]
+                & selections[right]
+            )
+            union = (
+                selections[left]
+                | selections[right]
+            )
             rows.append(
                 {
                     "method_a": left,
                     "method_b": right,
                     "intersection": len(intersection),
                     "union": len(union),
-                    "jaccard": len(intersection) / len(union) if union else 1.0,
+                    "jaccard": (
+                        len(intersection) / len(union)
+                        if union
+                        else 1.0
+                    ),
                 }
             )
+
     output = root / "overlap.parquet"
-    _write_parquet(pd.DataFrame(rows), output)
+    _write_parquet(
+        pd.DataFrame(rows),
+        output,
+    )
+
+    methodology_groups = group_methods_by_methodology(
+        method_names
+    )
+
     write_manifest(
         {
             "artifact": "selection_method_comparison",
             "input_path": str(input_path),
             "input_sha256": file_sha256(input_path),
-            "methods": list(methods),
+            "methods": method_names,
+            "method_methodologies": {
+                name: list(method_info(name).methodologies)
+                for name in method_names
+            },
+            "methodology_groups": {
+                name: list(values)
+                for name, values in methodology_groups.items()
+            },
+            "method_params": method_params or {},
+            "resolved_method_params": params_by_method,
             "n_select": int(n_select),
             "random_state": int(random_state),
             "overlap_path": str(output),
         },
         root / "manifest.json",
     )
+
     return output
