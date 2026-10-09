@@ -8,13 +8,15 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pandas as pd
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 from _harness import Checks, run
 from fixtures import samples_root, synthetic_corpus
 
 from lab.core import build_corpus, write_corpus
-from lab.ner.encoding import Encoder, build_window
+from lab.ner.encoding import IGNORE_INDEX, Encoder, build_window
 
 NER_API_ENV = "NER_API_ROOT"
 DEFAULT_NER_API = Path.home() / "bsc" / "NER-API"
@@ -243,6 +245,15 @@ def reports_untrimmed_offsets(tokenizer) -> bool:
     return any(end > start and text[start].isspace() for start, end in offsets)
 
 
+def labels_agree_where_both_label(actual: pd.Series, expected: pd.Series) -> bool:
+    for actual_row, expected_row in zip(actual, expected, strict=True):
+        for mine, theirs in zip(list(actual_row), list(expected_row), strict=True):
+            if IGNORE_INDEX not in (mine, theirs) and mine != theirs:
+                return False
+
+    return True
+
+
 def verify_against_ner_api(checks: Checks, tokenizers: dict, workspace: Path) -> None:
     ner_api = Path(os.environ.get(NER_API_ENV, DEFAULT_NER_API))
     samples = samples_root()
@@ -313,10 +324,16 @@ def verify_against_ner_api(checks: Checks, tokenizers: dict, workspace: Path) ->
                 continue
 
             checks.equal(f"{label}: columns", sorted(actual.columns), sorted(expected.columns))
+
+            shared = sorted(set(actual.columns) - {"labels", "word_ids"})
             checks.frames_equal(
-                f"{label}: rows identical",
-                actual[sorted(actual.columns)].reset_index(drop=True),
-                expected[sorted(expected.columns)].reset_index(drop=True),
+                f"{label}: rows identical but for the UAX #29 word labels (D114)",
+                actual[shared].reset_index(drop=True),
+                expected[shared].reset_index(drop=True),
+            )
+            checks.check(
+                f"{label}: labels agree wherever both label a position",
+                labels_agree_where_both_label(actual["labels"], expected["labels"]),
             )
             checks.frames_equal(
                 f"{label}: encode_parquet agrees too",

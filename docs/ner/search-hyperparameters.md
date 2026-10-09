@@ -38,11 +38,11 @@ sweep.trials                     # DataFrame, one row per trial
 | `search_space` | `None` | Overrides applied to `lab.ner.hpo.DEFAULT_SEARCH_SPACE` — see below. |
 | `training_arguments` | `None` | A `TrainingArguments` or a mapping of overrides, as in `train_model`. Defaults add a 40-epoch cap and no checkpointing. Its `metric_for_best_model` is the sweep objective. |
 | `n_trials` | `40` | Configurations sampled by Optuna. |
-| `seeds_per_trial` | `5` | Trainings per trial; the score averages across them. |
+| `seeds_per_trial` | `3` | Trainings per trial; the score averages across them. |
 | `top_k_epochs` | `3` | Epochs averaged per seed. |
 | `strategies` | `("greedy",)` | Window strategies searched, as one dimension with the base models. |
 | `context_tokens` | `None` | Context sizes searched. Required with, and only with, the context strategy. |
-| `max_lengths` | `(256,)` | Token budgets searched. |
+| `max_lengths` | `(256,)` | Token budgets searched. Before Ray starts, each base model runs one CPU forward pass at each length and prints `[check] <model>: a forward pass at max_length=N passed`; a length past the model's positions raises naming it (D115). |
 | `overlap_policy` | `"merge_same_label_then_keep_longest"` | As in `train_model`. |
 | `min_sentence_tokens` | `4` | As in `train_model`. |
 | `min_overlap_percentage` | `40.0` | As in `train_model`. |
@@ -126,7 +126,7 @@ base_models:
 target_label: DISEASE
 language: es
 n_trials: 40
-seeds_per_trial: 5
+seeds_per_trial: 3
 training_arguments:
   per_device_eval_batch_size: 32
 ```

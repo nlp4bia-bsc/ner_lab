@@ -91,6 +91,14 @@ Methods:
 Attributes: `label2id`, `id2label`, `vocabulary`, `max_content_length`, plus every constructor
 argument.
 
+**Words.** Only a word's first subword carries a label; its other subwords, and any token that
+is whitespace throughout (SentencePiece's bare `▁`, a byte-level token for a repeated space),
+get `-100`. A word is a Unicode UAX #29 word, as ICU's word break iterator defines it, never
+the tokenizer's own pre-tokenization, so every model is labelled on the same words: each
+punctuation character is a word, `12.5` and `can't` are one, and so is `Ιστορικό:ΧΚΜ` — an
+entity written straight after a colon cannot be labelled. `lab.core.split_into_words(text)`
+returns them.
+
 **Overlap policies.** Entities are stored in the corpus as annotated; resolving them is a
 modelling choice made here, so several policies can be compared without regenerating the
 corpus.

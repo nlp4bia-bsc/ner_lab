@@ -56,9 +56,10 @@ def build_row(
     """
     Turn one labelled token window into a model-ready row.
 
-    Only a word's first subword carries its label id; continuation subwords, the
-    special tokens, and any token with no `label` key (the context strategy's
-    unlabelled flanks) get `IGNORE_INDEX`, so loss is never computed on them.
+    Only a word's first subword carries its label id; continuation subwords,
+    whitespace tokens that belong to no word, the special tokens, and any token with no
+    `label` key (the context strategy's unlabelled flanks) get `IGNORE_INDEX`, so loss
+    is never computed on them.
 
     `word_ids` rides alongside `token_offsets` so span reconstruction at evaluation
     time can grow a labelled position back out to its whole word — without it a
@@ -68,10 +69,10 @@ def build_row(
     previous_word_id = None
 
     for token in labelled_tokens:
-        is_continuation = token["word_id"] is not None and token["word_id"] == previous_word_id
+        is_continuation = token["word_id"] == previous_word_id
         previous_word_id = token["word_id"]
 
-        if "label" not in token or is_continuation:
+        if "label" not in token or token["word_id"] is None or is_continuation:
             label_ids.append(IGNORE_INDEX)
         else:
             label_ids.append(label2id[token["label"]])

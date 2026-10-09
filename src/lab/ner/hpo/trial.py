@@ -129,7 +129,7 @@ def run_trial(
     architecture: str | Architecture = "linear",
     architecture_kwargs: dict[str, Any] | None = None,
     max_micro_batch_size: int = 64,
-    seeds_per_trial: int = 5,
+    seeds_per_trial: int = 3,
     top_k_epochs: int = 3,
     min_overlap_percentage: float = 40.0,
     early_stopping_patience: int | None = 5,

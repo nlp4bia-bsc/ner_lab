@@ -16,6 +16,7 @@ dependencies = [
     "pyyaml>=6.0",
     "pysbd>=0.3.4",
     "nervaluate>=0.2.0",
+    "regex",  # UAX #29 word boundaries; transformers already requires it
     "transformers",  # tokenizers only; does not pull torch
 ]
 

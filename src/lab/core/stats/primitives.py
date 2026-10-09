@@ -1,4 +1,4 @@
-"""What both stats tables share: the tokenizer, word runs, MATTR, quantiles, and writing a table."""
+"""What both stats tables share: the tokenizer, words, MATTR, quantiles, and writing a table."""
 
 from __future__ import annotations
 
@@ -11,16 +11,18 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+import regex
 
 from lab.core.io import DEFAULT_PARQUET_COMPRESSION
 from lab.core.labels import LABEL_ALIASES, normalize_entity_labels
+from lab.core.segmentation import split_into_words
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
 DEFAULT_MATTR_WINDOW = 100
 
-WORD = re.compile(r"\w+", re.UNICODE)
+LETTER_OR_DIGIT = regex.compile(r"[\p{L}\p{N}]")
 WHITESPACE = re.compile(r"\s+")
 
 
@@ -58,8 +60,17 @@ def load_tokenizer(base_model: str) -> PreTrainedTokenizerBase:
 
 
 def words_of(text: str) -> list[str]:
-    """Lowercased Unicode word runs, punctuation excluded."""
-    return WORD.findall(text.lower())
+    """
+    The lowercased `split_into_words` words of `text` that hold a letter or a digit.
+
+    The same UAX #29 words the encoder labels by; a word of punctuation alone is left
+    out, as ICU's word break iterator marks it as no word.
+    """
+    return [
+        word["text"].lower()
+        for word in split_into_words(text)
+        if LETTER_OR_DIGIT.search(word["text"])
+    ]
 
 
 def entities_of(raw: object, normalize_labels: bool = False) -> list[dict]:

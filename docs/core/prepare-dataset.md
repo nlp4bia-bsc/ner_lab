@@ -230,6 +230,10 @@ nothing pre-loaded needs to be passed in. `language` drives sentence segmentatio
 required on `compute_text_stats` for the same reason it is required on `Encoder` — a corpus
 carries one language, recorded in `source_manifest.json`, never per document.
 
+Words, for `words`, `vocabulary_words` and `mattr_words`, are the Unicode UAX #29 words of
+`lab.core.split_into_words` that hold a letter or a digit, lowercased — the words the encoder
+labels by. Tokens are the `base_model` tokenizer's subwords.
+
 Pass `output_dir` to either to also write it as `text_stats.{json,parquet}` /
 `annotation_stats.{json,parquet}` there, via the public `lab.core.write_stats`:
 

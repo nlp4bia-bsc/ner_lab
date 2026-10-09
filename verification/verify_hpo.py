@@ -432,6 +432,19 @@ def verify_end_to_end(checks: Checks) -> None:
     base_model = tiny_base_model(root, AutoTokenizer.from_pretrained("bert-base-uncased"))
     split_dir = prepare_split(root / "data", kfolds=None)
 
+    checks.raises(
+        "a max_length past the model's positions raises before Ray starts",
+        ValueError,
+        search_hyperparameters,
+        split_dir=split_dir,
+        output_dir=root / "sweeps" / "too_long",
+        base_models=str(base_model),
+        target_label="DISEASE",
+        language="es",
+        max_lengths=[64, 600],
+        match="max_length=600",
+    )
+
     result = search_hyperparameters(
         split_dir=split_dir,
         output_dir=root / "sweeps" / "mini_sweep",

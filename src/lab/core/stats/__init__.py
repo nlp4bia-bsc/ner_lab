@@ -16,9 +16,10 @@ The units:
 tokens     Subwords, via `lab.core.tokenize_document` -- the counts the encoding stage
            actually sees.
 sentences  pysbd, via `lab.core.split_into_sentences` -- the same segmenter `Encoder` uses.
-words      Unicode `\\w+` runs, lowercased. Used only for vocabulary and MATTR, where
-           subword types would measure the tokenizer rather than the corpus. Both word-
-           and subword-level figures are reported.
+words      Unicode UAX #29 words holding a letter or a digit, lowercased, via
+           `lab.core.split_into_words` -- the words the encoding stage labels by. Used for
+           vocabulary and MATTR, where subword types would measure the tokenizer rather
+           than the corpus. Both word- and subword-level figures are reported.
 """
 
 from __future__ import annotations

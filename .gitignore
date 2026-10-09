@@ -38,7 +38,7 @@ ENV/
 
 # example files from library output
 examples/
-
+bug_stuff/
 
 # Personal notes (not tracked)
 IDEAS.md

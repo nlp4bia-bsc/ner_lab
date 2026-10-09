@@ -33,7 +33,7 @@ assessment.run_dir                         # where everything was written
 | `architecture` | `"linear"` | `"linear"`, `"crf"`, or your own `(base_model, label2id, id2label, **kwargs) -> model`. |
 | `architecture_kwargs` | `None` | Extra keywords for the chosen architecture, e.g. `{"dropout": 0.2}`. |
 | `training_arguments` | `None` | A `TrainingArguments`, or a mapping of overrides applied to `lab.ner.training.DEFAULTS`. The YAML path uses the mapping. |
-| `max_length` | `256` | Token budget per window, including special tokens. |
+| `max_length` | `256` | Token budget per window, including special tokens. Each fold's model runs one CPU forward pass at it before training and prints `[check] <model>: a forward pass at max_length=N passed`; a length past the model's positions raises naming it (D115). |
 | `strategy` | `"greedy"` | Window strategy, or your own callable. |
 | `context_tokens` | `None` | Flanking context per window. Only valid with `strategy="context"`. |
 | `overlap_policy` | `"merge_same_label_then_keep_longest"` | How overlapping gold spans are resolved at encoding time. |

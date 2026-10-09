@@ -17,6 +17,7 @@ from lab.core.split import split_paths
 from lab.ner.encoding.encoder import Encoder, WindowStrategy, describe_encoder, encode_partition
 from lab.ner.encoding.overlaps import OverlapPolicy
 from lab.ner.evaluation.metrics import build_compute_metrics
+from lab.ner.models.capacity import check_max_length
 from lab.ner.models.registry import Architecture, architecture_name, build_model
 from lab.ner.training.arguments import training_arguments as build_training_arguments
 from lab.ner.training.devices import (
@@ -108,6 +109,10 @@ def train_model(
     carries an `encoding.json` beside its weights, which is what
     `lab.ner.inference` loads. Each fold gets a freshly built model, and the
     previous fold's is released before the next one is built.
+
+    Each fold's model runs one forward pass on CPU at `max_length` before training, and
+    prints a line when it passes, so a window longer than the model's positions raises
+    naming the length rather than as a CUDA device-side assert in the first step.
 
     `devices` defaults to `1`, which pins the run to one GPU however many the
     process can see. Left to itself `Trainer` would train at
@@ -319,6 +324,7 @@ def _train_fold(
         architecture=architecture,
         **(architecture_kwargs or {}),
     )
+    check_max_length(model, encoder.tokenizer, encoder.max_length, base_model)
 
     return train(
         model=model,

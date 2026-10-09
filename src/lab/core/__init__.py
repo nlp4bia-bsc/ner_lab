@@ -58,6 +58,7 @@ from lab.core.segmentation import (
     merge_short_sentences,
     sentence_token_ranges,
     split_into_sentences,
+    split_into_words,
     tokenize_document,
 )
 from lab.core.sources import (
@@ -149,6 +150,7 @@ __all__ = [
     "split_descriptor",
     "split_documents",
     "split_into_sentences",
+    "split_into_words",
     "split_paths",
     "tokenize_document",
     "validate_assignments",

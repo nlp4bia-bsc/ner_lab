@@ -15,8 +15,10 @@ from lab.core import (
     merge_short_sentences,
     sentence_token_ranges,
     split_into_sentences,
+    split_into_words,
     tokenize_document,
 )
+from lab.core.stats import words_of
 from lab.ner.encoding import (
     IGNORE_INDEX,
     build_iob2_labels,
@@ -273,6 +275,91 @@ def verify_offset_trimming(checks: Checks, tokenizers: dict) -> None:
     )
 
 
+def sentencepiece_like_tokenizer():
+    """A Unigram + Metaspace tokenizer that, like mdeberta's, emits a bare `▁` before `ΑΥ`."""
+    from tokenizers import Tokenizer, decoders, models, pre_tokenizers
+    from transformers import PreTrainedTokenizerFast
+
+    vocab = [
+        ("<unk>", 0.0), ("▁", -2.0), ("ΑΥ", -3.0), ("▁και", -1.0),
+        ("(", -3.0), (")", -3.0), ("▁π", -2.0), ("νευμονία", -3.0),
+    ]
+    backend = Tokenizer(models.Unigram(vocab, unk_id=0))
+    backend.pre_tokenizer = pre_tokenizers.Metaspace(replacement="▁", prepend_scheme="always")
+    backend.decoder = decoders.Metaspace()
+
+    return PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
+
+
+def verify_words(checks: Checks, tokenizers: dict) -> None:
+    text = "δυσπνοια-ορθοπνοια, (ΑΥ) 12.5 mg can't Ιστορικό:ΧΚΜ\n\nΣΝ: 3:4"
+    words = split_into_words(text)
+
+    checks.equal(
+        "words follow UAX #29, untailored",
+        [word["text"] for word in words],
+        [
+            "δυσπνοια", "-", "ορθοπνοια", ",", "(", "ΑΥ", ")", "12.5", "mg", "can't",
+            "Ιστορικό:ΧΚΜ", "ΣΝ", ":", "3", ":", "4",
+        ],
+    )
+    checks.check(
+        "word offsets round-trip",
+        all(text[word["start"]:word["end"]] == word["text"] for word in words),
+    )
+    checks.equal(
+        "words and whitespace tile the text",
+        "".join(word["text"] for word in words),
+        "".join(text.split()),
+    )
+    checks.equal("an empty text has no words", split_into_words(""), [])
+    checks.equal(
+        "statistics count the words that hold a letter or digit",
+        words_of("Can't stop: 12.5 mg, ΑΥ!"),
+        ["can't", "stop", "12.5", "mg", "αυ"],
+    )
+
+    bert_tokens = tokenize_document("12.5 mg", tokenizers["bert"])
+    checks.equal(
+        "subwords of one UAX #29 word share its id, whatever the tokenizer splits",
+        [token["word_id"] for token in bert_tokens],
+        [0, 0, 0, 1],
+    )
+
+    gpt2_tokens = tokenize_document("dolor  agudo", tokenizers["gpt2"])
+    checks.equal(
+        "a token that is whitespace throughout belongs to no word",
+        [(token["token"], token["word_id"]) for token in gpt2_tokens],
+        [("d", 0), ("olor", 0), ("Ġ", None), ("Ġag", 1), ("udo", 1)],
+    )
+
+    tokenizer = sentencepiece_like_tokenizer()
+    piece_text = "και ΑΥ (ΑΥ) πνευμονία"
+    entities = [
+        {"start": 4, "end": 6, "label": "DISEASE", "text": "ΑΥ"},
+        {"start": 8, "end": 10, "label": "DISEASE", "text": "ΑΥ"},
+        {"start": 12, "end": 21, "label": "DISEASE", "text": "πνευμονία"},
+    ]
+    tokens = tokenize_document(piece_text, tokenizer)
+    labelled = build_iob2_labels(tokens, entities, "DISEASE")
+    vocabulary = build_label_vocabulary("DISEASE")
+    row = build_row(labelled, vocabulary["label2id"], [], [])
+    id2label = vocabulary["id2label"]
+
+    checks.equal(
+        "a bare ▁ is no word, so the entity after it keeps its label",
+        [
+            (token["token"], "IGNORED" if label == IGNORE_INDEX else id2label[label])
+            for token, label in zip(tokens, row["labels"])
+        ],
+        [
+            ("▁και", "O"), ("▁", "IGNORED"), ("ΑΥ", "B-DISEASE"), ("▁", "IGNORED"),
+            ("(", "O"), ("ΑΥ", "B-DISEASE"), (")", "O"), ("▁π", "B-DISEASE"),
+            ("νευμονία", "IGNORED"),
+        ],
+    )
+
+
 def verify_windowing(checks: Checks, tokenizer) -> None:
     sentences = split_into_sentences(TEXT, "es")
     tokens = tokenize_document(TEXT, tokenizer)
@@ -483,6 +570,7 @@ def main() -> int:
     verify_overlaps(checks)
     verify_segmentation(checks, tokenizers["bert"])
     verify_offset_trimming(checks, tokenizers)
+    verify_words(checks, tokenizers)
     verify_windowing(checks, tokenizers["bert"])
     verify_tagging(checks, tokenizers["bert"])
     verify_rows(checks, tokenizers)

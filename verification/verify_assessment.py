@@ -279,6 +279,21 @@ def verify_end_to_end(checks: Checks) -> None:
     arguments = {"num_train_epochs": 1, "per_device_train_batch_size": 4, "fp16": False}
 
     kfold_split = prepare_split(root / "kfold", kfolds=3)
+
+    checks.raises(
+        "a max_length past the model's positions raises before training",
+        ValueError,
+        train_model,
+        split_dir=kfold_split,
+        output_dir=root / "runs" / "too_long",
+        base_model=str(base_model),
+        target_label="DISEASE",
+        language="es",
+        training_arguments=arguments,
+        max_length=600,
+        match="max_length=600",
+    )
+
     kfold = train_model(
         split_dir=kfold_split,
         output_dir=root / "runs" / "kfold_run",

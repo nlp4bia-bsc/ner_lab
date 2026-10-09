@@ -25,9 +25,9 @@ seconds; that one starts a local Ray instance for its mini-sweep and adds a minu
 |---|---|
 | `verify_layering.py` | the one-way import rule: `core` imports no task subpackage, task subpackages never import each other, `core` and the CLI import no torch |
 | `verify_data.py` | labels, BRAT reading, the canonical schema, stratification, splitting, `prepare_dataset` |
-| `verify_encoding.py` | overlap policies, segmentation, windowing, IOB2 tagging, row assembly |
+| `verify_encoding.py` | overlap policies, segmentation, UAX #29 words, windowing, IOB2 tagging, row assembly |
 | `verify_encoder.py` | `Encoder` construction and encoding, custom strategies, NER-API equivalence |
-| `verify_models.py` | BIO constraint masks, the architecture registry, custom factories |
+| `verify_models.py` | BIO constraint masks, the architecture registry, custom factories, the `max_length` forward-pass check |
 | `verify_training.py` | row conversion, `training_arguments`, and linear + CRF training end to end |
 | `verify_evaluation.py` | span reconstruction, nervaluate scoring, character metrics, token metrics |
 | `verify_assessment.py` | `train_model`: fold rotation, both split modes, manifests, aggregation |

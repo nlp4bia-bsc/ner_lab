@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -116,11 +119,96 @@ def verify_registry(checks: Checks) -> None:
     checks.equal("id2label is normalized before the factory sees it", normalized[1], {0: "O"})
 
 
+def verify_capacity(checks: Checks) -> None:
+    try:
+        import torch  # noqa: F401
+    except ImportError:
+        checks.skip("max_length check", "torch is not installed in this environment")
+        return
+
+    from fixtures import tiny_base_model
+    from transformers import (
+        AutoTokenizer,
+        BertConfig,
+        BertForTokenClassification,
+        RobertaConfig,
+        RobertaForTokenClassification,
+    )
+
+    from lab.ner.models import build_model, check_max_length
+
+    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    sizes = {"hidden_size": 32, "num_hidden_layers": 1, "num_attention_heads": 2,
+             "intermediate_size": 64, "vocab_size": tokenizer.vocab_size, "num_labels": 3}
+
+    bert = BertForTokenClassification(BertConfig(max_position_embeddings=64, **sizes))
+    bert.train()
+    printed = io.StringIO()
+
+    with contextlib.redirect_stdout(printed):
+        check_max_length(bert, tokenizer, 64, "tiny-bert")
+
+    checks.check("a length the model takes passes and says so", "[check] tiny-bert" in printed.getvalue())
+    checks.check("the model's training mode is restored", bert.training)
+
+    silent = io.StringIO()
+
+    with contextlib.redirect_stdout(silent):
+        check_max_length(bert, tokenizer, 64, "tiny-bert", report=False)
+
+    checks.equal("report=False prints nothing", silent.getvalue(), "")
+    checks.raises(
+        "one token past the position table raises, naming the length",
+        ValueError,
+        check_max_length,
+        bert,
+        tokenizer,
+        65,
+        "tiny-bert",
+        match="max_length=65",
+    )
+
+    roberta = RobertaForTokenClassification(
+        RobertaConfig(max_position_embeddings=66, pad_token_id=1, **sizes)
+    )
+
+    printed = io.StringIO()
+
+    with contextlib.redirect_stdout(printed):
+        check_max_length(roberta, tokenizer, 64, "tiny-roberta")
+
+    checks.check(
+        "RoBERTa takes max_position_embeddings - 2, its padding offset",
+        "[check] tiny-roberta" in printed.getvalue(),
+    )
+    checks.raises(
+        "and not one more",
+        ValueError,
+        check_max_length,
+        roberta,
+        tokenizer,
+        65,
+        "tiny-roberta",
+        match="max_position_embeddings=66",
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        base_model = tiny_base_model(Path(tmp), tokenizer)
+        crf = build_model(str(base_model), {"O": 0, "B-D": 1, "I-D": 2}, {0: "O", 1: "B-D", 2: "I-D"}, "crf")
+        printed = io.StringIO()
+
+        with contextlib.redirect_stdout(printed):
+            check_max_length(crf, tokenizer, 64, "tiny-crf")
+
+        checks.check("the CRF architecture is checked too", "[check] tiny-crf" in printed.getvalue())
+
+
 def main() -> int:
     checks = Checks("models")
 
     verify_bio(checks)
     verify_registry(checks)
+    verify_capacity(checks)
 
     return checks.report()
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -160,6 +161,113 @@ def verify_reconstruction(checks: Checks, tokenizer, name: str) -> None:
     checks.check(f"{name}: per-entity token metrics appear", "token_entity_DISEASE_f1" in all_metrics)
     checks.check(f"{name}: the confusion matrix appears", "confusion_gold_O_pred_O" in all_metrics)
     checks.check(f"{name}: per-tag token metrics appear", "token_tag_B-DISEASE_f1" in all_metrics)
+
+
+def verify_unknown_tokens(checks: Checks, tokenizer) -> None:
+    from lab.core import build_corpus
+    from lab.ner.encoding import Encoder
+
+    unknown = "☤"
+    text = f"Paciente {unknown} con neumonia {unknown} bilateral y fiebre alta."
+    mentions = [f"neumonia {unknown} bilateral", "fiebre alta"]
+    annotations = pd.DataFrame(
+        [
+            {
+                "filename": "doc_unk",
+                "mark": f"T{index + 1}",
+                "label": "DISEASE",
+                "start_span": text.index(mention),
+                "end_span": text.index(mention) + len(mention),
+                "text": mention,
+            }
+            for index, mention in enumerate(mentions)
+        ]
+    )
+    corpus = build_corpus({"doc_unk": text}, annotations)
+
+    encoder = Encoder(tokenizer, "DISEASE", "es", max_length=64)
+    rows = encoder.encode(corpus)
+    input_ids = [int(token_id) for row in rows["input_ids"] for token_id in row]
+
+    checks.check(
+        "the fixture really produces an unknown token",
+        input_ids.count(tokenizer.unk_token_id) == 2,
+    )
+
+    gold = gold_spans(rows, tokenizer, encoder.id2label)
+    recovered = set(zip(gold["start_span"], gold["end_span"]))
+    annotated = set(zip(annotations["start_span"], annotations["end_span"]))
+
+    checks.equal("unknown tokens: gold offsets equal the annotated ones", recovered, annotated)
+
+    perfect = one_hot([[max(int(label), 0) for label in row] for row in rows["labels"]])
+    predicted = predicted_spans(rows, perfect, tokenizer, encoder.id2label)
+
+    checks.frames_equal("unknown tokens: perfect predictions reproduce the gold", predicted, gold)
+
+    from transformers import AutoTokenizer
+
+    gpt2_encoder = Encoder(AutoTokenizer.from_pretrained("gpt2"), "DISEASE", "es", max_length=64)
+
+    checks.raises(
+        "rows scored with a tokenizer of another template raise",
+        ValueError,
+        gold_spans,
+        gpt2_encoder.encode(corpus),
+        tokenizer,
+        encoder.id2label,
+    )
+
+
+def verify_wordless_tokens(checks: Checks, tokenizer, workspace: Path) -> None:
+    from lab.core import build_corpus
+    from lab.ner.encoding import Encoder
+
+    text = "Paciente con neumonia  bilateral y fiebre."
+    mention = "neumonia  bilateral"
+    start = text.index(mention)
+    annotations = pd.DataFrame(
+        [
+            {
+                "filename": "doc_space",
+                "mark": "T1",
+                "label": "DISEASE",
+                "start_span": start,
+                "end_span": start + len(mention),
+                "text": mention,
+            }
+        ]
+    )
+    encoder = Encoder(tokenizer, "DISEASE", "es", max_length=64)
+    rows = encoder.encode(build_corpus({"doc_space": text}, annotations))
+
+    checks.check(
+        "the fixture really has a token in no word",
+        any(word_id is None for row in rows["word_ids"] for word_id in row),
+    )
+
+    gold = gold_spans(rows, tokenizer, encoder.id2label)
+
+    checks.equal(
+        "a whitespace token inside an entity does not split it",
+        list(zip(gold["start_span"], gold["end_span"])),
+        [(start, start + len(mention))],
+    )
+
+    path = workspace / "rows.parquet"
+    rows.to_parquet(path)
+    reread = pd.read_parquet(path)
+
+    checks.frames_equal(
+        "gold survives the parquet round trip that turns a missing word into NaN",
+        gold_spans(reread, tokenizer, encoder.id2label),
+        gold,
+    )
+    checks.equal(
+        "a token in no word keeps its own offset when words are expanded",
+        expand_to_word_extent([(0, 3), (3, 4), (4, 7)], [0, None, 0]),
+        [(0, 7), (3, 4), (4, 7)],
+    )
 
 
 def verify_token_metrics(checks: Checks) -> None:
@@ -353,6 +461,11 @@ def main() -> int:
     verify_helpers(checks)
     verify_reconstruction(checks, tokenizer, "bert")
     verify_reconstruction(checks, AutoTokenizer.from_pretrained("gpt2"), "gpt2")
+    verify_unknown_tokens(checks, tokenizer)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        verify_wordless_tokens(checks, AutoTokenizer.from_pretrained("gpt2"), Path(tmp))
+
     verify_token_metrics(checks)
     verify_character_metrics(checks)
     verify_against_ner_api(checks, tokenizer)

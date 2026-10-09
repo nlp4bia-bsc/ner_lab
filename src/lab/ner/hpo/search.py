@@ -16,6 +16,7 @@ from lab.core.provenance import write_manifest
 from lab.core.split import split_paths
 from lab.ner.encoding.encoder import WindowStrategy
 from lab.ner.encoding.overlaps import OverlapPolicy
+from lab.ner.encoding.tagging import build_label_vocabulary
 from lab.ner.hpo.arguments import resolve_base_arguments, user_argument_overrides
 from lab.ner.hpo.progress import SweepProgress
 from lab.ner.hpo.report import summarize_sweep
@@ -45,7 +46,8 @@ from lab.ner.hpo.winner import (
     winner_configuration,
     write_winner_config,
 )
-from lab.ner.models.registry import Architecture, architecture_name
+from lab.ner.models.capacity import check_max_length
+from lab.ner.models.registry import Architecture, architecture_name, build_model
 from lab.ner.training.runs import (
     RUN_MANIFEST_FILENAME,
     claim_run_dir,
@@ -83,7 +85,7 @@ def search_hyperparameters(
     search_space: Mapping[str, Any] | None = None,
     training_arguments: TrainingArguments | Mapping[str, Any] | None = None,
     n_trials: int = 40,
-    seeds_per_trial: int = 5,
+    seeds_per_trial: int = 3,
     top_k_epochs: int = 3,
     strategies: Sequence[str | WindowStrategy] = ("greedy",),
     context_tokens: Sequence[int] | None = None,
@@ -121,6 +123,11 @@ def search_hyperparameters(
     none. There is no knob for this: `per_device_train_batch_size` is per device, so
     a trial spanning two GPUs would train at twice the batch size it was scored on.
     Parallelism comes from running trials side by side.
+
+    Before Ray starts, every base model is built on CPU and run once at each of its
+    `max_lengths`, so a window longer than the model's positions raises naming the
+    length, rather than as a CUDA device-side assert in the first trial. `report`
+    prints a line per check passed.
 
     `smoke_test` runs one epoch per variant first, so an unloadable base model or a
     search dimension the training arguments have no field for costs one epoch rather
@@ -166,6 +173,8 @@ def search_hyperparameters(
 
     base_arguments = resolve_base_arguments(training_arguments, run_dir, random_state)
     metric_key, greater_is_better = _objective(base_arguments)
+
+    _check_variant_lengths(variants, target_label, architecture, architecture_kwargs, report)
 
     full_space = {**space, "variant": tune.choice(list(variants))}
 
@@ -330,6 +339,36 @@ def _validated_search_space(search_space: Mapping[str, Any] | None) -> dict[str,
     validate_search_space(space)
 
     return space
+
+
+def _check_variant_lengths(
+    variants: dict[str, dict[str, Any]],
+    target_label: str,
+    architecture: str | Architecture,
+    architecture_kwargs: dict[str, Any] | None,
+    report: bool,
+) -> None:
+    from transformers import AutoTokenizer
+
+    vocabulary = build_label_vocabulary(target_label)
+    lengths_by_model: dict[str, set[int]] = {}
+
+    for specification in variants.values():
+        lengths = lengths_by_model.setdefault(specification["base_model"], set())
+        lengths.add(specification["max_length"])
+
+    for base_model, max_lengths in lengths_by_model.items():
+        model = build_model(
+            base_model=base_model,
+            label2id=vocabulary["label2id"],
+            id2label=vocabulary["id2label"],
+            architecture=architecture,
+            **(architecture_kwargs or {}),
+        )
+        tokenizer = AutoTokenizer.from_pretrained(base_model)
+
+        for max_length in sorted(max_lengths):
+            check_max_length(model, tokenizer, max_length, base_model, report=report)
 
 
 def _objective(base_arguments: TrainingArguments) -> tuple[str, bool]:

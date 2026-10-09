@@ -124,6 +124,9 @@ The row is the verdict; the note is the argument.
 | D110 | **An index records what its vectors depend on — method, `base_model`, a fingerprint of the gazetteer's `term`/`code` content, `n_terms`, and the encoding settings — and one that differs from the run raises, naming the fields.** A directory with files but no manifest is refused. FAISS settings are not recorded. | The strict default of `on_mismatch` and `on_conflict`: a silently reused index links against the wrong vectors. The fingerprint is over content because the gazetteer may be a frame. `batch_size` is recorded under `mean` pooling, which averages over padding (Q20). |
 | D111 | **FAISS stays the search backend; usearch was not adopted.** | Retrieval accuracy must not drop, so search is exact, and exact search is fastest as a flat index on a GPU. usearch's strength is approximate HNSW search, and once the embeddings are kept, search is no longer the bottleneck. |
 | D112 | **`lab.nel` is lab code, refactored to `docs/dev/CODE_STYLE.md`: classes and records renamed to what they are, compatibility aliases and duplicates removed.** Behaviour is unchanged except where a removal says otherwise; `link_entities` outputs, metric keys and the YAML method names are untouched, except that `whoosh` is gone. | The equivalence D94 protected is kept by `verify_nel`'s side-by-side checks, which now compare the renamed classes to the originals. → notes |
+| D113 | **`seeds_per_trial` defaults to 3, down from 5.** | A trial's score must be a mean: on a 40-trial ELCardioCC sweep, seeds spread ±0.006–0.015 span F1, the size of the gaps between trials. Five seeds cut the noise on the mean to about 0.0045 against 0.0058 for three, at 5/3 the cost, and at 5 seeds a 40-trial sweep ran 55–80 GPU-hours. |
+| D114 | **A word is a Unicode UAX #29 word, untailored, for every tokenizer: `core.split_into_words` defines the `word_id` the encoder labels by, and the words the text statistics count.** A token belongs to the word its start falls in; a token that is whitespace throughout belongs to none and is never labelled. Implemented with `regex`'s `WORD` flag, now a direct dependency. | The tokenizer's own words decided which entities could be learned: mdeberta's SentencePiece pre-tokenizer splits on whitespace alone and emits a bare `▁` ahead of a word, so on ELCardioCC 2026 31% of entities started on an unlabelled subword and 41% ended mid-word, in training and in the gold scored against. One standard gives every model the same words. → notes |
+| D115 | **Before training, a built model runs one forward pass on CPU at `max_length`, and the run prints a line when it passes.** `lab.ner.models.check_max_length`; `train_model` runs it on each fold's model, `search_hyperparameters` on each base model at each of its `max_lengths` in the driver before Ray starts, under `report`. Inference does not: it encodes at the length the model was trained at. | A window longer than the model's positions otherwise surfaced as a CUDA device-side assert pointing at the wrong line (roberta-small-greek: `max_position_embeddings` 130, run at 256). The limit is not readable from the config without per-architecture knowledge — RoBERTa offsets by the padding index, DeBERTa is relative, rotary models declare 8k — and running the model needs none. The printed line is so the log shows the check was made. |
 
 ## Notes
 
@@ -341,3 +344,31 @@ New modules: `matching/bm25.py` (the index and score both BM25s shared), `matchi
 (the DataFrame retrievers, out of `lexical.py`), `retrieval/faiss_index.py` (index construction,
 out of the transformer retriever), `evaluation/graphs.py`, and the `cross_encoder/` package
 (`examples`, `training`, `reranker`).
+
+### D114 — UAX #29 words
+
+`encoded.word_ids()` is the tokenizer's pre-tokenizer, and `build_row` labels only a word's
+first subword. Measured over the 11,979 ELCardioCC 2026 train entities, the share starting /
+ending mid-word with the tokenizer's words was mdeberta-v3-base 31.2% / 40.9%, EuroBERT-210m
+6.0% / 0.6%, roberta-base-biomedical-clinical-es 1.3% / 0.8%, ModernBERT-base 1.2% / 0.7%,
+bert-base-greek-uncased 0.4% / 0.4%. With UAX #29 words every one falls to 1.5–2.3% / 0.7–1.1%.
+Evaluation rebuilds gold from the rows, so the damage did not show in the score.
+
+`regex`'s `WORD` flag was compared with ICU 78.3's word break iterator (root locale) over
+the 4,000 ELCardioCC documents and gave identical boundaries. ICU itself was not adopted:
+PyICU builds against the system ICU, which offline cluster nodes do not reliably have, and
+`regex` is already a transformers dependency.
+
+The standard is used untailored. Its `MidLetter` rule joins letters across a colon, so
+`Ιστορικό:ΧΚΜ` is one word and an entity written straight after a colon cannot be learned
+(115 ELCardioCC entities, about 1%); ICU's root locale does the same. A colon break was
+rejected as a lab-specific deviation. A further ~1.4% of that corpus's entities start inside
+a word because their annotated offsets are shifted, which no word definition recovers.
+
+What changes: rows of every tokenizer, wherever the tokenizer's words and UAX #29's differ
+(`12.5` and `can't` become one word, punctuation always its own); whitespace-only tokens,
+such as SentencePiece's bare `▁` or a byte-level token for a repeated space, now get
+`IGNORE_INDEX` instead of a label; the statistics' `words`, `vocabulary_words` and
+`mattr_words`, which were `\w+` runs. NER-API equivalence in `verify_encoder` no longer
+compares `labels` and `word_ids`: the windows, ids and offsets must still be identical, and
+the labels must agree wherever both put one.

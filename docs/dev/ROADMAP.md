@@ -13,9 +13,11 @@ linking TSV, `spans_from_corpus` carries the codes, and `link_entities` either e
 against them or, with `keep_gold`, completes around them.
 The encoder methods of `link_entities` keep the gazetteer's embeddings on disk since
 2026-10-04 (D107–D111).
-Verification stands at 982 checks across eleven scripts, all passing, plus one deliberate
+Words became Unicode UAX #29 words for every tokenizer on 2026-10-09 (D114).
+Verification stands at 1,036 checks across eleven scripts, all passing, plus one deliberate
 skip — the NER-API equivalence no longer applies to byte-level tokenizers, whose token
-offsets `tokenize_document` trims and NER-API's `DataLoader` does not; see
+offsets `tokenize_document` trims and NER-API's `DataLoader` does not, and for the others it
+no longer compares the word-dependent `labels` and `word_ids` (D114); see
 [`verification/`](../../verification/).
 
 What remains of NER-API is not library surface — `01b_analyze_hpo_trials.py`,

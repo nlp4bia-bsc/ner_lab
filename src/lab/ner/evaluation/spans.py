@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from lab.core.spans import span_dataframe
-from lab.ner.encoding.rows import IGNORE_INDEX
+from lab.ner.encoding.rows import IGNORE_INDEX, special_token_template
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
@@ -27,11 +27,12 @@ def gold_spans(
     _require_columns(rows)
 
     id2label = _normalize_id2label(id2label)
+    prefix_ids, suffix_ids = special_token_template(tokenizer)
     spans: list[dict[str, Any]] = []
 
     for row in rows.itertuples(index=False):
         labels = ensure_int_list(row.labels)
-        aligned = _aligned_offsets(row, tokenizer)
+        aligned = _aligned_offsets(row, prefix_ids, suffix_ids)
 
         tags, offsets = [], []
 
@@ -80,11 +81,12 @@ def predicted_spans(
 
     id2label = _normalize_id2label(id2label)
     probabilities = softmax(predictions) if include_scores else None
+    prefix_ids, suffix_ids = special_token_template(tokenizer)
     spans: list[dict[str, Any]] = []
 
     for index, row in enumerate(rows.itertuples(index=False)):
         labels = ensure_int_list(row.labels)
-        aligned = _aligned_offsets(row, tokenizer)
+        aligned = _aligned_offsets(row, prefix_ids, suffix_ids)
         row_predictions = predicted_ids[index][: len(labels)].tolist()
 
         tags, offsets, scores = [], [], []
@@ -183,11 +185,28 @@ def softmax(logits: np.ndarray) -> np.ndarray:
     return exponentiated / exponentiated.sum(axis=-1, keepdims=True)
 
 
-def content_positions(input_ids: list[int], tokenizer: PreTrainedTokenizerBase) -> list[int]:
-    """Positions in `input_ids` that are not special tokens."""
-    mask = tokenizer.get_special_tokens_mask(input_ids, already_has_special_tokens=True)
+def content_positions(
+    input_ids: list[int],
+    prefix_ids: list[int],
+    suffix_ids: list[int],
+) -> list[int]:
+    """
+    Positions in `input_ids` between the special-token template's prefix and suffix.
 
-    return [position for position, is_special in enumerate(mask) if not is_special]
+    Read off the template `build_row` assembled the row from, not off which ids
+    are special: an unknown token in the text carries the special `unk_token_id`
+    yet is content, with an offset of its own.
+    """
+    content_end = len(input_ids) - len(suffix_ids)
+
+    if input_ids[: len(prefix_ids)] != prefix_ids or input_ids[content_end:] != suffix_ids:
+        raise ValueError(
+            f"input_ids do not start with {prefix_ids} and end with {suffix_ids}, the "
+            f"tokenizer's special-token template: {input_ids[:10]}. Pass the tokenizer "
+            "the rows were encoded with."
+        )
+
+    return list(range(len(prefix_ids), content_end))
 
 
 def align_offsets(
@@ -209,21 +228,26 @@ def align_offsets(
 
 def expand_to_word_extent(
     token_offsets: list[tuple[int, int]],
-    word_ids: list[int],
+    word_ids: list[int | None],
 ) -> list[tuple[int, int]]:
     """
     Grow each token's offset to cover its whole word.
 
     Only a word's first subword carries a label, so its own offset ends mid-word
     — which would truncate any entity whose final word splits into several
-    subwords. `word_ids` ties the first subword back to its continuations.
+    subwords. `word_ids` ties the first subword back to its continuations; a token
+    in no word (`None`) keeps its own offset.
     """
     word_end: dict[int, int] = {}
 
     for word_id, (_, end) in zip(word_ids, token_offsets):
-        word_end[word_id] = max(word_end.get(word_id, end), end)
+        if word_id is not None:
+            word_end[word_id] = max(word_end.get(word_id, end), end)
 
-    return [(start, word_end[word_id]) for (start, _), word_id in zip(token_offsets, word_ids)]
+    return [
+        (start, end if word_id is None else word_end[word_id])
+        for (start, end), word_id in zip(token_offsets, word_ids)
+    ]
 
 
 def strip_bio_prefix(label: str) -> str:
@@ -252,6 +276,17 @@ def ensure_int_list(value: Any) -> list[int]:
     return [int(item) for item in value]
 
 
+def ensure_word_ids(value: Any) -> list[int | None]:
+    """Coerce one `word_ids` cell, reading a token in no word back as `None`, never `NaN`."""
+    if isinstance(value, str):
+        value = ast.literal_eval(value)
+
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+
+    return [None if pd.isna(item) else int(item) for item in value]
+
+
 def ensure_offsets(value: Any) -> list[tuple[int, int]]:
     """Coerce one cell to a list of `(start, end)` pairs."""
     if isinstance(value, str):
@@ -263,12 +298,15 @@ def ensure_offsets(value: Any) -> list[tuple[int, int]]:
     return [(int(start), int(end)) for start, end in value]
 
 
-def _aligned_offsets(row: Any, tokenizer: PreTrainedTokenizerBase) -> dict[int, tuple[int, int]]:
+def _aligned_offsets(
+    row: Any, prefix_ids: list[int], suffix_ids: list[int]
+) -> dict[int, tuple[int, int]]:
     offsets = expand_to_word_extent(
-        ensure_offsets(row.token_offsets), ensure_int_list(row.word_ids)
+        ensure_offsets(row.token_offsets), ensure_word_ids(row.word_ids)
     )
+    positions = content_positions(ensure_int_list(row.input_ids), prefix_ids, suffix_ids)
 
-    return align_offsets(content_positions(ensure_int_list(row.input_ids), tokenizer), offsets)
+    return align_offsets(positions, offsets)
 
 
 def _require_columns(rows: pd.DataFrame) -> None:
