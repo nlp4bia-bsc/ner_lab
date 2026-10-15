@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+import torch
 from transformers import AutoModelForTokenClassification
 
 from lab.ner.models.bio import normalize_id2label, normalize_label2id
@@ -53,9 +54,18 @@ def build_model(
 
 
 def build_linear_model(base_model: str, label2id: dict, id2label: dict, **kwargs: Any):
-    """A pretrained encoder with the stock `AutoModelForTokenClassification` head."""
+    """
+    A pretrained encoder with the stock `AutoModelForTokenClassification` head.
+
+    The weights load in float32 whatever dtype the checkpoint was saved in. transformers v5
+    otherwise loads a checkpoint in its stored dtype, and an fp16 checkpoint such as
+    mdeberta-v3-base would then train with fp16 parameters: AdamW's state underflows and
+    the first step turns every weight NaN. Mixed precision is the Trainer's job, applied
+    over float32 weights.
+    """
     return AutoModelForTokenClassification.from_pretrained(
         base_model,
+        dtype=torch.float32,
         num_labels=len(label2id),
         label2id=normalize_label2id(label2id),
         id2label=normalize_id2label(id2label),

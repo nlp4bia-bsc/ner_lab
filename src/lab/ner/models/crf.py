@@ -28,7 +28,9 @@ class CRFForTokenClassification(nn.Module):
     With `constrain_transitions`, structurally impossible BIO transitions are
     pinned to a large negative score and held there — gradient hooks zero their
     updates, and the pin is reapplied before every loss and decode, since
-    `load_state_dict` would otherwise restore learned values over them.
+    `load_state_dict` would otherwise restore learned values over them. The
+    backbone loads in float32 whatever its checkpoint's dtype, as `build_linear_model`
+    explains.
     """
 
     def __init__(
@@ -56,7 +58,9 @@ class CRFForTokenClassification(nn.Module):
             label2id=self.label2id,
             id2label=self.id2label,
         )
-        self.backbone = AutoModel.from_pretrained(base_model, config=self.config)
+        self.backbone = AutoModel.from_pretrained(
+            base_model, config=self.config, dtype=torch.float32
+        )
 
         self.dropout = nn.Dropout(dropout)
         self.classifier = nn.Linear(self.config.hidden_size, self.num_labels)
