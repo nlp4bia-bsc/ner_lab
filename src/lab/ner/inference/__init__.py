@@ -6,6 +6,7 @@ from lab.ner.inference.io import (
     has_gold,
     read_documents,
     read_reference,
+    resolve_gold,
     write_gold,
     write_predictions,
 )
@@ -15,6 +16,7 @@ from lab.ner.inference.predict import (
     INFERENCE_MANIFEST_FILENAME,
     METRICS_FILENAME,
     PREDICTIONS_FILENAME,
+    PREDICTIONS_PARQUET_FILENAME,
     InferenceResult,
     predict_entities,
 )
@@ -25,6 +27,7 @@ __all__ = [
     "INFERENCE_MANIFEST_FILENAME",
     "METRICS_FILENAME",
     "PREDICTIONS_FILENAME",
+    "PREDICTIONS_PARQUET_FILENAME",
     "InferenceResult",
     "decode_spans",
     "has_gold",
@@ -35,6 +38,7 @@ __all__ = [
     "read_documents",
     "read_reference",
     "resolve_device",
+    "resolve_gold",
     "write_gold",
     "write_predictions",
 ]

@@ -9,6 +9,7 @@ import pandas as pd
 
 from lab.core.brat import read_annotation_tsv, resolve_documents
 from lab.core.corpus import DOCUMENT_COLUMNS, validate_corpus
+from lab.core.io import DEFAULT_PARQUET_COMPRESSION
 from lab.core.spans import SCORED_SPAN_COLUMNS, SPAN_COLUMNS, spans_from_corpus
 
 
@@ -77,10 +78,40 @@ def read_reference(reference: str | Path, target_label: str | None = None) -> pd
     return annotations
 
 
+def resolve_gold(
+    reference: str | Path | None, corpus: pd.DataFrame, target_label: str
+) -> pd.DataFrame | None:
+    """
+    The gold spans to score against: `reference` when given, else the corpus's own.
+
+    Restricted to `target_label`. `None` when neither carries any annotation, which
+    is a run that predicts without scoring.
+    """
+    if reference is not None:
+        return read_reference(reference, target_label)
+
+    if has_gold(corpus):
+        return spans_from_corpus(corpus, label=target_label)
+
+    return None
+
+
 def write_predictions(spans: pd.DataFrame, path: str | Path) -> Path:
-    """Write predicted entities as a TSV: the span table plus its `score` column."""
+    """
+    Write predicted entities, the span table plus its `score` column, as TSV or parquet.
+
+    The format follows the suffix: `.parquet` writes parquet, anything else a TSV.
+    Parquet keeps dtypes and surface forms exactly, where a TSV read back with
+    pandas' default NA handling turns an entity reading `NA` or `null` into `NaN`.
+    """
     path = Path(path)
-    spans[SCORED_SPAN_COLUMNS].to_csv(path, sep="\t", index=False)
+
+    if path.suffix == ".parquet":
+        spans[SCORED_SPAN_COLUMNS].to_parquet(
+            path, engine="pyarrow", compression=DEFAULT_PARQUET_COMPRESSION, index=False
+        )
+    else:
+        spans[SCORED_SPAN_COLUMNS].to_csv(path, sep="\t", index=False)
 
     return path
 

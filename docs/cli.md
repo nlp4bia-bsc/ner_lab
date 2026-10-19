@@ -14,8 +14,8 @@ exist only so a job array can vary them without writing near-identical config fi
 | `--random-state N`, `--seed N` | Override the config's `random_state`. |
 | `--output-dir PATH` | Override the config's `output_dir`. |
 
-`--random-state` reaches whichever task is named, so it fails on `ner.predict_entities`, which
-has no seed to set — inference is deterministic.
+`--random-state` reaches whichever task is named, so it fails on `ner.predict_entities` and
+`ner.predict_ensemble`, which have no seed to set — inference is deterministic.
 
 ## The config
 
@@ -32,6 +32,8 @@ clinical NER, `nel.` for entity linking.
 | `ner.train_model` | `lab.ner.train_model` | [train-model.md](ner/train-model.md) |
 | `ner.search_hyperparameters` | `lab.ner.search_hyperparameters` | [search-hyperparameters.md](ner/search-hyperparameters.md) |
 | `ner.predict_entities` | `lab.ner.predict_entities` | [predict-entities.md](ner/predict-entities.md) |
+| `ner.fit_ensemble` | `lab.ner.fit_ensemble` | [ensemble.md](ner/ensemble.md) |
+| `ner.predict_ensemble` | `lab.ner.predict_ensemble` | [ensemble.md](ner/ensemble.md) |
 | `nel.link_entities` | `lab.nel.link_entities` | [link-entities.md](nel/link-entities.md) |
 
 `lab tasks` prints the same list, and marks any task whose extra is not installed in the

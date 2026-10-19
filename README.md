@@ -45,7 +45,7 @@ Both routes call the same function and produce identical output.
 | | | |
 |---|---|---|
 | [`docs/core/`](docs/core/) | `lab.core` | the two tables, `prepare_dataset`, splitting, scoring |
-| [`docs/ner/`](docs/ner/) | `lab.ner` | `train_model`, `search_hyperparameters`, `predict_entities`, and the pieces underneath |
+| [`docs/ner/`](docs/ner/) | `lab.ner` | `train_model`, `search_hyperparameters`, `predict_entities`, `fit_ensemble`, `predict_ensemble`, and the pieces underneath |
 | [`docs/nel/`](docs/nel/) | `lab.nel` | `link_entities`, the candidate methods, reranking |
 | [`docs/cli.md`](docs/cli.md) | `lab` | `lab run`, `lab tasks`, the YAML config |
 | [`docs/dev/`](docs/dev/) | | how the library is built: design, decisions, roadmap, progress |

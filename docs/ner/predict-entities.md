@@ -59,6 +59,7 @@ gets span and character metrics alone.
 ```
 <output_dir>/
     predictions.tsv            the span table plus a score column
+    predictions.parquet        the same table, with dtypes and surface forms kept exactly
     gold.tsv                   the gold spans scored against, when there were any
     prediction_metrics.json    span, character and token metrics, when there was gold
     inference_manifest.json    the model, its encoding, and what was predicted on

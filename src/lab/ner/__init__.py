@@ -10,6 +10,8 @@ _EXPORTS: dict[str, str] = {
     "build_compute_metrics": "lab.ner.evaluation",
     "build_model": "lab.ner.models",
     "evaluate_predictions": "lab.ner.evaluation",
+    "fit_ensemble": "lab.ner.ensemble",
+    "predict_ensemble": "lab.ner.ensemble",
     "predict_entities": "lab.ner.inference.predict",
     "search_hyperparameters": "lab.ner.hpo",
     "train": "lab.ner.training",

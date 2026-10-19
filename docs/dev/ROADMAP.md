@@ -30,6 +30,10 @@ consumes is confirmed (Q16).
 
 ## Next
 
+- **Checking ensembling on real models.** D116–D126 are verified on miniature BERTs only
+  (`verify_ensemble.py`). On a GPU machine, with two or three trained backbones: a one-member
+  `majority` ensemble must reproduce `predict_entities`' spans, and `ensemble_metrics.json`
+  shows whether the ensemble beats its best member.
 - **Checking persisted embeddings on a real encoder.** D107–D111 are verified with a tiny
   local model only. On a GPU machine, with the SympTEMIST gazetteer and test mentions: recall@k
   and MRR from a loaded index must equal a fresh build's.

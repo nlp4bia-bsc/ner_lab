@@ -9,14 +9,13 @@ from typing import Any
 import pandas as pd
 
 from lab.core.provenance import write_manifest
-from lab.core.spans import spans_from_corpus
 from lab.ner.encoding.encoder import WindowStrategy, encoder_from_description
 from lab.ner.evaluation.metrics import token_diagnostics
 from lab.ner.evaluation.scoring import span_metrics
 from lab.ner.inference.io import (
     has_gold,
     read_documents,
-    read_reference,
+    resolve_gold,
     write_gold,
     write_predictions,
 )
@@ -24,6 +23,7 @@ from lab.ner.inference.loading import load_model
 from lab.ner.inference.prediction import decode_spans, predict_logits
 
 PREDICTIONS_FILENAME = "predictions.tsv"
+PREDICTIONS_PARQUET_FILENAME = "predictions.parquet"
 GOLD_FILENAME = "gold.tsv"
 METRICS_FILENAME = "prediction_metrics.json"
 INFERENCE_MANIFEST_FILENAME = "inference_manifest.json"
@@ -77,7 +77,8 @@ def predict_entities(
     training. Pass `strategy` only if the model was trained with a callable one.
 
     `documents` is a canonical corpus (frame or parquet), a directory of `.txt`
-    files, or a `{doc_id: text}` mapping. Predictions are always written.
+    files, or a `{doc_id: text}` mapping. Predictions are always written, as both
+    `predictions.tsv` and `predictions.parquet`.
     Documents carrying gold entities are also scored; a directory or mapping
     has no gold, so scoring those needs `reference`, which also takes precedence
     over the corpus's own entities when both are given.
@@ -126,10 +127,13 @@ def predict_entities(
         min_score=min_score,
     )
 
-    paths = {"predictions": write_predictions(spans, output_dir / PREDICTIONS_FILENAME)}
+    paths = {
+        "predictions": write_predictions(spans, output_dir / PREDICTIONS_FILENAME),
+        "predictions_parquet": write_predictions(spans, output_dir / PREDICTIONS_PARQUET_FILENAME),
+    }
     metrics: dict[str, Any] | None = None
 
-    gold = _gold_spans(reference, corpus, encoder.target_label)
+    gold = resolve_gold(reference, corpus, encoder.target_label)
 
     if gold is not None:
         paths["gold"] = write_gold(gold, output_dir / GOLD_FILENAME)
@@ -173,15 +177,3 @@ def predict_entities(
         manifest=manifest,
         paths=paths,
     )
-
-
-def _gold_spans(
-    reference: str | Path | None, corpus: pd.DataFrame, target_label: str
-) -> pd.DataFrame | None:
-    if reference is not None:
-        return read_reference(reference, target_label)
-
-    if has_gold(corpus):
-        return spans_from_corpus(corpus, label=target_label)
-
-    return None

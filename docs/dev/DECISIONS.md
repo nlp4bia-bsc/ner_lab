@@ -127,6 +127,17 @@ The row is the verdict; the note is the argument.
 | D113 | **`seeds_per_trial` defaults to 3, down from 5.** | A trial's score must be a mean: on a 40-trial ELCardioCC sweep, seeds spread ±0.006–0.015 span F1, the size of the gaps between trials. Five seeds cut the noise on the mean to about 0.0045 against 0.0058 for three, at 5/3 the cost, and at 5 seeds a 40-trial sweep ran 55–80 GPU-hours. |
 | D114 | **A word is a Unicode UAX #29 word, untailored, for every tokenizer: `core.split_into_words` defines the `word_id` the encoder labels by, and the words the text statistics count.** A token belongs to the word its start falls in; a token that is whitespace throughout belongs to none and is never labelled. Implemented with `regex`'s `WORD` flag, now a direct dependency. | The tokenizer's own words decided which entities could be learned: mdeberta's SentencePiece pre-tokenizer splits on whitespace alone and emits a bare `▁` ahead of a word, so on ELCardioCC 2026 31% of entities started on an unlabelled subword and 41% ended mid-word, in training and in the gold scored against. One standard gives every model the same words. → notes |
 | D115 | **Before training, a built model runs one forward pass on CPU at `max_length`, and the run prints a line when it passes.** `lab.ner.models.check_max_length`; `train_model` runs it on each fold's model, `search_hyperparameters` on each base model at each of its `max_lengths` in the driver before Ray starts, under `report`. Inference does not: it encodes at the length the model was trained at. | A window longer than the model's positions otherwise surfaced as a CUDA device-side assert pointing at the wrong line (roberta-small-greek: `max_position_embeddings` 130, run at 256). The limit is not readable from the config without per-architecture knowledge — RoBERTa offsets by the padding index, DeBERTa is relative, rotary models declare 8k — and running the model needs none. The printed line is so the log shows the check was made. |
+| D116 | **NER ensembling combines saved models given by path — independently trained, different backbones — in a new `lab.ner.ensemble` subpackage with two tasks: `ner.fit_ensemble` (members, and validation when tuning, to an ensemble directory) and `ner.predict_ensemble` (an ensemble directory over documents).** `predict_entities` is not overloaded to accept an ensemble. | Members are individual models that already predict on their own; nothing groups them into configurations, folds or seeds. A separate task keeps each signature honest: `strategy` and the like belong to one model and would be ambiguous across members. → notes |
+| D117 | **Tuning data is the caller's: a gold-annotated `validation` input, in any form `read_documents` accepts.** The library does not check whether any member trained on it. | Which data to tune on, and whether the members saw it, is the researcher's call; the method takes models and data and records what it was given. |
+| D118 | **A fit writes `ensemble.json` — the only file `predict_ensemble` reads: `format_version`, `method`, `votes`, `target_label`, `threshold`, and per member `model_dir`, `weight` and `weights_sha256` — plus `ensemble_manifest.json` (validation path, sha256 and counts, each member's `model`/`encoding` blocks, search settings, timings), `ensemble_trials.parquet` when it searched, and `ensemble_metrics.json` when it had validation.** `predict_ensemble` raises, naming the member, when a member's weights no longer match their hash. | The read-back artifact / written-only provenance split of `encoding.json` against `run_manifest.json`. A path alone would silently apply an ensemble to a model retrained in place. `ensemble_metrics.json` scores each member alone beside the ensemble, so whether it beats its best member is on paper. |
+| D119 | **`write_predictions` writes the span table as both `predictions.tsv` and `predictions.parquet`**, for `predict_entities` and `predict_ensemble` alike. | Parquet keeps dtypes and text exactly; a TSV read back with pandas' default NA handling turns a surface form `NA`, `nan` or `null` into `NaN`. |
+| D120 | **Members are combined on word tables: one row per labelled word, keyed `(doc_id, word_id)`, carrying the member's own `tag` and `p_O`/`p_B`/`p_I` by label name.** Members must share `target_label`, or the ensemble raises. A combined span's offsets are its words' `split_into_words` extents. Tables are built in memory, one member loaded at a time. | D114's `word_id` indexes the document's UAX #29 words, so it is the same for every tokenizer, window size and strategy; `label2id` order is not shared, so columns go by name. `split_into_words` extents do not depend on which member's tokenizer is read. → notes |
+| D121 | **A CRF member's probabilities are its forward-backward marginals over the whole window, from `CRFForTokenClassification.marginals_from_emissions`, returned as log-marginals in float32; its `tag` is the Viterbi path.** The ensemble finds the method by duck-typing, as D40 does. | The CRF path returns Viterbi as one-hot pseudo-logits, so its softmax is 1.0 on the chosen tag and a CRF member would outvote every linear one. Log-marginals pass through softmax unchanged, so both architectures reach voting in one shape. |
+| D122 | **Decoding is two-stage, per document, over the sorted `word_id`s present in any member's table. A word is in an entity when `Σ wₘ·eₘ > τ`, strictly, weights normalised over the members that labelled it; an entity word is `B` after a non-entity word, or when the combined B weight beats the I weight, ties continuing the entity.** `eₘ` is 1/0 from the member's `tag` for hard votes, `p_B + p_I` for soft. A span's `score` is the mean combined probability of its words' chosen tags, for hard votes too. | Valid BIO by construction, one code path for hard and soft, and τ means one thing — the share of weight that must say entity — which is what weighted voting tunes. A missing member is not evidence either way. → notes |
+| D123 | **Methods are `majority` (hard votes, equal weights, `τ = 0.5`, so strictly more than half; ties to `O`), `soft` (probabilities, equal weights, `τ = 0.5`, or tuned with `tune_threshold=True`) and `weighted` (tuned weights and τ, `votes="soft"` by default or `"hard"`).** `votes` passed with another method raises. Validation is required when anything is tuned; otherwise it is optional and only scored. | `votes` is meaningless where the method fixes the vote (D42). An untuned ensemble given validation still gets the member-by-member comparison of D118. A strict `> 0.5` rather than `τ = (⌊n/2⌋+1)/n`: the share is renormalised over the members present (D122), and a fixed `3/4` for four members would refuse two of the three present at a word. |
+| D124 | **Tuning is Optuna TPE: one raw weight per member in [0, 1], normalised, and τ in [0.05, 0.95] (τ alone for `soft`), `n_trials=200`, maximising `metric="span_strict_f1"` — any `span_metrics` key — with `random_state` seeding the sampler.** Ties go to the first best trial. | One evaluation is a weighted sum, a decode and a score on CPU, so hundreds of trials are cheap; a grid explodes with members (about 19,000 points at five, step 0.1). `span_strict_f1` is what model selection already tracks (D44). |
+| D125 | **No per-member calibration in the first version.** | Tuned weights and τ absorb most of it; it would make plain `soft` need validation, and a CRF needs its emissions and transitions scaled, not its marginals. It can be added later as a per-member field of `ensemble.json`. |
+| D126 | **A member trained with a callable window strategy is refused by `fit_ensemble`, naming it.** | `encoding.json` cannot name a callable, and one `strategy` argument cannot say which member it is for. |
 
 ## Notes
 
@@ -372,3 +383,41 @@ such as SentencePiece's bare `▁` or a byte-level token for a repeated space, n
 `mattr_words`, which were `\w+` runs. NER-API equivalence in `verify_encoder` no longer
 compares `labels` and `word_ids`: the windows, ids and offsets must still be identical, and
 the labels must agree wherever both put one.
+
+### D116 — ensembling
+
+The scope is models that are each good on their own, on different backbones: ensembling
+fold models or seed replicas of one configuration was considered and is not a use case, so
+nothing groups members or averages within one. The flow is `fit_ensemble` on a validation
+set, then `predict_ensemble` on the documents to score or label; `predict_ensemble` writes
+what `predict_entities` writes, plus the ensemble and each member's hash in its manifest.
+
+Layout: `ensemble/tables.py` (a member's word table, the CRF marginals path included),
+`ensemble/voting.py` (weighted combination and decoding), `ensemble/search.py` (the Optuna
+fit), `ensemble/io.py` (`ensemble.json`, hash checks), `ensemble/fit.py` and
+`ensemble/predict.py` (the tasks). `marginals_from_emissions` lives in `models/crf.py`.
+
+### D120 / D122 — word tables and decoding
+
+A member labels only the first subword of a word, inside a window's core, so it gives at most
+one row per word. It gives none when no token starts in the word — a token straddling two
+UAX #29 words, such as a SentencePiece `-b` starting on a `-` that belongs to no word — so
+which words go unlabelled depends on the tokenizer. Such a word is decided by the members
+that did label it. A word no member labelled has no tag; decoding skips it rather than
+breaking on it, and a span around it still covers it through its words' extents, as
+`bio_to_spans` covers unlabelled positions.
+
+`split_into_words` extents differ from `expand_to_word_extent`'s only where a token runs past
+its word (`mg.` covering the `.`); there the ensemble's span is the word's and does not
+depend on which member's tokenizer is read.
+
+Constrained Viterbi over averaged probabilities was the alternative. It can repair an orphan
+`I` to `O` where the two-stage rule makes it `B`, but has no natural threshold: τ would be a
+bias added to `O`. A tuned τ should keep weakly supported words out of stage one anyway.
+
+The equivalence a one-member ensemble owes `predict_entities` holds for hard votes, which
+reproduce `bio_to_spans` orphan-`I` handling included, with two exceptions: a CRF member
+under soft votes decodes from its marginals, not its Viterbi path; and decoding per document
+lets a span continue across a window boundary when the next window's first word votes `I`,
+where `bio_to_spans` decodes per window. Windows end at sentence boundaries, so the second
+arises only inside a sentence too long for one window.

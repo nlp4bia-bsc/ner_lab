@@ -33,6 +33,7 @@ seconds; that one starts a local Ray instance for its mini-sweep and adds a minu
 | `verify_assessment.py` | `train_model`: fold rotation, both split modes, manifests, aggregation |
 | `verify_hpo.py` | search-space forms, variants, trial scoring, OOM handling, a real two-trial Ray sweep, the winner block re-run through `train_model` |
 | `verify_inference.py` | span decoding, `predict_entities` end to end, scoring against gold and against a reference |
+| `verify_ensemble.py` | voting and two-stage decoding, one-member equivalence with `predict_entities`, CRF marginals against brute-force path enumeration, `ensemble.json` and weight digests, `fit_ensemble` and `predict_ensemble` end to end |
 | `verify_nel.py` | nlp4bia-linking's own tests, side-by-side equivalence with it, `link_entities` end to end on every method, with a hierarchy, with the reranker |
 
 Everything runs on synthetic fixtures built by `fixtures.py`, so the scripts pass on a

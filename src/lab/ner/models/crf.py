@@ -150,6 +150,58 @@ class CRFForTokenClassification(nn.Module):
 
         return self.crf.decode(emissions=emissions, mask=mask)
 
+    def marginals_from_emissions(
+        self,
+        emissions: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """
+        Each position's log-probability of each tag given the whole sequence.
+
+        Forward-backward over the emissions and the learned start, transition and
+        end scores, in log space and float32 whatever the emissions' dtype. Log
+        rather than plain probabilities, so a softmax over the result returns the
+        marginals unchanged and they can stand where logits are expected. Positions
+        the mask leaves out carry no meaningful value.
+        """
+        if attention_mask is None:
+            mask = torch.ones(emissions.shape[:2], dtype=torch.bool, device=emissions.device)
+        else:
+            mask = attention_mask.bool()
+
+        if self.constrain_transitions:
+            self.apply_transition_constraints()
+
+        emissions = emissions.float()
+        start = self.crf.start_transitions.float()
+        end = self.crf.end_transitions.float()
+        transitions = self.crf.transitions.float()
+        sequence_length = emissions.shape[1]
+
+        alpha = start + emissions[:, 0]
+        alphas = [alpha]
+
+        for position in range(1, sequence_length):
+            stepped = torch.logsumexp(alpha.unsqueeze(2) + transitions, dim=1)
+            stepped = stepped + emissions[:, position]
+            alpha = torch.where(mask[:, position].unsqueeze(1), stepped, alpha)
+            alphas.append(alpha)
+
+        log_partition = torch.logsumexp(alpha + end, dim=1)
+
+        beta = end.expand_as(alpha)
+        betas = [beta]
+
+        for position in range(sequence_length - 2, -1, -1):
+            following = emissions[:, position + 1] + beta
+            stepped = torch.logsumexp(transitions + following.unsqueeze(1), dim=2)
+            beta = torch.where(mask[:, position + 1].unsqueeze(1), stepped, end.expand_as(beta))
+            betas.append(beta)
+
+        betas.reverse()
+
+        return torch.stack(alphas, dim=1) + torch.stack(betas, dim=1) - log_partition[:, None, None]
+
     def apply_transition_constraints(self) -> None:
         """Pin structurally invalid transition scores to `constraint_value`."""
         with torch.no_grad():
