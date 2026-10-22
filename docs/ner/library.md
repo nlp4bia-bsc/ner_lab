@@ -71,7 +71,7 @@ Encoder(
 |---|---|---|
 | `tokenizer` | *required* | A `PreTrainedTokenizerBase`. Its special tokens are subtracted from `max_length` to get the content budget. |
 | `target_label` | *required* | The entity type to tag. One label, three classes: `O`, `B-<label>`, `I-<label>`. |
-| `language` | *required* | Sentence-segmentation language for `pysbd`. Never guessed. |
+| `language` | *required* | Sentence-segmentation language, an ISO 639-1 code: it picks pysbd, Punkt or ICU. Never guessed. |
 | `max_length` | `256` | Token budget per window, *including* special tokens. Raises if the tokenizer's specials leave no room. |
 | `overlap_policy` | `"merge_same_label_then_keep_longest"` | How overlapping gold spans are resolved. See below. |
 | `strategy` | `"greedy"` | `"greedy"`, `"context"`, or a callable `(sentence_ranges, tokens, entities, text, max_content_length) -> windows`. |

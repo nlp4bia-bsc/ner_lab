@@ -29,7 +29,7 @@ assessment.run_dir                         # where everything was written
 | `output_dir` | *required* | Root for run directories. |
 | `base_model` | *required* | Pretrained encoder, by hub name or local path. |
 | `target_label` | *required* | The entity type to tag. One label, three classes (D43). |
-| `language` | *required* | Sentence-segmentation language for `pysbd`. Never guessed (D33). |
+| `language` | *required* | Sentence-segmentation language, an ISO 639-1 code: it picks pysbd, Punkt or ICU (D128). Never guessed (D33). |
 | `architecture` | `"linear"` | `"linear"`, `"crf"`, or your own `(base_model, label2id, id2label, **kwargs) -> model`. |
 | `architecture_kwargs` | `None` | Extra keywords for the chosen architecture, e.g. `{"dropout": 0.2}`. |
 | `training_arguments` | `None` | A `TrainingArguments`, or a mapping of overrides applied to `lab.ner.training.DEFAULTS`. The YAML path uses the mapping. |

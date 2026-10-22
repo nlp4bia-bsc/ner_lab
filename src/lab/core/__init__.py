@@ -57,9 +57,13 @@ from lab.core.segmentation import (
     merge_sentences_crossing_entities,
     merge_short_sentences,
     sentence_token_ranges,
-    split_into_sentences,
     split_into_words,
     tokenize_document,
+)
+from lab.core.sentences import (
+    describe_sentence_segmenter,
+    sentence_segmenter,
+    split_into_sentences,
 )
 from lab.core.sources import (
     CodeMismatchPolicy,
@@ -111,6 +115,7 @@ __all__ = [
     "count_labels",
     "create_split",
     "derive_dataset_name",
+    "describe_sentence_segmenter",
     "document_fingerprints",
     "file_sha256",
     "flatten",
@@ -144,6 +149,7 @@ __all__ = [
     "safe_f1",
     "score_characters",
     "score_spans",
+    "sentence_segmenter",
     "sentence_token_ranges",
     "span_dataframe",
     "spans_from_corpus",

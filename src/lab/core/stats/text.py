@@ -8,11 +8,8 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from lab.core.segmentation import (
-    sentence_token_ranges,
-    split_into_sentences,
-    tokenize_document,
-)
+from lab.core.segmentation import sentence_token_ranges, tokenize_document
+from lab.core.sentences import describe_sentence_segmenter, split_into_sentences
 from lab.core.stats.primitives import (
     DEFAULT_MATTR_WINDOW,
     load_tokenizer,
@@ -68,8 +65,12 @@ class TextMeasurements:
         tokens = sum(self.token_counts)
         words = sum(self.word_counts)
 
+        segmenter = describe_sentence_segmenter(language)
+
         return {
             "language": language,
+            "sentence_segmenter": segmenter["segmenter"],
+            "sentence_segmenter_version": segmenter["version"],
             "documents": len(self.token_counts),
             "sentences": sum(self.sentence_counts),
             "tokens": tokens,

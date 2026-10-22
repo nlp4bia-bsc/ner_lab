@@ -1,32 +1,16 @@
-"""Sentence and word segmentation, and whole-document tokenization."""
+"""Word segmentation, whole-document tokenization, and sentence ranges over the tokens."""
 
 from __future__ import annotations
 
 import bisect
 from typing import TYPE_CHECKING
 
-import pysbd
 import regex
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizerBase
 
 WORD_BOUNDARY = regex.compile(r"(?V1w)\b")
-
-
-def split_into_sentences(text: str, language: str) -> list[dict]:
-    """
-    Split a document into sentence spans, in document order.
-
-    Spans are contiguous and exhaustive: trailing whitespace belongs to the
-    sentence before it, so concatenating every span reconstructs `text` exactly.
-    """
-    segmenter = pysbd.Segmenter(language=language, clean=False, char_span=True)
-
-    return [
-        {"start": span.start, "end": span.end, "text": span.sent}
-        for span in segmenter.segment(text)
-    ]
 
 
 def split_into_words(text: str) -> list[dict]:

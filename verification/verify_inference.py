@@ -111,6 +111,11 @@ def verify_encoder_description(checks: Checks) -> None:
     checks.equal("its context width comes with it", description["context_tokens"], 8)
     checks.equal("the label vocabulary is recorded", description["label2id"], encoder.label2id)
     checks.equal(
+        "the sentence segmenter is recorded",
+        description["sentence_segmenter"]["segmenter"],
+        "pysbd",
+    )
+    checks.equal(
         "the description survives a JSON round trip",
         json.loads(json.dumps(description)),
         description,

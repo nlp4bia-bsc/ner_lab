@@ -10,9 +10,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 from _harness import Checks, run
 
 from lab.core import (
+    describe_sentence_segmenter,
     merge_ranges,
     merge_sentences_crossing_entities,
     merge_short_sentences,
+    sentence_segmenter,
     sentence_token_ranges,
     split_into_sentences,
     split_into_words,
@@ -199,6 +201,77 @@ def verify_segmentation(checks: Checks, tokenizer) -> None:
     checks.equal("merge_ranges takes the left start", fused["token_start"], ranges[0]["token_start"])
     checks.equal("merge_ranges takes the right end", fused["token_end"], ranges[1]["token_end"])
     checks.equal("merge_ranges rebuilds the text", fused["text"], TEXT[fused["start"]:fused["end"]])
+
+
+SEGMENTER_TEXTS = {
+    "es": "  El Dr. García 𝐀 llegó ayer. Está bien.\n\n\nOtra frase 😀 más.  ",
+    "pt": "  O Dr. Silva 𝐀 chegou ontem. Ele está bem.\n\n\nOutra frase 😀 mais.  ",
+    "ca": "  El metge 𝐀 va arribar ahir. Està bé!\n\n\n  Una altra frase 😀 més.  ",
+}
+
+
+def verify_sentence_segmenters(checks: Checks) -> None:
+    checks.equal("es goes to pysbd", sentence_segmenter("es"), "pysbd")
+    checks.equal("pt goes to Punkt", sentence_segmenter("pt"), "punkt")
+    checks.equal("ca goes to ICU", sentence_segmenter("ca"), "icu")
+
+    for code in ("sp", "xx", "ES", "spa"):
+        checks.raises(
+            f"{code!r} is not an ISO 639-1 code",
+            ValueError,
+            sentence_segmenter,
+            code,
+            match="ISO 639-1",
+        )
+
+    checks.raises(
+        "splitting with an unknown code raises", ValueError, split_into_sentences, TEXT, "sp"
+    )
+    checks.equal(
+        "the description names the segmenter and its version",
+        sorted(describe_sentence_segmenter("pt")),
+        ["segmenter", "version"],
+    )
+
+    for language, text in SEGMENTER_TEXTS.items():
+        backend = sentence_segmenter(language)
+        sentences = split_into_sentences(text, language)
+        first = sentences[0]["start"]
+
+        checks.equal(f"{backend}: three sentences", len(sentences), 3)
+        checks.check(
+            f"{backend}: spans round-trip",
+            all(text[s["start"]:s["end"]] == s["text"] for s in sentences),
+        )
+        checks.check(
+            f"{backend}: spans are contiguous",
+            all(a["end"] == b["start"] for a, b in zip(sentences, sentences[1:])),
+        )
+        checks.check(
+            f"{backend}: spans start at the first non-whitespace character",
+            text[:first].isspace() and not text[first].isspace(),
+        )
+        checks.equal(f"{backend}: spans reach the end", sentences[-1]["end"], len(text))
+        checks.check(
+            f"{backend}: no sentence opens on whitespace",
+            not any(s["text"][0].isspace() for s in sentences),
+        )
+        checks.equal(
+            f"{backend}: offsets survive characters outside the BMP",
+            sentences[-1]["text"].split()[0],
+            {"es": "Otra", "pt": "Outra", "ca": "Una"}[language],
+        )
+
+        for blank in ("", "   ", "\n\n"):
+            checks.equal(
+                f"{backend}: {blank!r} has no sentences", split_into_sentences(blank, language), []
+            )
+
+    for code in ("cs", "et", "fi", "ml", "no", "pt", "sl", "sv", "tr"):
+        checks.check(
+            f"the vendored Punkt model for {code!r} loads",
+            split_into_sentences("Uno dos. Tres cuatro.", code),
+        )
 
 
 def verify_offset_trimming(checks: Checks, tokenizers: dict) -> None:
@@ -569,6 +642,7 @@ def main() -> int:
 
     verify_overlaps(checks)
     verify_segmentation(checks, tokenizers["bert"])
+    verify_sentence_segmenters(checks)
     verify_offset_trimming(checks, tokenizers)
     verify_words(checks, tokenizers)
     verify_windowing(checks, tokenizers["bert"])

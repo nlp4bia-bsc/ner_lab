@@ -16,7 +16,7 @@ cd ner_lab
 uv pip install -e ".[ner]"     # or: pip install -e ".[ner]"; ".[nel]" for linking, ".[all]" for both
 ```
 
-Python 3.10 or newer. `lab` alone is torch-free; `lab[ner]` and `lab[nel]` both pin
+Python 3.11 or newer. `lab` alone is torch-free; `lab[ner]` and `lab[nel]` both pin
 `torch==2.10.0` through the shared `lab[torch]` extra.
 
 ## One example

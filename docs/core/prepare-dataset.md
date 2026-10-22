@@ -228,7 +228,10 @@ annotation_stats = compute_annotation_stats(corpus, base_model="xlm-roberta-larg
 `base_model` is a hub id or local path; both functions load their own tokenizer from it, so
 nothing pre-loaded needs to be passed in. `language` drives sentence segmentation and is
 required on `compute_text_stats` for the same reason it is required on `Encoder` — a corpus
-carries one language, recorded in `source_manifest.json`, never per document.
+carries one language, recorded in `source_manifest.json`, never per document. It is an
+ISO 639-1 code, and it picks the segmenter: pysbd where pysbd has the language, Punkt for
+cs, et, fi, ml, no, pt, sl, sv and tr, ICU for every other code. The row's
+`sentence_segmenter` and `sentence_segmenter_version` record which one ran.
 
 Words, for `words`, `vocabulary_words` and `mattr_words`, are the Unicode UAX #29 words of
 `lab.core.split_into_words` that hold a letter or a digit, lowercased — the words the encoder

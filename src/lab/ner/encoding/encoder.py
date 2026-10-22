@@ -14,9 +14,9 @@ import pyarrow.parquet as pq
 from lab.core.segmentation import (
     merge_sentences_crossing_entities,
     sentence_token_ranges,
-    split_into_sentences,
     tokenize_document,
 )
+from lab.core.sentences import describe_sentence_segmenter, split_into_sentences
 from lab.ner.encoding.overlaps import OverlapPolicy, resolve_entities
 from lab.ner.encoding.rows import build_row, compute_max_content_length, special_token_template
 from lab.ner.encoding.tagging import build_iob2_labels, build_label_vocabulary
@@ -190,11 +190,13 @@ def describe_encoder(encoder: Encoder) -> dict:
 
     Recorded next to a saved model so inference can window its input exactly as
     training did. A custom `strategy` is recorded by name only — a callable is
-    code, so `encoder_from_description` needs it handed back.
+    code, so `encoder_from_description` needs it handed back. The sentence segmenter is
+    recorded for provenance only: rebuilding picks it from `language` again.
     """
     return {
         "target_label": encoder.target_label,
         "language": encoder.language,
+        "sentence_segmenter": describe_sentence_segmenter(encoder.language),
         "max_length": encoder.max_length,
         "strategy": strategy_name(encoder.strategy),
         "context_tokens": encoder.context_tokens,
@@ -217,7 +219,8 @@ def encoder_from_description(
     rebuilding it is what proves the description and the model agree. Pass
     `strategy` when the description names a callable this library cannot import.
     """
-    settings = {key: value for key, value in description.items() if key != "label2id"}
+    recorded = ("label2id", "sentence_segmenter")
+    settings = {key: value for key, value in description.items() if key not in recorded}
     named = settings.pop("strategy", "greedy")
 
     if strategy is None and named not in BUILTIN_STRATEGIES:

@@ -14,6 +14,8 @@ against them or, with `keep_gold`, completes around them.
 The encoder methods of `link_entities` keep the gazetteer's embeddings on disk since
 2026-10-04 (D107–D111).
 Words became Unicode UAX #29 words for every tokenizer on 2026-10-09 (D114).
+Sentences are split by pysbd, Punkt or ICU according to `language` since 2026-10-22
+(D128–D131).
 Verification stands at 1,036 checks across eleven scripts, all passing, plus one deliberate
 skip — the NER-API equivalence no longer applies to byte-level tokenizers, whose token
 offsets `tokenize_document` trims and NER-API's `DataLoader` does not, and for the others it

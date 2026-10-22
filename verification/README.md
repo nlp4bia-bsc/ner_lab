@@ -5,7 +5,7 @@ They are plain scripts, not a test suite — run them directly, read the output.
 
 ```bash
 uv venv .venv-verify --python 3.12
-uv pip install --python .venv-verify pandas pyarrow pyyaml pysbd transformers datasets accelerate pytorch-crf nervaluate "ray[tune]" optuna
+uv pip install --python .venv-verify pandas pyarrow pyyaml pysbd nltk icu4py transformers datasets accelerate pytorch-crf nervaluate "ray[tune]" optuna
 uv pip install --python .venv-verify scikit-learn networkx faiss-cpu sentence-transformers rapidfuzz
 uv pip install --python .venv-verify torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
 uv pip install --python .venv-verify --no-deps -e .
@@ -25,7 +25,7 @@ seconds; that one starts a local Ray instance for its mini-sweep and adds a minu
 |---|---|
 | `verify_layering.py` | the one-way import rule: `core` imports no task subpackage, task subpackages never import each other, `core` and the CLI import no torch |
 | `verify_data.py` | labels, BRAT reading, the canonical schema, stratification, splitting, `prepare_dataset` |
-| `verify_encoding.py` | overlap policies, segmentation, UAX #29 words, windowing, IOB2 tagging, row assembly |
+| `verify_encoding.py` | overlap policies, segmentation, sentence segmenter routing (pysbd, Punkt, ICU), UAX #29 words, windowing, IOB2 tagging, row assembly |
 | `verify_encoder.py` | `Encoder` construction and encoding, custom strategies, NER-API equivalence |
 | `verify_models.py` | BIO constraint masks, the architecture registry, custom factories, the `max_length` forward-pass check |
 | `verify_training.py` | row conversion, `training_arguments`, and linear + CRF training end to end |

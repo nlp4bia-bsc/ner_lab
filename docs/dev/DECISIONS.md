@@ -27,7 +27,7 @@ The row is the verdict; the note is the argument.
 | D14 | HPO and training may write to disk; `output_dir` stays an explicit required parameter, and the function still **returns** its result. | Ray writes per-trial dirs and Trainer writes checkpoints — a 40-trial GPU-day sweep can't live in memory. Precedent: `Trainer` requires `output_dir` and `train()` returns `TrainOutput`. What we kill is "the only way to see a result is to read a file afterward". |
 | D15 | Manifests (`sha256`, `run_manifest.json`, dataset-name derivation) are behaviour of the persistence layer. | The pure path must not touch them. |
 | D16 | Augmentation is cut from the first release. | `00b_augment_data.py` was broken in NER-API anyway (expected `--input-jsonl`; nothing emitted jsonl since the parquet migration). |
-| D17 | Python floor `>=3.10`. | Most clusters are at this version. |
+| D17 | Superseded by D129. | |
 | D18 | Drop deps `nltk`, `pydantic`, `psutil` (zero imports). Keep `accelerate` and `optuna` despite zero direct imports. | `accelerate` is required by `Trainer`; `optuna` by `ray.tune.search.optuna.OptunaSearch`. Both would otherwise look dead and get pruned by someone later. |
 | D19 | `ray` must be `ray[tune]`. | Code imports `ray.tune`, `ray.air`, `ray.tune.search.optuna` — none ship in the base wheel. |
 | D20 | No explanatory comments in library code. Rationale goes in this document. | Comments that narrate what the next line does add maintenance surface. Comments are for the non-obvious only (e.g. why a dependency with no imports is required). |
@@ -44,7 +44,7 @@ The row is the verdict; the note is the argument.
 | D31 | **Encoding never normalizes labels.** The corpus is the source of truth by then; `Encoder` uses the labels it is given. | NER-API re-normalized unconditionally at load, silently overriding a corpus built with `normalize_labels=False` — the same knob in two layers with the inner one winning. |
 | D32 | **`normalize_labels` defaults to `False` everywhere.** A corpus keeps the labels its annotations declare; normalization is opt-in. | Renaming a corpus's own vocabulary by default is not ours to do. → notes |
 | D32b | The alias table stays reachable without being front-of-house: `LABEL_ALIASES` and the `normalize_*` functions are exported from `lab.core` and take an `aliases` mapping. `build_corpus` and `prepare_dataset` keep the plain boolean. | A module-level dict users are expected to mutate is a trap. A parameter defaulting to `LABEL_ALIASES` gives a corpus with its own vocabulary a supported path — normalize the annotations, then hand them to `build_corpus`. |
-| D33 | **`language` is a required argument**, on `Encoder`, `split_into_sentences` and `compute_text_stats`. Not read from `metadata.json`, not defaulted to `"es"`. | A fallback here is a silent guess: pysbd segments a Spanish clinical note wrongly under `en` without erroring, which shifts every window boundary. Mandatory is one rule with no hidden state. |
+| D33 | **`language` is a required argument**, on `Encoder`, `split_into_sentences` and `compute_text_stats`. Not read from `metadata.json`, not defaulted to `"es"`. Amended by D128: it is an ISO 639-1 code, and any other value raises. | A fallback here is a silent guess: pysbd segments a Spanish clinical note wrongly under `en` without erroring, which shifts every window boundary. Mandatory is one rule with no hidden state. |
 | D34 | **`ner/models/` builds architectures and nothing else.** No training, no prediction, no saving, no metrics. | NER-API's base model class was 661 lines doing all of that, so swapping an architecture meant subclassing the trainer. Split, the architecture is a function you can replace with your own. |
 | D35 | Architectures are `"linear"` / `"crf"` / any callable `(base_model, label2id, id2label, **kwargs) -> model`, resolved by `build_model`, same shape as `Encoder`'s window strategies. | One extension mechanism for the library, not two. NER-API's "simple" is renamed `"linear"` — it describes the head. |
 | D36 | The two `*Config` dataclasses (46 and 49 fields) are **not** ported. | Both were ~90% training and run plumbing with 3 genuinely model-level fields, now keyword arguments on the CRF constructor. |
@@ -138,6 +138,10 @@ The row is the verdict; the note is the argument.
 | D124 | **Tuning is Optuna TPE: one raw weight per member in [0, 1], normalised, and τ in [0.05, 0.95] (τ alone for `soft`), `n_trials=200`, maximising `metric="span_strict_f1"` — any `span_metrics` key — with `random_state` seeding the sampler.** Ties go to the first best trial. | One evaluation is a weighted sum, a decode and a score on CPU, so hundreds of trials are cheap; a grid explodes with members (about 19,000 points at five, step 0.1). `span_strict_f1` is what model selection already tracks (D44). |
 | D125 | **No per-member calibration in the first version.** | Tuned weights and τ absorb most of it; it would make plain `soft` need validation, and a CRF needs its emissions and transitions scaled, not its marginals. It can be added later as a per-member field of `ensemble.json`. |
 | D126 | **A member trained with a callable window strategy is refused by `fit_ensemble`, naming it.** | `encoding.json` cannot name a callable, and one `strategy` argument cannot say which member it is for. |
+| D128 | **`split_into_sentences` uses pysbd for the 23 languages pysbd has, Punkt for the nine European ones it lacks (cs, et, fi, ml, no, pt, sl, sv, tr), and ICU's sentence break rules for every other ISO 639-1 code. Any other `language` raises.** The table is fixed in `core.sentences`, never read from what is installed. Words stay UAX #29 (D114). | Each language gets the most specific segmenter available, and ICU leaves no ISO 639-1 language without one: Catalan, Basque and Galician are in neither pysbd nor Punkt. Without the ISO 639-1 list a typo such as `"sp"` would reach ICU's root rules without error, the silent guess D33 rules out. → notes |
+| D129 | **Python floor `>=3.11`.** Supersedes D17. | `icu4py`, the ICU binding D128 uses, requires 3.11. |
+| D130 | **The Punkt models of D128's nine languages ship inside `lab`, under `lab/core/data/punkt_tab`, read with nltk's own decoder. nltk is imported only when a Punkt language is segmented.** | nltk downloads its models at runtime, which offline nodes cannot do, and nltk 3.10 refuses to open model files outside its own data roots. Importing nltk at module load added about a second to every `import lab.core`. |
+| D131 | **Every segmenter's spans take pysbd's shape: contiguous from the first non-whitespace character to the end, trailing whitespace on the sentence before it, none for a document that is whitespace throughout. The segmenter and its version are recorded as `sentence_segmenter` in `encoding.json` and as two `text_stats` columns.** `encoder_from_description` ignores the recorded value and picks again from `language`. | Windowing and the statistics must not depend on which segmenter ran. Which one ran moves every window boundary, so it is recorded; ensemble members need not agree on it, since `word_id` does not depend on sentences (D120). |
 
 ## Notes
 
@@ -421,3 +425,15 @@ under soft votes decodes from its marginals, not its Viterbi path; and decoding 
 lets a span continue across a window boundary when the next window's first word votes `I`,
 where `bio_to_spans` decodes per window. Windows end at sentence boundaries, so the second
 arises only inside a sentence too long for one window.
+
+### D128 — sentence segmenters
+
+pysbd and nltk were also considered for word splitting, and neither has a language-specific
+one: pysbd only splits sentences, and nltk's `word_tokenize` uses `language` for Punkt alone,
+its word step being the English Treebank tokenizer, which splits `can't` into `ca` + `n't` and
+rewrites quotes, losing offsets. Words therefore stay as D114 defines them.
+
+ICU comes from `icu4py`, not PyICU: its wheels embed ICU 78.3, the version D114 compared
+`regex` against, so the system-ICU problem that ruled PyICU out does not arise. Its
+`segments()` offsets are UTF-16 code units, which are converted to string indices; a
+character outside the Basic Multilingual Plane would otherwise shift every later offset.
