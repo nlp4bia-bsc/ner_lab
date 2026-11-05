@@ -11,6 +11,7 @@ One folder per subpackage. Each index names its maintainer, its CLI tasks and it
 | [`core/`](core/) | `lab.core` — the data contracts, no `torch` | [prepare-dataset](core/prepare-dataset.md), [library](core/library.md) |
 | [`ner/`](ner/) | `lab.ner` — clinical NER | [train-model](ner/train-model.md), [search-hyperparameters](ner/search-hyperparameters.md), [predict-entities](ner/predict-entities.md), [ensemble](ner/ensemble.md), [library](ner/library.md) |
 | [`nel/`](nel/) | `lab.nel` — entity linking | [link-entities](nel/link-entities.md) |
+| [`summarization/`](summarization/) | `lab.summarization` — clinical summarization | [evaluate-summaries](summarization/evaluate-summaries.md) |
 
 [cli.md](cli.md) is the one page that cuts across them: `lab run` and `lab tasks`, the YAML
 config, namespaced task names, exit codes, cluster submission.

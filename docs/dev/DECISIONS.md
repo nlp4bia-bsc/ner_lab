@@ -142,6 +142,14 @@ The row is the verdict; the note is the argument.
 | D129 | **Python floor `>=3.11`.** Supersedes D17. | `icu4py`, the ICU binding D128 uses, requires 3.11. |
 | D130 | **The Punkt models of D128's nine languages ship inside `lab`, under `lab/core/data/punkt_tab`, read with nltk's own decoder. nltk is imported only when a Punkt language is segmented.** | nltk downloads its models at runtime, which offline nodes cannot do, and nltk 3.10 refuses to open model files outside its own data roots. Importing nltk at module load added about a second to every `import lab.core`. |
 | D131 | **Every segmenter's spans take pysbd's shape: contiguous from the first non-whitespace character to the end, trailing whitespace on the sentence before it, none for a document that is whitespace throughout. The segmenter and its version are recorded as `sentence_segmenter` in `encoding.json` and as two `text_stats` columns.** `encoder_from_description` ignores the recorded value and picks again from `language`. | Windowing and the statistics must not depend on which segmenter ran. Which one ran moves every window boundary, so it is recorded; ensemble members need not agree on it, since `word_id` does not depend on sentences (D120). |
+| D132 | **`lab.summarization` is a fourth task subpackage; its first stage is MultiClinSum2's evaluation as the task `summarization.evaluate_summaries`: ROUGE, BERTScore and the faithfulness, completeness and fluency judges.** Not ported: the consistency judge (D137), SummaC, `prepare_submission.py`, the notebooks. | Summarization training comes later and consumes the same summaries table. The rest is shared-task tooling, as D91 left NEL's research code out. → notes |
+| D133 | **The summaries table is `doc_id \| language \| text \| reference_summary \| generated_summary`; `read_summaries` renames MultiClinSum's `case_id`/`full_case` and takes each row's language from the row.** A generated summary starting `ERROR:` raises by default; `on_failed="drop"` drops it with a warning. | `doc_id`/`text` are the corpus table's names for the same things (D27). The runner read the language off the directory name; every file carries it per record. Dropping rows silently was welded-in policy (rule 3). |
+| D134 | **The judge has two backends: `transformers`, the default, and `vllm`, imported only when chosen and not declared in `lab[summarization]`.** | vLLM pins its own `torch`, so declaring it would break the one-`torch` rule (D85, D7) the moment its pin and ours differ; the official MultiClinSum2 scores came from vLLM, so it must stay reachable. → notes |
+| D135 | **Both backends prepare a prompt as MultiClinSum2's vLLM path did: the chat template's user turn, cut from the left to `max_model_len - max_new_tokens` tokens. A judgement is generated once; nothing retries.** | Decoding is greedy, so a retry returns the same answer: the HF backend's retries regenerated it, the vLLM backend's re-parsed the same text. The HF backend sent the raw prompt, cut at 4096; it never produced official numbers. |
+| D136 | **An unreadable judge answer scores 0, flagged `llm_output_malformed`, and never stops a run; the manifest counts them per language and judge.** Parsing is MultiClinSum2's, case for case, including the `json_malformed` score-only fallback. | One bad generation in thousands should not cost a GPU job, and equal parsing keeps scores comparable with the shared task's. A 0 enters the mean, so the count is what shows how much it moved. |
+| D137 | **No consistency judge for now.** | MultiClinSum2's runner asked it about one summary in one language: `evaluate_cross_lingual` was never called, so its published `consistency` is not a cross-lingual score. User decision; a real one compares languages of one document and is open as Q22. |
+| D138 | **MultiClinSum2's configuration modules, Pydantic schemas and agent classes are not ported: settings are keyword arguments defaulting to its configured values, judges are a template and a parse function each, and one `JudgeModel` holds the loaded model.** Outputs are `classic_scores.parquet`, `judgements.jsonl`, `scores.parquet`, `evaluation_metrics.json` (per language) and `evaluation_manifest.json`; no `report.json`. | Rule 1 and CODE_STYLE rule 5. Every score `report.json` held is in `scores.parquet` or `evaluation_metrics.json`; its nesting was the Pydantic models'. |
+| D139 | **BERTScore loads one `BERTScorer` per language and scores `batch_size=32` pairs per call, with mdeberta-v3-base's 12th layer, no baseline rescaling, and texts cut at 512 tokens; `sentencepiece` joins the extra.** | MultiClinSum2 reloaded the encoder for every chunk of 32; the chunks are the same, so the scores are. It ran with rescaling off, although its READMEs say on. mdeberta ships only `spm.model`, which transformers 5 cannot read without `sentencepiece`. → notes |
 
 ## Notes
 
@@ -437,3 +445,35 @@ ICU comes from `icu4py`, not PyICU: its wheels embed ICU 78.3, the version D114 
 `regex` against, so the system-ICU problem that ruled PyICU out does not arise. Its
 `segments()` offsets are UTF-16 code units, which are converted to string indices; a
 character outside the Basic Multilingual Plane would otherwise shift every later offset.
+
+### D132 — `lab.summarization`
+
+The source is `multiclinsum2/evaluation`, the evaluation of the second MultiClinSum shared
+task. In: the ROUGE and BERTScore metrics, the faithfulness, completeness and fluency judges
+with their prompts verbatim, both judge backends, the per-language statistics. Out:
+`prepare_submission.py` (a participant zip to JSONL, shared-task plumbing),
+`summac_scorer/`, the notebooks, `data_characterization/`, and the runner's `--team_dir`
+walk, which `summaries` taking a list of files and a reusable `JudgeModel` replace.
+
+`verify_summarization.py` checks equivalence side by side against the MultiClinSum2 code in
+one environment: ROUGE, every prompt, the parse of 18 answers covering each fallback,
+the statistics and BERTScore are equal, and ROUGE is equal on 200 real Greek summaries.
+Against the stored official results, ROUGE is equal for English, the only language the old
+tokenizer read correctly, and BERTScore differs by a mean of about 1e-3 (Q23).
+
+### D134 — the vLLM backend
+
+`backend="vllm"` imports vLLM inside `load_judge_model` and `JudgeModel.generate`, so
+`lab.summarization` imports and runs without it. To use it, vLLM's environment gets `lab`
+with `--no-deps`, which is how MultiClinSum2's own environment was built. The parameters only
+vLLM reads, `tensor_parallel_size` and `gpu_memory_utilization`, raise when changed with the
+`transformers` backend, and `device` raises with vLLM, which places the model itself. The
+`trust_remote_code=True` MultiClinSum2 passed is dropped: EuroLLM and Qwen2.5 need none.
+
+### D139 — BERTScore
+
+`bert_score` passes `tokenizer.model_max_length` as `max_length`, `int(1e30)` for
+mdeberta, which overflows the Rust tokenizer. MultiClinSum2 replaced
+`bert_score.utils.sent_encode` for good; `score_bertscore` replaces it for the call and
+restores it. Batches of 32 are kept rather than one call over a language because the batch a summary is padded in
+moves its score (Q23), so the same chunks are what keeps scores equal.

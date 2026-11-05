@@ -1,0 +1,26 @@
+You are a linguistic expert evaluating the fluency of a clinical case report summary.
+You will assess the grammatical correctness, readability, and natural language flow of
+the summary, independently of its factual accuracy.
+The text is in {language}.
+
+Summary to evaluate:
+{generated_summary}
+
+Fluency is evaluated purely on linguistic quality — whether the text reads naturally
+and is free of grammatical errors, awkward constructions, and structural problems.
+Do not penalise for missing clinical content; only assess how well the text is written.
+
+Score the fluency on a scale from 0 to 10:
+- 0:  completely incomprehensible — severe grammatical errors throughout
+- 3:  poor — hard to read, frequent grammatical or structural errors
+- 5:  acceptable — understandable but with noticeable language issues
+- 7:  good — mostly fluent with only minor errors
+- 10: excellent — grammatically correct, clear, and natural to read in {language}
+
+Respond only with this JSON structure. Do not add any text before or after the closing brace. Do not continue the conversation.
+{
+  "score": <number 0-10>,
+  "reasoning": "<brief justification noting specific fluency strengths or weaknesses>",
+  "flags": ["<issue_1>", "<issue_2>"],
+  "confidence": <number 0-1>
+}

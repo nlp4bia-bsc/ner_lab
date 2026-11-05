@@ -2,7 +2,8 @@
 
 The unit's NLP library: one repository, one import namespace, one CLI. `lab.core` holds the
 data contracts with no `torch`; each task lives in its own subpackage on top of it —
-`lab.ner` for clinical NER, `lab.nel` for linking mentions to an ontology.
+`lab.ner` for clinical NER, `lab.nel` for linking mentions to an ontology, `lab.summarization`
+for evaluating clinical summaries.
 
 Every step is a public function you call with explicit named arguments. Nothing takes a
 config dict, and nothing writes to disk unless you asked it to. A thin CLI runs the same
@@ -13,11 +14,11 @@ functions from a YAML file.
 ```bash
 git clone git@github.com:nlp4bia-bsc/ner_lab.git
 cd ner_lab
-uv pip install -e ".[ner]"     # or: pip install -e ".[ner]"; ".[nel]" for linking, ".[all]" for both
+uv pip install -e ".[ner]"     # or: pip install -e ".[ner]"; ".[nel]" for linking, ".[summarization]", ".[all]" for every one
 ```
 
-Python 3.11 or newer. `lab` alone is torch-free; `lab[ner]` and `lab[nel]` both pin
-`torch==2.10.0` through the shared `lab[torch]` extra.
+Python 3.11 or newer. `lab` alone is torch-free; `lab[ner]`, `lab[nel]` and
+`lab[summarization]` all pin `torch==2.10.0` through the shared `lab[torch]` extra.
 
 ## One example
 
@@ -47,6 +48,7 @@ Both routes call the same function and produce identical output.
 | [`docs/core/`](docs/core/) | `lab.core` | the two tables, `prepare_dataset`, splitting, scoring |
 | [`docs/ner/`](docs/ner/) | `lab.ner` | `train_model`, `search_hyperparameters`, `predict_entities`, `fit_ensemble`, `predict_ensemble`, and the pieces underneath |
 | [`docs/nel/`](docs/nel/) | `lab.nel` | `link_entities`, the candidate methods, reranking |
+| [`docs/summarization/`](docs/summarization/) | `lab.summarization` | `evaluate_summaries`: ROUGE, BERTScore and LLM judges |
 | [`docs/cli.md`](docs/cli.md) | `lab` | `lab run`, `lab tasks`, the YAML config |
 | [`docs/dev/`](docs/dev/) | | how the library is built: design, decisions, roadmap, progress |
 

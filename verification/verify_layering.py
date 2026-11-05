@@ -10,8 +10,8 @@ from pathlib import Path
 from _harness import Checks, run
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "lab"
-TASK_SUBPACKAGES = ("ner", "nel")
-TORCH_MODULES = ("torch", "torchcrf", "datasets", "accelerate", "ray", "optuna")
+TASK_SUBPACKAGES = ("ner", "nel", "summarization")
+TORCH_MODULES = ("torch", "torchcrf", "datasets", "accelerate", "ray", "optuna", "vllm", "bert_score")
 
 
 def imported_modules(path: Path) -> list[str]:

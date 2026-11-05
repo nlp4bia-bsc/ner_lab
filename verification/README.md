@@ -7,6 +7,7 @@ They are plain scripts, not a test suite — run them directly, read the output.
 uv venv .venv-verify --python 3.12
 uv pip install --python .venv-verify pandas pyarrow pyyaml pysbd nltk icu4py transformers datasets accelerate pytorch-crf nervaluate "ray[tune]" optuna
 uv pip install --python .venv-verify scikit-learn networkx faiss-cpu sentence-transformers rapidfuzz
+uv pip install --python .venv-verify rouge-score bert-score sentencepiece pydantic
 uv pip install --python .venv-verify torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
 uv pip install --python .venv-verify --no-deps -e .
 
@@ -35,6 +36,7 @@ seconds; that one starts a local Ray instance for its mini-sweep and adds a minu
 | `verify_inference.py` | span decoding, `predict_entities` end to end, scoring against gold and against a reference |
 | `verify_ensemble.py` | voting and two-stage decoding, one-member equivalence with `predict_entities`, CRF marginals against brute-force path enumeration, `ensemble.json` and weight digests, `fit_ensemble` and `predict_ensemble` end to end |
 | `verify_nel.py` | nlp4bia-linking's own tests, side-by-side equivalence with it, `link_entities` end to end on every method, with a hierarchy, with the reranker |
+| `verify_summarization.py` | the summaries reader, ROUGE's Unicode tokens, BERTScore, every judge prompt and answer fallback, a miniature judge model and its truncation, `evaluate_summaries` end to end and from YAML, side-by-side equivalence with MultiClinSum2's evaluation |
 
 Everything runs on synthetic fixtures built by `fixtures.py`, so the scripts pass on a
 machine with no corpora at all. Two groups of checks additionally use real data and skip
@@ -50,6 +52,11 @@ cleanly when it is missing:
   `~/bsc/nlp4bia-linking`. Runs every matcher, the sparse retrievers, RRF, the metrics, the
   graph distances and the readers from both packages over the same synthetic gazetteer and
   mentions, and asserts the candidates are identical.
+- **MultiClinSum2 equivalence** — `MULTICLINSUM2_EVAL_ROOT`, defaulting to
+  `~/bsc/multiclinsum2/evaluation`. Imports its metrics and agents (`pydantic` is only needed
+  for this) and asserts ROUGE, the prompts, the answer parsing, the statistics and BERTScore
+  equal `lab`'s; with the baseline outputs beside the checkout, also ROUGE on 200 real Greek
+  summaries.
 
 A skip is printed, never silently passed. Check the summary line for a skip count before
 trusting a green run.
