@@ -43,7 +43,13 @@ nel = [
     "faiss-gpu>=1.14.3; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "faiss-cpu>=1.14.3; sys_platform != 'linux' or platform_machine != 'x86_64'",
 ]
-all = ["lab[ner,nel]"]
+summarization = [
+    "lab[torch]",
+    "rouge-score>=0.1.2",
+    "bert-score>=0.3.12",
+    "sentencepiece>=0.2.0",  # mdeberta-v3-base ships only spm.model; transformers converts it with this
+]
+all = ["lab[ner,nel,summarization]"]
 
 [project.scripts]
 lab = "lab.cli:main"

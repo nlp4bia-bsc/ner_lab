@@ -16,6 +16,11 @@ The encoder methods of `link_entities` keep the gazetteer's embeddings on disk s
 Words became Unicode UAX #29 words for every tokenizer on 2026-10-09 (D114).
 Sentences are split by pysbd, Punkt or ICU according to `language` since 2026-10-22
 (D128–D131).
+`lab.summarization` landed on 2026-11-05 with its first stage, MultiClinSum2's summary
+evaluation as `summarization.evaluate_summaries` (D132–D139): ROUGE, BERTScore and the
+faithfulness, completeness and fluency judges, on a `transformers` or vLLM judge.
+`verify_summarization.py` adds 143 checks, including side-by-side equivalence with the
+MultiClinSum2 code.
 Verification stands at 1,036 checks across eleven scripts, all passing, plus one deliberate
 skip — the NER-API equivalence no longer applies to byte-level tokenizers, whose token
 offsets `tokenize_document` trims and NER-API's `DataLoader` does not, and for the others it
@@ -39,6 +44,12 @@ consumes is confirmed (Q16).
 - **Checking persisted embeddings on a real encoder.** D107–D111 are verified with a tiny
   local model only. On a GPU machine, with the SympTEMIST gazetteer and test mentions: recall@k
   and MRR from a loaded index must equal a fresh build's.
+- **Checking the judges on a real model.** D132–D139 are verified against the MultiClinSum2
+  code side by side and with a canned and a miniature judge. On a GPU, in vLLM's environment,
+  with EuroLLM-9B-Instruct over one baseline language: the judge scores must match
+  `evaluation_results/eurollm_agent/`, up to vLLM's batch-dependent numerics.
+- **Summarization training.** The second stage of `lab.summarization`, over the same
+  summaries table.
 
 ## Open questions
 
@@ -77,6 +88,23 @@ Nothing here blocks the next stage. Each is decided when the stage that needs it
 - **Q21 — `dense` does not collapse duplicate codes.** `transformer_faiss` and the lexical
   methods keep each code once at its best term; `dense` returns the top-k terms, so one code
   can fill several of the `top_k` slots and recall@k is not comparable across methods.
+- **Q22 — A cross-lingual consistency judge.** MultiClinSum2's prompt compares one
+  document's summaries across languages, but its runner only ever asked about one (D137). A
+  real one scores per `doc_id` across the languages present, so the summaries table needs a
+  key shared across languages — MultiClinSum's `case_id`s embed the language
+  (`multiclinsum2_test_1_es`) — and yields one score per document, not per summary.
+- **Q23 — BERTScore is not exactly reproducible.** Against MultiClinSum2's stored Greek
+  scores, rescoring the same chunk of 32 differs by a mean of 1.3e-3 and at most 1.6e-2. Two
+  causes were found. The batch a summary is padded in moves its score by up to about 1e-3 in
+  one environment. And transformers 5 reads mdeberta's full-width punctuation (`，（）`) as
+  `[UNK]`, where sentencepiece, which MultiClinSum2's transformers 4 used, NFKC-normalises it
+  to ASCII; the Qwen baseline's Greek summaries hold Chinese. NFKC-normalising text before
+  BERTScore would restore the old tokens, at the cost of a behaviour change.
+- **Q24 — Unreadable answers score 0.** D136 keeps MultiClinSum2's rule, so a judge that
+  fails to answer lowers the mean as if it had judged the summary worthless. Leaving the
+  score missing instead would report the mean over answers that were read, beside the count.
+- **Q25 — Completeness reports no confidence.** Its prompt does not ask for one, so every
+  completeness `confidence` is 0. Asking would change the prompt, and with it every score.
 
 *Closed:* Q1–Q9 during the migration (scope, cluster scripts → D10, task naming → D48,
 Python floor → D17, public API → D65); Q12, Q14, Q15 (gold codes → D98–D106); Q17

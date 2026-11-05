@@ -59,9 +59,10 @@ maintainer per tool, that is where projects rot (D82).
 "One library" and "separate environments" answer different questions. One library is about
 the repository and namespace; separate environments is about distributions, and extras give
 that: `lab` alone is torch-free, `lab[torch]` is the one place the exact `torch` pin lives,
-and `lab[ner]`, `lab[nel]` build on it, so the unit stays on one `torch` and a tool cannot
-drift without editing the shared extra (D85). Extras and subpackages are separate axes;
-sharing a pin does not require sharing code.
+and `lab[ner]`, `lab[nel]`, `lab[summarization]` build on it, so the unit stays on one
+`torch` and a tool cannot drift without editing the shared extra (D85). Extras and
+subpackages are separate axes; sharing a pin does not require sharing code. The one runtime
+outside the pin is vLLM, which brings its own `torch` and so is never declared (D134).
 
 ---
 
@@ -79,12 +80,13 @@ Across subpackages, imports point one way:
 
 ```
 lab/
-├── core/    data contracts, I/O, provenance, task registry.  No torch.
-├── ner/     clinical NER: encoding, models, training, HPO, inference.
-├── nel/     entity linking: matching, retrieval, reranking, fusion.
-└── cli.py   one entry point, `lab`.
+├── core/           data contracts, I/O, provenance, task registry.  No torch.
+├── ner/            clinical NER: encoding, models, training, HPO, inference.
+├── nel/            entity linking: matching, retrieval, reranking, fusion.
+├── summarization/  clinical summarization: evaluation (ROUGE, BERTScore, LLM judges).
+└── cli.py          one entry point, `lab`.
 
-core  <-  { ner, nel, xlt }
+core  <-  { ner, nel, summarization, xlt }
 ```
 
 `core` imports nothing from a task subpackage, and a task subpackage never imports another

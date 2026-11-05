@@ -8,7 +8,7 @@ from collections.abc import Callable
 from types import ModuleType
 from typing import Any
 
-NAMESPACES = ("core", "ner", "nel")
+NAMESPACES = ("core", "ner", "nel", "summarization")
 
 TASKS: dict[str, tuple[str, str]] = {
     "prepare_dataset": ("lab.core.dataset", "prepare_dataset"),

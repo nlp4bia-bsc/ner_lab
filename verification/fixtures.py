@@ -101,6 +101,51 @@ def entities_of(corpus: pd.DataFrame, doc_id: str) -> list[dict]:
     return json.loads(row["entities_json"])
 
 
+SUMMARY_CASES = {
+    "es": (
+        "Paciente varón de 65 años que ingresa por disnea y fiebre. Se diagnostica neumonía "
+        "bilateral y se trata con antibióticos durante diez días, con buena evolución.",
+        "Varón de 65 años con neumonía bilateral tratada con antibióticos, con buena evolución.",
+        "Hombre de 65 años con disnea y neumonía, tratado con antibióticos.",
+    ),
+    "el": (
+        "Ασθενής 70 ετών με πυρετό και βήχα. Διαγνώστηκε πνευμονία και έλαβε αντιβίωση.",
+        "Ασθενής 70 ετών με πνευμονία που αντιμετωπίστηκε με αντιβίωση.",
+        "Ασθενής με πνευμονία και πυρετό που έλαβε αντιβίωση.",
+    ),
+    "en": (
+        "A 40-year-old woman presented with chest pain. Myocardial infarction was ruled out "
+        "and she was discharged after two days of observation.",
+        "A 40-year-old woman with chest pain; infarction ruled out, discharged after two days.",
+        "Woman, 40, chest pain, infarction excluded, discharged.",
+    ),
+}
+
+
+def synthetic_summaries(n_per_language: int = 3) -> pd.DataFrame:
+    """
+    A summaries frame in Spanish, Greek and English, `n_per_language` documents each.
+
+    The first document of each language repeats its reference as the generated
+    summary, so its ROUGE and BERTScore are exactly 1.
+    """
+    rows = []
+
+    for language, (text, reference, generated) in SUMMARY_CASES.items():
+        for index in range(n_per_language):
+            rows.append(
+                {
+                    "doc_id": f"case_{index}_{language}",
+                    "language": language,
+                    "text": text,
+                    "reference_summary": reference,
+                    "generated_summary": reference if index == 0 else f"{generated} ({index})",
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
 def tiny_base_model(root: Path, tokenizer) -> Path:
     """
     Write a randomly initialized miniature BERT backbone to disk and return its path.

@@ -1,0 +1,35 @@
+You are a medical expert evaluating the completeness of a clinical case report summary.
+You will evaluate the summary against the original case report using the CARE guidelines.
+The texts are in {language}.
+
+Original case report:
+{source_text}
+
+Summary to evaluate:
+{generated_summary}
+
+Evaluate the summary on each of the following 6 dimensions.
+For each dimension, assign a score from 0 to 10:
+- 0: completely missing
+- 5: partially present
+- 10: fully and accurately covered
+
+Dimensions:
+1. Patient demographics (age, gender, ethnicity, occupation)
+2. Clinical presentation (main symptoms, medical history, comorbidities)
+3. Diagnosis (diagnostic methods, reasoning, challenges, differential diagnosis)
+4. Intervention (type of treatment, dosage, duration, changes with rationale)
+5. Outcome (clinical course, follow-up results, adverse events)
+6. Follow-up (adherence, tolerability, clinician and patient assessed outcomes)
+
+Respond only with this JSON structure. Do not add any text before or after the closing brace. Do not continue the conversation.
+{
+  "patient_demographics": <score 0-10>,
+  "clinical_presentation": <score 0-10>,
+  "diagnosis": <score 0-10>,
+  "intervention": <score 0-10>,
+  "outcome": <score 0-10>,
+  "follow_up": <score 0-10>,
+  "reasoning": "<brief justification for each dimension>",
+  "flags": ["<issue1>", "<issue2>"]
+}
