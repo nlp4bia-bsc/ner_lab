@@ -274,12 +274,15 @@ def _seed_score(
 ) -> float:
     set_seed(arguments.seed)
 
+    settings = dict(architecture_kwargs or {})
+    if architecture == "multihead":
+        settings["entity_labels"] = variant.entity_labels
     model = build_model(
         base_model=variant.base_model,
         label2id=variant.label2id,
         id2label=variant.id2label,
         architecture=architecture,
-        **(architecture_kwargs or {}),
+        **settings,
     )
 
     result = train(

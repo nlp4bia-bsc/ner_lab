@@ -120,6 +120,8 @@ def predict_word_table(
     which is not always the per-word argmax of those marginals.
     """
     model, tokenizer, description = load_model(model_dir, device=device)
+    if description["model"]["architecture"] == "multihead":
+        raise ValueError("Multihead ensembles are not supported; use predict_entities.")
     encoder = encoder_from_description(
         description["encoding"], tokenizer, require_target_label=False
     )

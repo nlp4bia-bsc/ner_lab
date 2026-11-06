@@ -78,8 +78,8 @@ def search_hyperparameters(
     split_dir: str | Path,
     output_dir: str | Path,
     base_models: str | Sequence[str],
-    target_label: str,
-    language: str,
+    target_label: str | None = None,
+    language: str | None = None,
     architecture: str | Architecture = "linear",
     architecture_kwargs: dict[str, Any] | None = None,
     search_space: Mapping[str, Any] | None = None,
@@ -90,7 +90,7 @@ def search_hyperparameters(
     strategies: Sequence[str | WindowStrategy] = ("greedy",),
     context_tokens: Sequence[int] | None = None,
     max_lengths: Sequence[int] = (256,),
-    overlap_policy: OverlapPolicy = "merge_same_label_then_keep_longest",
+    overlap_policy: OverlapPolicy | None = None,
     min_sentence_tokens: int = 4,
     min_overlap_percentage: float = 40.0,
     early_stopping_patience: int | None = 5,
@@ -156,6 +156,17 @@ def search_hyperparameters(
     import ray
     from ray import tune
 
+    from lab.ner.training.multihead import architecture_arguments
+
+    if language is None:
+        raise ValueError("language is required; pass an ISO 639-1 code explicitly.")
+    if (architecture == "multihead") != (target_label is None):
+        raise ValueError("Use target_label=None exactly when architecture='multihead'.")
+    training_arguments = architecture_arguments(training_arguments, architecture)
+    if overlap_policy is None:
+        overlap_policy = (
+            "error" if architecture == "multihead" else "merge_same_label_then_keep_longest"
+        )
     sweep_start = time.monotonic()
 
     run_dir = claim_run_dir(output_dir, overwrite)
@@ -174,7 +185,15 @@ def search_hyperparameters(
     base_arguments = resolve_base_arguments(training_arguments, run_dir, random_state)
     metric_key, greater_is_better = _objective(base_arguments)
 
-    _check_variant_lengths(variants, target_label, architecture, architecture_kwargs, report)
+    checked_kwargs = dict(architecture_kwargs or {})
+    if architecture == "multihead":
+        from lab.ner.encoding.multihead import training_entity_labels
+
+        labels = training_entity_labels(partitions["train"])
+        if "entity_labels" in checked_kwargs and checked_kwargs["entity_labels"] != labels:
+            raise ValueError("architecture_kwargs.entity_labels disagrees with training labels.")
+        checked_kwargs["entity_labels"] = labels
+    _check_variant_lengths(variants, target_label, architecture, checked_kwargs, report)
 
     full_space = {**space, "variant": tune.choice(list(variants))}
 
@@ -193,6 +212,11 @@ def search_hyperparameters(
             "architecture_kwargs": architecture_kwargs or {},
         },
         "encoding": {
+            **(
+                {"entity_labels": checked_kwargs["entity_labels"]}
+                if architecture == "multihead"
+                else {}
+            ),
             "target_label": target_label,
             "language": language,
             "overlap_policy": overlap_policy,
@@ -343,14 +367,18 @@ def _validated_search_space(search_space: Mapping[str, Any] | None) -> dict[str,
 
 def _check_variant_lengths(
     variants: dict[str, dict[str, Any]],
-    target_label: str,
+    target_label: str | None,
     architecture: str | Architecture,
     architecture_kwargs: dict[str, Any] | None,
     report: bool,
 ) -> None:
     from transformers import AutoTokenizer
 
-    vocabulary = build_label_vocabulary(target_label)
+    vocabulary = (
+        build_label_vocabulary(target_label)
+        if target_label is not None
+        else {"label2id": {"O": 0, "B": 1, "I": 2}, "id2label": {0: "O", 1: "B", 2: "I"}}
+    )
     lengths_by_model: dict[str, set[int]] = {}
 
     for specification in variants.values():

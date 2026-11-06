@@ -79,3 +79,16 @@ output_dir: assets/predictions
 batch_size: 32
 min_score: 0.5
 ```
+
+## Multi-Head checkpoints
+
+The same `predict_entities` call loads a Multi-Head checkpoint, restores its fixed catalogue
+and produces one canonical scored span table containing every head. Input can be raw text
+without annotations. See [the inference YAML](configs/multihead-predict.yaml).
+Softmax and BIO reconstruction run independently per head; overlaps between types survive,
+and only exact span duplicates are collapsed at their highest score.
+
+With annotated input or `reference`, all annotated labels are scored. Unknown types warn and
+count as micro false negatives without changing the model. Strict per-type, macro and micro
+metrics replace the single-label SemEval scenarios; character metrics remain available.
+See [metric definitions](library.md#strict-metrics). TSV and Parquet retain the same columns.

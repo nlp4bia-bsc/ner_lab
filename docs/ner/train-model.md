@@ -93,3 +93,30 @@ training_arguments:
   num_train_epochs: 8
   per_device_train_batch_size: 16
 ```
+
+## Train all annotated entity types
+
+Choose `architecture: multihead`, omit `target_label` or set it to `null`, and still supply
+`language` explicitly. The catalogue is discovered from train only, independently per fold;
+validation-only types warn and remain false negatives rather than becoming heads.
+`overlap_policy` defaults to strict intraclass error for this architecture. Distinct labels
+can overlap freely. See [Multi-Head BIO](library.md#multi-head-bio) for masking, unknown-label
+scores, representation limits and persistence.
+
+[configs/multihead-train.yaml](configs/multihead-train.yaml) is a complete `lab run` config.
+Put a pretrained Transformer and tokenizer in `assets/base-model` and a `prepare_dataset`
+split at its `split_dir`, then run:
+
+```bash
+lab run docs/ner/configs/multihead-train.yaml
+lab run docs/ner/configs/multihead-predict.yaml
+```
+
+The inference example reads `.txt` files from `assets/texts`. A plain split writes
+`assets/runs/multihead/best_model`; a k-fold split writes `fold_XX/best_model` instead, so
+point inference at the desired fold. `save_model: true` is necessary to keep weights.
+
+The selection default is `span_strict_macro_f1`. Override
+`training_arguments.metric_for_best_model` with `span_strict_micro_f1`,
+`span_strict_f1__<exact-label>` or `eval_loss`; `greater_is_better` remains configurable.
+No entity list, additional CLI task or per-label training run is needed.

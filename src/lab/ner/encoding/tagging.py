@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 
 def build_iob2_labels(tokens: list[dict], entities: list[dict], target_label: str) -> list[dict]:
     """
@@ -62,3 +64,14 @@ def build_label_vocabulary(target_label: str) -> dict:
         "label2id": {label: index for index, label in enumerate(labels)},
         "id2label": dict(enumerate(labels)),
     }
+
+
+def validate_entity_labels(entity_labels: Sequence[str]) -> list[str]:
+    """Validate an ordered, nonempty head catalogue without changing its order."""
+    labels = list(entity_labels)
+    if not labels or any(not isinstance(label, str) or not label.strip() for label in labels):
+        raise ValueError("entity_labels must contain nonempty strings discovered from train.")
+    if len(set(labels)) != len(labels):
+        raise ValueError(f"Duplicate entity_labels: {labels[:10]!r}.")
+
+    return labels

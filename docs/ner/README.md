@@ -50,3 +50,9 @@ Everything else keeps its subpackage path — `lab.ner.encoding`, `lab.ner.model
 `lab.ner.training`, `lab.ner.evaluation`, `lab.ner.hpo`, `lab.ner.ensemble` — and so do the eleven above, so
 `from lab.ner.training import train_model` remains correct. Names on `lab.ner` resolve on
 first use, so `import lab.ner` loads nothing.
+
+`architecture="multihead"` adds simultaneous categorical BIO heads over one shared
+Transformer. Entity types are discovered from training annotations; cross-type overlaps
+survive in one canonical span output. Start with
+[Multi-Head BIO](library.md#multi-head-bio) and the
+[training example](configs/multihead-train.yaml).

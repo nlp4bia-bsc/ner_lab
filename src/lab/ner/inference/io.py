@@ -79,7 +79,7 @@ def read_reference(reference: str | Path, target_label: str | None = None) -> pd
 
 
 def resolve_gold(
-    reference: str | Path | None, corpus: pd.DataFrame, target_label: str
+    reference: str | Path | None, corpus: pd.DataFrame, target_label: str | None
 ) -> pd.DataFrame | None:
     """
     The gold spans to score against: `reference` when given, else the corpus's own.

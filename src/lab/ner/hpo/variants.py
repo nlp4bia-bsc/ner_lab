@@ -28,6 +28,7 @@ class EncodedVariant:
     id2label: dict[int, str]
     train_rows: pd.DataFrame
     validation_rows: pd.DataFrame
+    entity_labels: list[str] | None = None
 
 
 def variant_key(
@@ -99,9 +100,9 @@ def describe_variants(variants: dict[str, dict[str, Any]]) -> dict[str, dict[str
 def encode_variants(
     partitions: dict[str, Path | list[Path]],
     variants: dict[str, dict[str, Any]],
-    target_label: str,
+    target_label: str | None,
     language: str,
-    overlap_policy: OverlapPolicy = "merge_same_label_then_keep_longest",
+    overlap_policy: OverlapPolicy | None = None,
     min_sentence_tokens: int = 4,
 ) -> dict[str, EncodedVariant]:
     """
@@ -111,6 +112,9 @@ def encode_variants(
     windowed `len(variants)` times per sweep rather than once per trial.
     Tokenizers are loaded once per base model and shared across its variants.
     """
+    from lab.ner.encoding.multihead import training_entity_labels
+
+    entity_labels = training_entity_labels(partitions["train"]) if target_label is None else None
     tokenizers: dict[str, Any] = {}
     encoded: dict[str, EncodedVariant] = {}
 
@@ -123,6 +127,7 @@ def encode_variants(
         encoder = Encoder(
             tokenizer=tokenizers[base_model],
             target_label=target_label,
+            entity_labels=entity_labels,
             language=language,
             max_length=specification["max_length"],
             overlap_policy=overlap_policy,
@@ -141,6 +146,7 @@ def encode_variants(
             id2label=encoder.id2label,
             train_rows=encode_partition(encoder, partitions["train"]),
             validation_rows=encode_partition(encoder, partitions["validation"]),
+            entity_labels=entity_labels,
         )
 
     return encoded

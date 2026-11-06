@@ -278,3 +278,132 @@ the character being the unit, so a boundary that is nearly right scores nearly f
 instead of zero. Both families are `lab.core.score_spans` and `lab.core.score_characters`
 applied to the spans reconstructed from the rows; `lab.ner.evaluation.span_metrics` is the
 call that joins them, and `token_diagnostics` the call that adds the token half.
+
+## Multi-Head BIO
+
+`architecture="multihead"` extends the single-label contract (D132–D135); `linear`,
+`crf`, their three-dimensional outputs and their existing checkpoints keep their semantics.
+One `AutoModel` backbone runs once per batch. A dropout and a single
+`Linear(hidden_size, 3 * K)` projection implement K independent categorical heads:
+
+| Value | Shape | Meaning |
+|---|---|---|
+| Hidden states | `[B, L, H]` | Shared Transformer representation |
+| Logits | `[B, L, K, 3]` | Independent O/B/I logits for each entity |
+| Labels / predictions | `[B, L, K]` | `0=O`, `1=B`, `2=I`; `-100` masks labels |
+
+The catalogue is a sorted list of the labels actually present in training annotations,
+without normalization. It never comes from `CANONICAL_LABELS`. `train_model` and HPO discover
+it automatically when `target_label=None`; do not supply entity names in YAML.
+For direct composition, first encode **train**, then reuse that encoder for validation:
+
+```python
+from lab.ner import Encoder, build_model, training_arguments, build_compute_metrics, train
+from lab.ner.training import model_encoding
+
+encoder = Encoder(tokenizer, target_label=None, language="es", max_length=256)
+train_rows = encoder.encode(train_corpus)  # discovers and fixes entity_labels
+validation_rows = encoder.encode(validation_corpus)  # never adds heads
+model = build_model(
+    base_model, encoder.label2id, encoder.id2label,
+    architecture="multihead", entity_labels=encoder.entity_labels, dropout=0.1,
+)
+result = train(
+    model=model, tokenizer=tokenizer, train_rows=train_rows,
+    validation_rows=validation_rows,
+    training_arguments=training_arguments("assets/run", architecture="multihead"),
+    compute_metrics=build_compute_metrics(validation_rows, tokenizer, encoder.id2label),
+    save_model=True,
+    model_encoding=model_encoding(encoder, base_model, architecture="multihead"),
+)
+```
+
+`entity_labels` is an optional final argument on `Encoder`, for a catalogue already discovered
+from authorized training data. `lab.ner.encoding.discover_entity_labels(train_corpus)` exposes
+the discovery step. An empty training catalogue raises. `encode_document` needs a configured
+catalogue; it cannot infer all training types from one document. `encode_parquet` in multihead
+mode reads the corpus into memory, unlike the streaming single-label path.
+
+### Overlap and masking
+
+Input IDs, offsets, UAX #29 word IDs, attention masks and windows are shared. One row is
+written per window, with only its labels gaining an extra axis. First subwords are supervised;
+continuations, whitespace-only tokens, special tokens and context flanks are `-100` for every
+head. A multihead collator pads label **vectors** to `[B,L,K]`, including left padding;
+`MultiHeadTrainer` realigns left-padded predictions before reconstruction.
+
+Cross-type overlap, nesting, and different types on the same token are preserved. The
+existing `build_iob2_labels` and `bio_to_spans` operate independently for each head; there is
+no cross-type competition, merging or NMS. `overlap_policy=None` resolves to `"error"` for
+Multi-Head and to the historical `"merge_same_label_then_keep_longest"` for a single label.
+Intraclass overlaps raise with document and spans by default. Explicit `keep_longest`,
+`keep_shortest` or `merge_same_label_then_keep_longest` apply **within each label**, warning
+when annotations change. `none` is refused because it cannot faithfully represent such gold.
+
+BIO still supervises whole words. Boundaries inside a UAX #29 word or indivisible tokenizer
+unit cannot in general be recovered exactly. Intraclass nesting needs a span decoder or
+multiple tracks per type, which this architecture does not implement.
+
+### Joint loss and decoding
+
+Cross entropy is vectorized with `ignore_index=-100`. Each head's loss is its mean over
+valid positions, then nonempty heads are averaged uniformly. A head with no valid positions
+contributes nothing; an entirely masked batch has a differentiable zero loss. There are no
+default class weights, head weights or frequency heuristics. One forward and backward train
+all heads jointly. Gradient checkpointing delegates to the backbone; batching, accumulation,
+early stopping and precision remain Trainer concerns.
+
+Inference takes argmax over the final **class** axis. The common BIO decoder repairs an
+orphan I as a new span, independently per head, as it does for `linear`; this is not CRF
+Viterbi or constrained-logit decoding. A span score is the mean softmax probability of its
+selected BIO tags. Duplicate `(filename,label,start,end)` predictions keep the highest score;
+different overlapping spans survive. No Multi-Head CRF or local CNN is included.
+
+### Strict metrics
+
+Multi-Head uses exact identity sets `(filename,label,start,end)`, avoiding nervaluate's greedy
+matching order dependence on overlapping spans. Duplicate gold and predictions count once.
+The existing character scorer is reused. For Multi-Head only, the metrics are:
+
+- `span_strict_precision__LABEL`, `span_strict_recall__LABEL`, `span_strict_f1__LABEL`,
+  and `span_strict_tp__LABEL`, `span_strict_fp__LABEL`, `span_strict_fn__LABEL`.
+- `span_strict_macro_precision`, `span_strict_macro_recall`, `span_strict_macro_f1`:
+  arithmetic means over **all trained heads**. A head with no gold and no predictions scores
+  zero and remains in the denominator.
+- `span_strict_micro_*`: counts aggregated globally, then precision/recall/F1 calculated.
+  `span_strict_precision`, `span_strict_recall`, `span_strict_f1` are micro aliases.
+- Existing `char_*`; optional existing token diagnostics with `__LABEL` suffixes.
+- `unknown_gold_entities`: number of annotated entities whose type has no trained head.
+
+Unknown validation types warn, get their own zero-recall metrics and count as micro false
+negatives. They do not create heads or enter the trained-head macro denominator. Per-fold
+catalogues and unknown counts must therefore accompany macro comparisons. `train_model`
+discovers each fold's catalogue from **that fold's train only**; it never reads the holdout.
+A type missing from one fold's train is unknown there even if another fold trains it.
+
+Encoded rows retain original gold and the catalogue in `DataFrame.attrs` so validation can
+count original offsets and unknown gold rather than silently lose them in BIO projection.
+Scoring restricts this gold to the documents still present in the rows. A subset of windows
+for a document still scores against that document's full gold, so omitted entities count as missed. If only rows remain, reconstruction scores representable BIO gold;
+pass `entity_labels=...` explicitly to scoring helpers after discarding catalogue attrs.
+This differs deliberately from the historical single-label training score, which always
+reconstructs gold. `min_overlap_percentage` retains its partial-scoring meaning on the
+single-label path; it does not tune exact Multi-Head metrics. Partial/type/exact SemEval
+scenarios are not reported for Multi-Head.
+
+`train_model` and HPO default to `span_strict_macro_f1` only when no selection metric is
+specified. A mapping can select `span_strict_micro_f1`, `span_strict_f1__LABEL` or `eval_loss`
+(the latter defaults to minimization). An explicit `TrainingArguments` instance is used as
+supplied. Low-level callers can use `training_arguments(..., architecture="multihead")` or
+set `metric_for_best_model` themselves; a generic arguments instance cannot reveal intent.
+
+### Checkpoints
+
+A Multi-Head `best_model` contains the tokenizer, all backbone and head weights, and
+`encoding.json` format 2: original base model, architectural parameters, backbone config,
+ordered `entity_labels`, `num_heads`, `head_to_label`, BIO schema and the full encoder
+configuration. The state dict also binds the head order with a catalogue digest. Loading
+validates mappings, dimensions and digest and uses strict state-dict loading; it does not
+need the original backbone directory or a network download. Old `linear`/`crf` encodings
+remain readable. A bare Multi-Head checkpoint without encoding metadata is not loadable;
+pass `model_encoding` when saving through `train`.

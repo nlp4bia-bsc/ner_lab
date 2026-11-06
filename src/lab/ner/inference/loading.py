@@ -36,7 +36,25 @@ def load_model(
     recorded = description["model"]
     architecture = recorded["architecture"] if architecture is None else architecture
 
-    if architecture == "linear":
+    if architecture == "multihead":
+        _validate_multihead_description(description)
+        settings = dict(recorded.get("architecture_kwargs", {}))
+        settings["backbone_config"] = description["backbone_config"]
+        model = build_model(
+            recorded["base_model"], label2id, id2label, architecture="multihead", **settings
+        )
+        try:
+            state = load_state_dict(model_dir)
+            if not torch.equal(
+                state.get("head_catalogue_digest", torch.empty(0)), model.head_catalogue_digest
+            ):
+                raise ValueError("Checkpoint head order disagrees with encoding.json.")
+            model.load_state_dict(state, strict=True)
+        except RuntimeError as error:
+            raise ValueError(
+                f"Incompatible multihead checkpoint in {model_dir}: {error}"
+            ) from error
+    elif architecture == "linear":
         model = build_model(
             base_model=str(model_dir),
             label2id=label2id,
@@ -86,3 +104,22 @@ def resolve_device(device: str = "auto") -> torch.device:
         raise ValueError("device='cuda' was requested but CUDA is not available.")
 
     return torch.device(device)
+
+
+def _validate_multihead_description(description: dict) -> None:
+    from lab.ner.encoding.tagging import validate_entity_labels
+
+    labels = validate_entity_labels(description.get("entity_labels", []))
+    expected = {str(index): label for index, label in enumerate(labels)}
+    actual = {str(index): label for index, label in description.get("head_to_label", {}).items()}
+    settings = description["model"].get("architecture_kwargs", {})
+    if (
+        description.get("format_version") != 2
+        or description.get("num_heads") != len(labels)
+        or actual != expected
+        or description.get("bio_schema") != {"O": 0, "B": 1, "I": 2}
+        or description["encoding"].get("entity_labels") != labels
+        or settings.get("entity_labels") != labels
+        or "backbone_config" not in description
+    ):
+        raise ValueError("Incompatible multihead encoding.json: head catalogue or schema mismatch.")

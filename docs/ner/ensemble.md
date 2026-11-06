@@ -148,3 +148,9 @@ ensemble_dir: assets/ensembles/disease
 documents: assets/datasets/disease/test.parquet
 output_dir: assets/predictions/disease_ensemble
 ```
+
+Multi-Head checkpoints are currently refused explicitly as ensemble members. The word-table
+contract carries one BIO distribution per word and one `target_label`; adding a head axis
+would change that public artifact and its fitting objective. Individual Multi-Head models
+use `predict_entities` for their unified overlapping spans. Existing single-label voting
+and CRF marginal semantics are unchanged.

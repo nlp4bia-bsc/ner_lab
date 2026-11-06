@@ -22,8 +22,15 @@ def gold_spans(
     tokenizer: PreTrainedTokenizerBase,
     id2label: dict,
     ignore_index: int = IGNORE_INDEX,
+    entity_labels: list[str] | None = None,
 ) -> pd.DataFrame:
     """Rebuild the annotated spans that a set of encoded rows encodes."""
+    entity_labels = entity_labels or rows.attrs.get("entity_labels")
+    if entity_labels is not None:
+        from lab.ner.evaluation.multihead import multihead_spans
+
+        return multihead_spans(rows, tokenizer, entity_labels, None, ignore_index=ignore_index)
+
     _require_columns(rows)
 
     id2label = _normalize_id2label(id2label)
@@ -56,6 +63,7 @@ def predicted_spans(
     ignore_index: int = IGNORE_INDEX,
     texts: dict[str, str] | None = None,
     include_scores: bool = False,
+    entity_labels: list[str] | None = None,
 ) -> pd.DataFrame:
     """
     Rebuild the spans a model predicted.
@@ -69,6 +77,20 @@ def predicted_spans(
     `texts` fills each span's surface form from `{doc_id: text}`, and
     `include_scores` adds the mean softmax probability of the tokens behind it.
     """
+    entity_labels = entity_labels or rows.attrs.get("entity_labels")
+    if entity_labels is not None:
+        from lab.ner.evaluation.multihead import multihead_spans
+
+        return multihead_spans(
+            rows,
+            tokenizer,
+            entity_labels,
+            predictions,
+            ignore_index=ignore_index,
+            texts=texts,
+            include_scores=include_scores,
+        )
+
     _require_columns(rows)
 
     predicted_ids = np.argmax(predictions, axis=-1)
@@ -265,7 +287,7 @@ def entity_tags(id2label: dict) -> list[str]:
     )
 
 
-def ensure_int_list(value: Any) -> list[int]:
+def ensure_int_list(value: Any) -> list[int] | list[list[int]]:
     """Coerce one cell to a list of ints, parsing the string form parquet can yield."""
     if isinstance(value, str):
         value = ast.literal_eval(value)
@@ -273,7 +295,12 @@ def ensure_int_list(value: Any) -> list[int]:
     if hasattr(value, "tolist"):
         value = value.tolist()
 
-    return [int(item) for item in value]
+    return [
+        ensure_int_list(item)
+        if isinstance(item, (list, tuple)) or getattr(item, "ndim", 0) > 0
+        else int(item)
+        for item in value
+    ]
 
 
 def ensure_word_ids(value: Any) -> list[int | None]:

@@ -1,0 +1,18 @@
+task: ner.train_model
+split_dir: assets/splits/multitype/train_val_80_20
+output_dir: assets/runs/multihead
+base_model: assets/base-model
+architecture: multihead
+target_label: null
+language: es
+max_length: 256
+overlap_policy: error
+architecture_kwargs:
+  dropout: 0.1
+training_arguments:
+  learning_rate: 3.0e-5
+  num_train_epochs: 8
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 8
+  metric_for_best_model: span_strict_macro_f1
+save_model: true

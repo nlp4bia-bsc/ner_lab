@@ -11,6 +11,7 @@ from lab.ner.encoding.encoder import (
     encoder_from_description,
     strategy_name,
 )
+from lab.ner.encoding.multihead import discover_entity_labels
 from lab.ner.encoding.overlaps import OverlapPolicy, resolve_entities
 from lab.ner.encoding.rows import (
     IGNORE_INDEX,
@@ -38,6 +39,7 @@ __all__ = [
     "build_window",
     "compute_max_content_length",
     "describe_encoder",
+    "discover_entity_labels",
     "encode_partition",
     "encoder_from_description",
     "resolve_entities",

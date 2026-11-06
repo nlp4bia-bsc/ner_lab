@@ -130,3 +130,16 @@ seeds_per_trial: 3
 training_arguments:
   per_device_eval_batch_size: 32
 ```
+
+## Multi-Head search
+
+Use `architecture="multihead"`, `target_label=None` (or omit it in YAML), and an explicit
+`language`. There is one joint search over all heads. The training partition of the chosen
+rotation fixes a deterministic catalogue; validation and holdout cannot add heads. Each
+encoded variant retains that catalogue and shares its rows across trials and seeds.
+The existing capacity check, Ray Tune/Optuna sampler, top-k epoch mean, OOM handling and
+winner machinery are reused. The default objective becomes `span_strict_macro_f1`;
+`training_arguments.metric_for_best_model` overrides it, including per-head F1 or loss.
+`winner.yaml` keeps Multi-Head, automatic discovery, window/overlap settings and the selection
+metric. Re-running it rediscovers heads from each final-training fold's authorized train;
+those catalogues can differ from the searched rotation. See [fold semantics](library.md#strict-metrics).

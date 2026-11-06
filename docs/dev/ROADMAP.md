@@ -82,3 +82,12 @@ Nothing here blocks the next stage. Each is decided when the stage that needs it
 Python floor → D17, public API → D65); Q12, Q14, Q15 (gold codes → D98–D106); Q17
 (`lab.core` loading torch — the tokenizer import moved inside `stats._load_tokenizer`,
 7.0s → 0.3s, checked by `verify_layering.py`).
+
+## Multi-Head extension
+
+D132–D135 add a shared-backbone Multi-Head BIO architecture through the existing training,
+HPO and inference entry points. Offline functional checks and an efficiency benchmark live
+in `verification/verify_multihead.py` and `verification/benchmark_multihead.py`.
+[Validation evidence](../../verification/MULTIHEAD_RESULTS.md) separates executed local checks
+from blocked external regressions and scientific-source review. Multi-Head CRF, ensembles,
+CNNs, adaptive context, distillation and knowledge-based features remain optional research.

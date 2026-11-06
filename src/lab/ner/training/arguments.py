@@ -58,13 +58,16 @@ def default_precision(use_cpu: bool = False) -> dict[str, bool]:
     return {"fp16": True, "bf16": False}
 
 
-def training_arguments(output_dir: str | Path, **overrides: Any) -> TrainingArguments:
+def training_arguments(
+    output_dir: str | Path, *, architecture: str = "linear", **overrides: Any
+) -> TrainingArguments:
     """
     Build `TrainingArguments` from `DEFAULTS`, overridden by whatever you pass.
 
     Every keyword `TrainingArguments` accepts is accepted here, so this is a
     starting point rather than a wrapper — build your own and hand it to `train`
-    if these defaults are in the way.
+    if these defaults are in the way. `architecture="multihead"` selects strict
+    macro-F1 when no metric is explicitly supplied; loss defaults to minimization.
 
     `metric_for_best_model` defaults to `span_strict_f1`, which requires the
     `compute_metrics` built by `lab.ner.evaluation.build_compute_metrics`. Pass
@@ -77,12 +80,20 @@ def training_arguments(output_dir: str | Path, **overrides: Any) -> TrainingArgu
     and takes exactly what you passed. Whichever way it lands is recorded in the
     run manifest beside the GPU that ran it.
     """
+    from lab.ner.training.multihead import architecture_arguments
+
+    overrides = architecture_arguments(overrides, architecture)
     chosen = (
         {key: False for key in PRECISION_KEYS}
         if any(key in overrides for key in PRECISION_KEYS)
         else default_precision(bool(overrides.get("use_cpu")))
     )
     settings = {**DEFAULTS, **chosen, **overrides, "output_dir": str(output_dir)}
+    if "greater_is_better" not in overrides and overrides.get("metric_for_best_model") in (
+        "loss",
+        "eval_loss",
+    ):
+        settings["greater_is_better"] = False
 
     if "eval_strategy" in settings:
         try:

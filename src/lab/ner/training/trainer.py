@@ -13,7 +13,6 @@ import pandas as pd
 import torch
 from torch import nn
 from transformers import (
-    DataCollatorForTokenClassification,
     EarlyStoppingCallback,
     PreTrainedTokenizerBase,
     Trainer,
@@ -22,6 +21,7 @@ from transformers import (
 from transformers.trainer_utils import TrainOutput
 
 from lab.ner.encoding.rows import IGNORE_INDEX
+from lab.ner.training.collation import classification_collator
 from lab.ner.training.dataset import to_dataset, validate_rows
 from lab.ner.training.tracking import EpochMetricsLogger, ResourceTracker, gpu_hardware_info
 
@@ -92,8 +92,38 @@ class CRFTrainer(Trainer):
         return loss, logits.detach(), labels.detach() if labels is not None else None
 
 
+class MultiHeadTrainer(Trainer):
+    """Align left-padded predictions to the original row positions."""
+
+    def prediction_step(
+        self,
+        model: nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
+        prediction_loss_only: bool,
+        ignore_keys: list[str] | None = None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+        loss, logits, labels = super().prediction_step(
+            model, inputs, prediction_loss_only, ignore_keys=ignore_keys
+        )
+        if logits is None or self.processing_class.padding_side != "left":
+            return loss, logits, labels
+        width = logits.shape[1]
+        lengths = inputs["attention_mask"].sum(dim=1).to(logits.device)
+        positions = (
+            torch.arange(width, device=logits.device)[None, :] + width - lengths[:, None]
+        ) % width
+        logits = logits.gather(1, positions[:, :, None, None].expand_as(logits))
+        if labels is not None:
+            labels = labels.gather(1, positions[:, :, None].expand_as(labels))
+
+        return loss, logits, labels
+
+
 def resolve_trainer_class(model: nn.Module) -> type[Trainer]:
     """Pick `CRFTrainer` for a model that can Viterbi-decode, `Trainer` otherwise."""
+    if hasattr(model, "entity_labels"):
+        return MultiHeadTrainer
+
     return CRFTrainer if hasattr(model, "decode_from_emissions") else Trainer
 
 
@@ -142,6 +172,18 @@ def train(
     validate_rows(train_rows, "train_rows")
     validate_rows(validation_rows, "validation_rows")
 
+    if hasattr(model, "entity_labels"):
+        if ignore_index != -100:
+            raise ValueError("Multihead uses ignore_index=-100; keep that padding convention.")
+        for name, frame in (("train_rows", train_rows), ("validation_rows", validation_rows)):
+            if frame.attrs.get("entity_labels", model.entity_labels) != model.entity_labels:
+                raise ValueError(f"{name} head order disagrees with the model's entity_labels.")
+        if save_model and (
+            model_encoding is None or model_encoding.get("entity_labels") != model.entity_labels
+        ):
+            raise ValueError(
+                "Saving multihead requires model_encoding with matching entity_labels."
+            )
     _check_best_metric(training_arguments, compute_metrics)
     _check_save_model(training_arguments, save_model, early_stopping_patience)
 
@@ -354,6 +396,20 @@ def _save_best_model(
     tokenizer.save_pretrained(best_model_dir)
     paths = {"best_model": best_model_dir}
 
+    if hasattr(trainer.model, "entity_labels"):
+        if model_encoding is None:
+            raise ValueError("Saving multihead requires model_encoding for exact reconstruction.")
+        model_encoding = dict(model_encoding)
+        if model_encoding.get("entity_labels") != trainer.model.entity_labels:
+            raise ValueError("model_encoding head catalogue disagrees with the model.")
+        recorded_model = dict(model_encoding["model"])
+        recorded_model["architecture_kwargs"] = {
+            **recorded_model.get("architecture_kwargs", {}),
+            "dropout": trainer.model.dropout.p,
+        }
+        model_encoding["model"] = recorded_model
+        model_encoding["backbone_config"] = trainer.model.config.to_dict()
+
     if model_encoding is not None:
         paths["model_encoding"] = write_model_encoding(model_encoding, best_model_dir)
 
@@ -372,9 +428,10 @@ def _build_trainer(
     pad_to_multiple_of: int | None,
     ignore_index: int,
 ) -> Trainer:
-    collator = DataCollatorForTokenClassification(
+    collator = classification_collator(
+        model=model,
         tokenizer=tokenizer,
-        label_pad_token_id=ignore_index,
+        ignore_index=ignore_index,
         pad_to_multiple_of=pad_to_multiple_of,
     )
 

@@ -137,12 +137,17 @@ def predict_entities(
 
     if gold is not None:
         paths["gold"] = write_gold(gold, output_dir / GOLD_FILENAME)
-        metrics = span_metrics(
-            gold=gold,
-            predicted=spans,
-            tags=[encoder.target_label],
-            min_overlap_percentage=min_overlap_percentage,
-        )
+        if encoder.target_label is None:
+            from lab.ner.evaluation.multihead import strict_multihead_metrics
+
+            metrics = strict_multihead_metrics(gold, spans, encoder.entity_labels)
+        else:
+            metrics = span_metrics(
+                gold=gold,
+                predicted=spans,
+                tags=[encoder.target_label],
+                min_overlap_percentage=min_overlap_percentage,
+            )
 
         if has_gold(corpus):
             metrics.update(

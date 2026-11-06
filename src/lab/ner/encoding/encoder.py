@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import warnings
 from collections.abc import Callable, Iterable, Iterator
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
@@ -18,7 +20,13 @@ from lab.core.segmentation import (
 )
 from lab.core.sentences import describe_sentence_segmenter, split_into_sentences
 from lab.ner.encoding.overlaps import OverlapPolicy, resolve_entities
-from lab.ner.encoding.rows import build_row, compute_max_content_length, special_token_template
+from lab.ner.encoding.rows import (
+    IGNORE_INDEX,
+    build_label_ids,
+    build_row,
+    compute_max_content_length,
+    special_token_template,
+)
 from lab.ner.encoding.tagging import build_iob2_labels, build_label_vocabulary
 from lab.ner.encoding.windowing import select_context_windows, select_greedy_windows
 
@@ -32,7 +40,7 @@ BUILTIN_STRATEGIES = ("greedy", "context")
 
 class Encoder:
     """
-    Encodes a corpus into one row per window, for one entity type and tokenizer.
+    Encodes a corpus into one row per window, sharing inputs across entity types.
 
     Configured once and reused across a split's partitions, so every partition
     shares the same `label2id` and token budget. Labels are used exactly as the
@@ -46,26 +54,37 @@ class Encoder:
     `require_target_label` rejects a corpus in which `target_label` never occurs,
     which for training means a typo silently producing all-`O` rows. Inference
     turns it off: unannotated documents legitimately carry no entity at all.
+
+    `target_label=None` discovers a sorted head catalogue on the first `encode`
+    call, which must use training data. Reuse that encoder for validation and
+    inference; a later corpus never adds heads. `entity_labels` supplies an
+    already-discovered catalogue explicitly. Multihead overlaps resolve per type.
     """
 
     def __init__(
         self,
         tokenizer: PreTrainedTokenizerBase,
-        target_label: str,
+        target_label: str | None,
         language: str,
         max_length: int = 256,
-        overlap_policy: OverlapPolicy = "merge_same_label_then_keep_longest",
+        overlap_policy: OverlapPolicy | None = None,
         strategy: str | WindowStrategy = "greedy",
         context_tokens: int | None = None,
         min_sentence_tokens: int = 4,
         documents_per_batch: int = 500,
         require_target_label: bool = True,
+        entity_labels: list[str] | None = None,
     ) -> None:
         self.tokenizer = tokenizer
         self.target_label = target_label
         self.language = language
         self.max_length = max_length
-        self.overlap_policy = overlap_policy
+        self.entity_labels = list(entity_labels) if entity_labels is not None else None
+        self.overlap_policy = (
+            ("error" if target_label is None else "merge_same_label_then_keep_longest")
+            if overlap_policy is None
+            else overlap_policy
+        )
         self.strategy = strategy
         self.context_tokens = context_tokens
         self.min_sentence_tokens = min_sentence_tokens
@@ -83,7 +102,15 @@ class Encoder:
                 f"tokenizer's {len(self.prefix_ids) + len(self.suffix_ids)} special tokens."
             )
 
-        self.vocabulary = build_label_vocabulary(target_label)
+        if target_label is None:
+            self.vocabulary = {
+                "label2id": {"O": 0, "B": 1, "I": 2},
+                "id2label": {0: "O", 1: "B", 2: "I"},
+            }
+        else:
+            if entity_labels is not None:
+                raise ValueError("entity_labels requires target_label=None.")
+            self.vocabulary = build_label_vocabulary(target_label)
         self.label2id = self.vocabulary["label2id"]
         self.id2label = self.vocabulary["id2label"]
 
@@ -91,10 +118,21 @@ class Encoder:
 
     def encode(self, corpus: pd.DataFrame) -> pd.DataFrame:
         """Encode an in-memory corpus into one row per window."""
-        return self._encode(
+        if self.target_label is None and self.entity_labels is None:
+            from lab.ner.encoding.multihead import discover_entity_labels
+
+            self.entity_labels = discover_entity_labels(corpus)
+        result = self._encode(
             (row.doc_id, row.text, json.loads(row.entities_json))
             for row in corpus[["doc_id", "text", "entities_json"]].itertuples(index=False)
         )
+        if self.target_label is None:
+            from lab.core.spans import spans_from_corpus
+
+            result.attrs["multihead_gold"] = spans_from_corpus(corpus).to_dict("records")
+            result.attrs["entity_labels"] = list(self.entity_labels)
+
+        return result
 
     def encode_parquet(self, path: str | Path) -> pd.DataFrame:
         """
@@ -102,13 +140,23 @@ class Encoder:
 
         Documents are read in `documents_per_batch`-sized batches.
         """
+        if self.target_label is None:
+            return self.encode(pd.read_parquet(path))
+
         parquet_file = pq.ParquetFile(path)
 
         return self._encode(_parquet_documents(parquet_file, self.documents_per_batch))
 
     def encode_document(self, doc_id: str, text: str, entities: list[dict]) -> list[dict]:
         """Encode one document into its window rows."""
-        entities = resolve_entities(doc_id, entities, text, self.overlap_policy)
+        if self.target_label is None:
+            from lab.ner.encoding.multihead import resolve_head_entities
+            from lab.ner.encoding.tagging import validate_entity_labels
+
+            self.entity_labels = validate_entity_labels(self.entity_labels or [])
+            entities = resolve_head_entities(doc_id, entities, text, self.overlap_policy)
+        else:
+            entities = resolve_entities(doc_id, entities, text, self.overlap_policy)
 
         sentences = split_into_sentences(text, self.language)
         sentences = merge_sentences_crossing_entities(sentences, entities, text)
@@ -127,7 +175,14 @@ class Encoder:
             labels_seen.update(str(entity["label"]) for entity in entities)
             rows.extend(self.encode_document(doc_id, text, entities))
 
-        if self.require_target_label and self.target_label not in labels_seen:
+        if self.target_label is None:
+            unknown = sorted(labels_seen - set(self.entity_labels or []))
+            if unknown:
+                warnings.warn(
+                    f"Unknown entity labels {unknown[:10]} have no heads; gold remains in scoring.",
+                    stacklevel=2,
+                )
+        elif self.require_target_label and self.target_label not in labels_seen:
             raise ValueError(
                 f"target_label {self.target_label!r} does not occur in this corpus. "
                 f"Labels present: {sorted(labels_seen) or 'none'}."
@@ -136,6 +191,8 @@ class Encoder:
         return pd.DataFrame(rows)
 
     def _row(self, tokens: list[dict], window: dict, entities: list[dict], doc_id: str) -> dict:
+        if self.target_label is None:
+            return self._multihead_row(tokens, window, entities, doc_id)
         if "core_token_start" in window:
             labelled = [
                 *tokens[window["token_start"] : window["core_token_start"]],
@@ -155,6 +212,34 @@ class Encoder:
         row["doc_id"] = doc_id
         row["window_start"] = window["start"]
         row["window_end"] = window["end"]
+
+        return row
+
+    def _multihead_row(
+        self, tokens: list[dict], window: dict, entities: list[dict], doc_id: str
+    ) -> dict:
+        start, end = window["token_start"], window["token_end"]
+        core_start = window.get("core_token_start", start)
+        core_end = window.get("core_token_end", end)
+        labels = []
+        row = None
+        for label in self.entity_labels:
+            labelled = [
+                *tokens[start:core_start],
+                *build_iob2_labels(tokens[core_start:core_end], entities, label),
+                *tokens[core_end:end],
+            ]
+            vocabulary = build_label_vocabulary(label)["label2id"]
+            head_labels = build_label_ids(labelled, vocabulary)
+            labels.append(
+                [IGNORE_INDEX] * len(self.prefix_ids)
+                + head_labels
+                + [IGNORE_INDEX] * len(self.suffix_ids)
+            )
+            if row is None:
+                row = build_row(labelled, vocabulary, self.prefix_ids, self.suffix_ids)
+        row["labels"] = np.asarray(labels, dtype=np.int64).T.tolist()
+        row.update(doc_id=doc_id, window_start=window["start"], window_end=window["end"])
 
         return row
 
@@ -194,6 +279,7 @@ def describe_encoder(encoder: Encoder) -> dict:
     recorded for provenance only: rebuilding picks it from `language` again.
     """
     return {
+        **({"entity_labels": encoder.entity_labels} if encoder.target_label is None else {}),
         "target_label": encoder.target_label,
         "language": encoder.language,
         "sentence_segmenter": describe_sentence_segmenter(encoder.language),
@@ -271,6 +357,16 @@ def encode_partition(
 
     if len(frames) == 1:
         return frames[0].reset_index(drop=True)
+
+    if encoder.target_label is None:
+        gold = [record for frame in frames for record in frame.attrs["multihead_gold"]]
+        clean = [frame.copy() for frame in frames]
+        for frame in clean:
+            frame.attrs = {}
+        result = pd.concat(clean, ignore_index=True)
+        result.attrs.update(multihead_gold=gold, entity_labels=list(encoder.entity_labels))
+
+        return result
 
     return pd.concat(frames, ignore_index=True)
 

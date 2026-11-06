@@ -53,3 +53,21 @@ cleanly when it is missing:
 
 A skip is printed, never silently passed. Check the summary line for a skip count before
 trusting a green run.
+
+## Multi-Head, fully local fixtures
+
+```bash
+OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 HF_HUB_OFFLINE=1 \
+  .venv-verify/bin/python verification/verify_multihead.py
+.venv-verify/bin/python verification/benchmark_multihead.py --repeats 1000
+```
+
+`verify_multihead.py` is registered in `run_all.py`. It builds a real local WordPiece
+tokenizer and random tiny BERT/DistilBERT, exercises joint learning, overlap, strict metrics,
+Trainer/CLI, both documented YAMLs, checkpoint round trips, malformed checkpoints,
+linear/CRF regression paths, fold discovery and a real two-trial/two-seed Ray sweep.
+CUDA skips explicitly when absent. It needs no Hugging Face model download; some older
+scripts still fetch BERT/GPT-2 **tokenizers**, even though their model weights are local.
+The benchmark runs separate processes and reports forward counts, model-only elapsed time,
+throughput, parameters and peak process RSS; it does not measure end-to-end application time.
+See [MULTIHEAD_RESULTS.md](MULTIHEAD_RESULTS.md) for executed results and remaining blockers.

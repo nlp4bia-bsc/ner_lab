@@ -31,6 +31,7 @@ from lab.ner.training.folds import (
     fold_row,
     write_fold_metrics,
 )
+from lab.ner.training.multihead import architecture_arguments, head_architecture_kwargs
 from lab.ner.training.runs import (
     RUN_MANIFEST_FILENAME,
     claim_run_dir,
@@ -61,15 +62,15 @@ def train_model(
     split_dir: str | Path,
     output_dir: str | Path,
     base_model: str,
-    target_label: str,
-    language: str,
+    target_label: str | None = None,
+    language: str | None = None,
     architecture: str | Architecture = "linear",
     architecture_kwargs: dict[str, Any] | None = None,
     training_arguments: TrainingArguments | Mapping[str, Any] | None = None,
     max_length: int = 256,
     strategy: str | WindowStrategy = "greedy",
     context_tokens: int | None = None,
-    overlap_policy: OverlapPolicy = "merge_same_label_then_keep_longest",
+    overlap_policy: OverlapPolicy | None = None,
     min_sentence_tokens: int = 4,
     early_stopping_patience: int | None = 5,
     pad_to_multiple_of: int | None = 8,
@@ -125,6 +126,15 @@ def train_model(
     run manifest, so a run that took the throughput says so on paper rather than only
     in its stderr.
     """
+    if language is None:
+        raise ValueError("language is required; pass an ISO 639-1 code explicitly.")
+    if architecture == "multihead" and target_label is not None:
+        raise ValueError(
+            "architecture=multihead requires target_label=None for automatic discovery."
+        )
+    if architecture != "multihead" and target_label is None:
+        raise ValueError("target_label is required for single-label architectures.")
+    training_arguments = architecture_arguments(training_arguments, architecture)
     run_dir = claim_run_dir(output_dir, overwrite)
 
     split_dir = Path(split_dir).resolve()
@@ -153,6 +163,11 @@ def train_model(
         "data_manifest": data_manifest,
         "mode": mode,
         "folds": rotations,
+        **(
+            {"head_discovery": "training annotations independently per fold"}
+            if architecture == "multihead"
+            else {}
+        ),
         **model_encoding(encoder, base_model, architecture, architecture_kwargs),
         "evaluation": {"min_overlap_percentage": min_overlap_percentage},
         "training_arguments": resolved_arguments.to_dict(),
@@ -193,6 +208,12 @@ def train_model(
         )
 
         summaries.append(result.summary)
+        if architecture == "multihead":
+            catalogues = manifest.setdefault("entity_labels_by_fold", {})
+            catalogues[fold_directory_key(validation_index)] = result.summary["metadata"][
+                "entity_labels"
+            ]
+            write_manifest(manifest, manifest_path)
         rows.append(
             fold_row(
                 validation_index=validation_index,
@@ -245,10 +266,25 @@ def model_encoding(
     boundary if it is off by one.
     """
     return {
+        **(
+            {
+                "format_version": 2,
+                "entity_labels": encoder.entity_labels,
+                "num_heads": len(encoder.entity_labels or []),
+                "head_to_label": dict(enumerate(encoder.entity_labels or [])),
+                "bio_schema": {"O": 0, "B": 1, "I": 2},
+            }
+            if architecture == "multihead" and encoder.entity_labels is not None
+            else {}
+        ),
         "model": {
             "base_model": base_model,
             "architecture": architecture_name(architecture),
-            "architecture_kwargs": architecture_kwargs or {},
+            "architecture_kwargs": (
+                head_architecture_kwargs(encoder, architecture_kwargs)
+                if encoder.entity_labels
+                else architecture_kwargs or {}
+            ),
         },
         "encoding": describe_encoder(encoder),
     }
@@ -312,6 +348,18 @@ def _train_fold(
     partitions = split_paths(split_dir, validation_index=validation_index)
     fold_dir = run_dir if validation_index is None else run_dir / f"fold_{validation_index:02d}"
 
+    if architecture == "multihead":
+        from lab.ner.encoding.encoder import encoder_from_description
+        from lab.ner.encoding.multihead import training_entity_labels
+
+        encoder = encoder_from_description(
+            describe_encoder(encoder),
+            encoder.tokenizer,
+            strategy=encoder.strategy,
+            entity_labels=training_entity_labels(partitions["train"]),
+        )
+        encoded = {}
+    architecture_kwargs = head_architecture_kwargs(encoder, architecture_kwargs)
     train_rows = encode_partition(encoder, partitions["train"], encoded)
     validation_rows = encode_partition(encoder, partitions["validation"], encoded)
 
@@ -355,7 +403,14 @@ def _train_fold(
         metrics_scope=metrics_scope,
         save_model=save_model,
         track_resources=track_resources,
-        run_metadata=split_provenance(validation_index, partitions),
+        run_metadata={
+            **split_provenance(validation_index, partitions),
+            **(
+                {"entity_labels": encoder.entity_labels, "encoding": describe_encoder(encoder)}
+                if architecture == "multihead"
+                else {}
+            ),
+        },
         model_encoding=model_encoding(
             encoder=encoder,
             base_model=base_model,

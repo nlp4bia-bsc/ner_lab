@@ -54,10 +54,15 @@ def is_encoded(rows: pd.DataFrame) -> bool:
     return set(REQUIRED_COLUMNS).issubset(rows.columns)
 
 
-def ensure_int_list(value: Any) -> list[int]:
+def ensure_int_list(value: Any) -> list[int] | list[list[int]]:
     """Coerce one cell to a list of ints, parsing the string form parquet can yield."""
     if isinstance(value, (list, tuple)):
-        return [int(item) for item in value]
+        return [
+            ensure_int_list(item)
+            if isinstance(item, (list, tuple)) or getattr(item, "ndim", 0) > 0
+            else int(item)
+            for item in value
+        ]
 
     if isinstance(value, str):
         parsed = ast.literal_eval(value)
@@ -65,9 +70,9 @@ def ensure_int_list(value: Any) -> list[int]:
         if not isinstance(parsed, list):
             raise TypeError(f"Expected a list-like string, received: {value!r}")
 
-        return [int(item) for item in parsed]
+        return ensure_int_list(parsed)
 
     if hasattr(value, "tolist"):
-        return [int(item) for item in value.tolist()]
+        return ensure_int_list(value.tolist())
 
     raise TypeError(f"Expected a list-like value, received: {type(value).__name__}")

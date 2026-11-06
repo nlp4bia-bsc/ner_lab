@@ -33,6 +33,7 @@ def evaluate_predictions(
     include_tokens: bool = True,
     include_by_entity: bool = True,
     include_confusion: bool = False,
+    entity_labels: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Score one set of predictions against the rows they were made on.
@@ -43,6 +44,37 @@ def evaluate_predictions(
     is. Gold here is reconstructed from the rows, so it is the gold the model was
     shown: after overlap resolution and windowing.
     """
+    entity_labels = entity_labels or rows.attrs.get("entity_labels")
+    if entity_labels is not None:
+        from lab.ner.evaluation.multihead import multihead_spans, strict_multihead_metrics
+
+        gold = rows.attrs.get("multihead_gold")
+        if gold is not None:
+            from lab.core.spans import span_dataframe
+
+            gold = span_dataframe(gold)
+            gold = gold[gold["filename"].isin(rows["doc_id"].astype(str))]
+        if gold is None:
+            gold = multihead_spans(rows, tokenizer, entity_labels, ignore_index=ignore_index)
+        predicted = multihead_spans(
+            rows, tokenizer, entity_labels, predictions, ignore_index=ignore_index
+        )
+        metrics = strict_multihead_metrics(gold, predicted, entity_labels)
+        metrics.update(
+            token_diagnostics(
+                rows,
+                predictions,
+                id2label,
+                ignore_index,
+                include_tokens,
+                include_by_entity,
+                include_confusion,
+                entity_labels=entity_labels,
+            )
+        )
+
+        return metrics
+
     gold = gold_spans(rows, tokenizer, id2label, ignore_index)
     predicted = predicted_spans(rows, predictions, tokenizer, id2label, ignore_index)
 
@@ -76,6 +108,7 @@ def token_diagnostics(
     include_tokens: bool = True,
     include_by_entity: bool = True,
     include_confusion: bool = False,
+    entity_labels: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     The token-level half of `evaluate_predictions`: how a model is wrong, token by token.
@@ -83,6 +116,31 @@ def token_diagnostics(
     Reads the gold labels off `rows`, so it needs rows encoded from an annotated
     corpus; it is what inference adds when its input carried gold.
     """
+    entity_labels = entity_labels or rows.attrs.get("entity_labels")
+    if entity_labels is not None:
+        from lab.ner.evaluation.spans import ensure_int_list
+
+        metrics = {}
+        for head, label in enumerate(entity_labels):
+            head_rows = rows.copy()
+            head_rows.attrs = {}
+            head_rows["labels"] = [
+                np.asarray(ensure_int_list(row))[:, head].tolist() for row in rows["labels"]
+            ]
+            vocabulary = {0: "O", 1: f"B-{label}", 2: f"I-{label}"}
+            diagnostics = token_diagnostics(
+                head_rows,
+                predictions[:, :, head, :],
+                vocabulary,
+                ignore_index,
+                include_tokens,
+                include_by_entity,
+                include_confusion,
+            )
+            metrics.update({f"{key}__{label}": value for key, value in diagnostics.items()})
+
+        return metrics
+
     labels = np.array([_padded(row, predictions.shape[1], ignore_index) for row in rows["labels"]])
     metrics: dict[str, Any] = {}
 
@@ -107,6 +165,7 @@ def build_compute_metrics(
     include_tokens: bool = True,
     include_by_entity: bool = True,
     include_confusion: bool = False,
+    entity_labels: list[str] | None = None,
 ) -> Callable[[Any], dict[str, Any]]:
     """
     Build the `compute_metrics` callable to hand to `lab.ner.training.train`.
@@ -133,6 +192,7 @@ def build_compute_metrics(
             include_tokens=include_tokens,
             include_by_entity=include_by_entity,
             include_confusion=include_confusion,
+            entity_labels=entity_labels,
         )
 
     return compute_metrics

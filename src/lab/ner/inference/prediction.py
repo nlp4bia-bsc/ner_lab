@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 import torch
 from transformers import (
-    DataCollatorForTokenClassification,
     PreTrainedTokenizerBase,
     Trainer,
     TrainingArguments,
@@ -19,6 +18,7 @@ from lab.ner.evaluation.spans import predicted_spans
 from lab.ner.inference.loading import resolve_device
 from lab.ner.training.arguments import for_inference
 from lab.ner.training.arguments import training_arguments as build_training_arguments
+from lab.ner.training.collation import classification_collator
 from lab.ner.training.dataset import to_dataset
 from lab.ner.training.trainer import resolve_trainer_class
 
@@ -80,6 +80,7 @@ def decode_spans(
     texts: dict[str, str] | None = None,
     min_score: float = 0.0,
     ignore_index: int = IGNORE_INDEX,
+    entity_labels: list[str] | None = None,
 ) -> pd.DataFrame:
     """
     Decode predictions into scored entity spans, dropping those below `min_score`.
@@ -95,6 +96,7 @@ def decode_spans(
         ignore_index=ignore_index,
         texts=texts or {},
         include_scores=True,
+        entity_labels=entity_labels,
     )
 
     if min_score > 0:
@@ -111,9 +113,10 @@ def _predict(
     pad_to_multiple_of: int | None,
     trainer_class: type[Trainer] | None,
 ) -> np.ndarray:
-    collator = DataCollatorForTokenClassification(
+    collator = classification_collator(
+        model=model,
         tokenizer=tokenizer,
-        label_pad_token_id=IGNORE_INDEX,
+        ignore_index=IGNORE_INDEX,
         pad_to_multiple_of=pad_to_multiple_of,
     )
     arguments = {

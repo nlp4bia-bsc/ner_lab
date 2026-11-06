@@ -26,6 +26,8 @@ def describe_member(model_dir: str | Path) -> dict[str, Any]:
     """
     model_dir = Path(model_dir).resolve()
     description = read_model_encoding(model_dir)
+    if description["model"]["architecture"] == "multihead":
+        raise ValueError("Multihead ensemble members are unsupported; use predict_entities.")
     strategy = description["encoding"].get("strategy", "greedy")
 
     if strategy not in BUILTIN_STRATEGIES:

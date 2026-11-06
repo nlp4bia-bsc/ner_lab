@@ -24,7 +24,7 @@ def winner_configuration(
     sampled: dict[str, Any],
     micro_batch_size: int | None,
     accumulation_steps: int | None,
-    target_label: str,
+    target_label: str | None,
     language: str,
     architecture: str | Architecture,
     architecture_kwargs: dict[str, Any] | None,
