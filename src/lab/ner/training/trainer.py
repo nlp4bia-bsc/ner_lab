@@ -114,7 +114,8 @@ class MultiHeadTrainer(Trainer):
         ) % width
         logits = logits.gather(1, positions[:, :, None, None].expand_as(logits))
         if labels is not None:
-            labels = labels.gather(1, positions[:, :, None].expand_as(labels))
+            shape = (*positions.shape, *((1,) * (labels.ndim - 2)))
+            labels = labels.gather(1, positions.reshape(shape).expand_as(labels))
 
         return loss, logits, labels
 
@@ -244,6 +245,14 @@ def train(
             raise ValueError(
                 "Saving multihead requires model_encoding with matching entity_labels."
             )
+    if (
+        getattr(model, "label_schema", None) == "multilabel"
+        and hasattr(compute_metrics, "multilabel_decoding")
+        and compute_metrics.multilabel_decoding != model.decoding
+    ):
+        raise ValueError(
+            "Pass multilabel_decoding=model.decoding to build_compute_metrics for matching validation decisions."
+        )
     _check_best_metric(training_arguments, compute_metrics)
     _check_save_model(training_arguments, save_model, early_stopping_patience)
 
@@ -467,6 +476,8 @@ def _save_best_model(
             **recorded_model.get("architecture_kwargs", {}),
             "dropout": trainer.model.dropout.p,
         }
+        if getattr(trainer.model, "label_schema", None) == "multilabel":
+            recorded_model["architecture_kwargs"] = trainer.model.architecture_arguments()
         if hasattr(trainer.model, "chain"):
             recorded_model["architecture_kwargs"].update(
                 {

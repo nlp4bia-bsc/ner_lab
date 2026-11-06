@@ -1,0 +1,22 @@
+task: ner.train_model
+split_dir: assets/splits/multitype/train_val_80_20
+output_dir: assets/runs/multilabel-asymmetric
+base_model: assets/base-model
+architecture: multilabel
+target_label: null
+language: es
+max_length: 256
+architecture_kwargs:
+  loss: asymmetric
+  activation: sigmoid
+  decoder: threshold_bio
+  entity_threshold: 0.5
+  dropout: 0.1
+  gamma_pos: 0.0
+  gamma_neg: 4.0
+  clip: 0.05
+training_arguments:
+  num_train_epochs: 8
+  learning_rate: 3.0e-05
+  per_device_train_batch_size: 8
+save_model: true

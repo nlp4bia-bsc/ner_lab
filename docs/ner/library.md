@@ -133,7 +133,7 @@ build_model(base_model, label2id, id2label, architecture="linear", **architectur
 | `base_model` | *required* | Pretrained encoder, by hub name or local path. |
 | `label2id` | *required* | Pass the `Encoder`'s, so the model's label ids are the ones the rows were encoded against. |
 | `id2label` | *required* | The same, inverted. |
-| `architecture` | `"linear"` | `"linear"`, `"crf"`, `"multihead"`, `"multihead_crf"`, or a callable `(base_model, label2id, id2label, **kwargs) -> model`. |
+| `architecture` | `"linear"` | `"linear"`, `"crf"`, `"multihead"`, `"multihead_crf"`, `"multilabel"`, or a callable `(base_model, label2id, id2label, **kwargs) -> model`. |
 | `**architecture_kwargs` | — | Forwarded to the chosen architecture, e.g. `dropout=0.2`. |
 
 `"linear"` is the stock `AutoModelForTokenClassification` head. New `"crf"` models use
@@ -516,3 +516,162 @@ version loads the original class with its historical attention-token semantics a
 existing parameter names. It is not silently migrated to the new word chain.
 
 See [verification and measurements](../../verification/CONSTRAINED_CRF_STATUS.md).
+
+
+## Independent binary Multi-Label BIO
+
+`architecture="multilabel"` is a separate alternative to categorical `multihead` and
+`multihead_crf`. One shared Transformer runs once per batch, followed by dropout and one
+`Linear(H,2*K)` projection. The independent binary channels are B=0 and I=1. O has no
+trainable logit: it is implicit when neither boundary channel is active.
+
+| Value | Shape | Meaning |
+|---|---|---|
+| Hidden states | `[B,L,H]` | One shared Transformer representation |
+| Raw logits / binary labels | `[B,L,K,2]` | Independent B/I channels per entity |
+| Activated scores | `[B,L,K,2]` | Independent sigmoid evidence, not a categorical distribution |
+| Decoded BIO | `[B,L,K]` | One O=0/B=1/I=2 track per entity; absent positions -100 |
+
+Gold encodes O as `[0,0]`, B as `[1,0]`, I as `[0,1]`; ignored positions are `[-100,-100]`.
+The Encoder's generic BIO vocabulary remains the **decoder** vocabulary; `label_schema`
+distinguishes binary training targets. Do not pass categorical gold to the binary model.
+
+```python
+from lab.ner import Encoder, build_model, train, training_arguments, build_compute_metrics
+from lab.ner.training import model_encoding
+
+encoder = Encoder(tokenizer, None, "es", max_length=256, label_schema="multilabel")
+train_rows = encoder.encode(train_corpus)
+validation_rows = encoder.encode(validation_corpus)
+model = build_model(
+    base_model, encoder.label2id, encoder.id2label, architecture="multilabel",
+    entity_labels=encoder.entity_labels, loss="focal", focal_gamma=2.0,
+)
+result = train(
+    model, tokenizer, train_rows, validation_rows,
+    training_arguments("assets/run", architecture="multilabel"),
+    compute_metrics=build_compute_metrics(
+        validation_rows, tokenizer, encoder.id2label, multilabel_decoding=model.decoding,
+    ),
+    save_model=True, model_encoding=model_encoding(encoder, base_model, "multilabel"),
+)
+```
+
+High-level `train_model` and HPO select this representation automatically. Discovery is sorted
+and train-only, independently per fold. Validation/inference never add labels. Unknown types
+warn, count as micro FN and stay outside the trained-catalogue macro denominator, as for
+Multi-Head. Negative-only heads remain valid training supervision; fully unsupervised heads
+are excluded from loss reduction. All-ignored batches return differentiable zero.
+
+### Binary losses
+
+`architecture_kwargs` takes explicit constructor arguments:
+
+| Setting | Default | Semantics |
+|---|---|---|
+| `loss` | `"bce"` | `bce`, `weighted_bce`, `focal`, `asymmetric` |
+| `pos_weight` | `None` | Weighted BCE only: entity name → positive B/I weight pair |
+| `pos_weight_policy` | `"none"` | `train` estimates weighted-BCE weights; weighted BCE without explicit weights requests train estimation automatically |
+| `weight_smoothing`, `max_pos_weight` | `1.0`, `20.0` | Automatic weight = clip((negative+smoothing)/(positive+smoothing), 1, maximum) per channel, **train only** |
+| `focal_gamma`, `focal_alpha` | `2.0`, `None` | Focal factor `(1-p_target)^gamma`; optional alpha for positive and 1-alpha for negative terms |
+| `gamma_pos`, `gamma_neg`, `clip` | `0.0`, `4.0`, `0.05` | ASL uses independent positive/negative exponents and clips negative probability `(1-p+clip)` at 1 |
+| `training_temperature` | `1.0` | Positive constant scaling logits for training loss only; separate from post-hoc temperature |
+| `dropout` | `0.1` | Before the compact output projection |
+
+BCE uses `binary_cross_entropy_with_logits`, not sigmoid followed by BCELoss. Focal gamma=0
+and alpha=None equals BCE. ASL with both exponents zero and clip=0 equals BCE; focal
+modulating factors remain differentiable. Weighted BCE and ASL mechanisms cannot be combined.
+The objectives use FP32 masked element losses, mean valid channels/words per entity, then
+mean over supervised entities. Padding, special/subwords and context never contribute.
+No-positive entities still supply negatives; they are not dropped from the mean.
+
+For low-level automatic weighted BCE, use
+`lab.ner.training.binary.binary_architecture_kwargs(settings, train_rows, entity_labels)`
+before `build_model`. An unresolved train-estimation request fails on supervised forward.
+`BinaryLoss` is a typed schema for conditional HPO loss families.
+
+### Score transformation and BIO decisions
+
+`BinaryDecoding` in `lab.ner.models.binary_decoding` separates post-training decisions from
+loss. `architecture_kwargs` accepts its explicit fields:
+
+| Setting | Default | Semantics |
+|---|---|---|
+| `activation` | `"sigmoid"` | `sigmoid`, `temperature_sigmoid`, `hard_sigmoid` |
+| `temperature` | `1.0` | Positive global scalar or entity-name mapping; temperature_sigmoid only |
+| `decoder` | `"threshold_bio"` | Threshold BIO or `constrained_viterbi` |
+| `entity_threshold` | `0.5` | Global scalar or entity-name mapping, threshold BIO only |
+| `entity_bias` | `0.0` | Global scalar or entity-name mapping, Viterbi only; added to B and I potentials |
+
+Standard scores are independent sigmoid(z). Temperature scaling uses sigmoid(z/T).
+Hard sigmoid clamps `(z+3)/6` to [0,1] **for decoding only**; BCE training is unchanged.
+Neither hard scores nor temperature selection by span F1 establishes calibration. Temperature
+is monotone and can partly duplicate threshold effects; it is not a new neural architecture.
+
+Threshold BIO activates an entity when `1-(1-p_B)*(1-p_I) >= entity_threshold`, inclusively.
+An active word starts B after O; it also starts B when `p_B > p_I`. Otherwise it continues I,
+with ties continuing an open mention. An isolated I-like prediction starts B. Entities are
+vectorized together, with previous eligible-word positions derived cumulatively; there is
+no per-entity inference pipeline. Structural `word_mask` comes from input/core geometry,
+independently of gold values. It excludes specials, secondary subwords and context. New
+binary window geometry, like new CRFs, depends on text rather than annotations.
+
+Viterbi uses the existing constrained BIO2 kernel with zero, nontrainable transition scores
+and local log weights:
+
+```
+O: logsigmoid(-z_B) + logsigmoid(-z_I)
+B: logsigmoid( z_B) + logsigmoid(-z_I)
+I: logsigmoid(-z_B) + logsigmoid( z_I)
+```
+
+Temperature, when selected, scales z first. `entity_bias` controls entity evidence under
+Viterbi; `entity_threshold` does not apply there. This is a constrained decoder, not a
+trained CRF. For hard sigmoid, only the legal-state adapter clamps scores to
+`[1e-7,1-1e-7]` before logarithms, making saturated B+I deterministic and finite.
+
+### Spans, metrics and ensembles
+
+BIO reconstruction and original offsets are shared with Multi-Head. Spans of different
+labels coexist, including nesting and identical intervals. Intraclass conflicts default to
+an informative error. Explicit lossy policies remain within each label and warn. A single
+track per type cannot represent arbitrary intraclass nested/overlapping spans. Word-internal
+boundaries and entities crossing window cores may be unrepresentable. Original gold remains
+in span scoring, with `gold_unrepresentable_entities`, `gold_original_entities` and
+`gold_reconstructed_entities` exposing the projection loss when corpus annotations exist.
+Window-local clipped mentions start with B before model training.
+
+Strict per-type/macro/micro and character metrics reuse exact identity-set scoring. The
+selection default is `span_strict_macro_f1`; explicit micro, per-type F1 and loss choices are
+preserved. Binary token diagnostics count independent B/I channels at .5 and do not select
+the model. Low-level metrics with custom decoding must pass
+`multilabel_decoding=model.decoding` to match the model's persisted decisions. Attrs on
+encoded rows distinguish schema/catalogue; retain them when composing the pure path.
+
+The ensemble adapter constructs legal local weights
+`q_O=(1-p_B)*(1-p_I)`, `q_B=p_B*(1-p_I)`, `q_I=(1-p_B)*p_I`, then normalizes in stable log
+space. This conditions independent Bernoulli outputs on absence of simultaneous B+I.
+It never uses `1-p_B-p_I`, nor applies a classifier softmax across entities. Hard votes use
+the configured decoder's tags; soft votes use this **derived** O/B/I distribution. Thus a
+single member's soft-vote decisions can differ from its threshold decoder. Unsupported
+labels remain absent evidence. Span score is the mean derived probability of the chosen
+BIO states; it is neither sigmoid entity evidence nor a full calibrated mention probability.
+Validation and inference use that same confidence definition. Exact duplicates keep the
+largest score; distinct overlapping intervals are retained.
+
+### Checkpoints and post-hoc replay
+
+`encoding.json` format 3 records architecture, original backbone, ordered catalogue/count/
+head mapping, binary schema, B/I channel indices, exact loss/weights/training-temperature,
+activation/decoder/threshold/temperature and encoder/window/overlap settings. The full
+backbone config and ordinary state tensors make loading standalone. Catalogue digests,
+positive-weight buffers and projection shapes are checked; incompatible loading fails.
+Legacy format-1/2 models and ensembles retain their existing paths.
+
+A decoder-only HPO run additionally writes checkpoint-bound `decoding.json`. Apply it
+explicitly with `predict_entities(..., decoder_path="sweep/decoding.json")`; inference
+checks weights, metadata and tokenizer fingerprints, then replays fixed choices without
+fitting. A retrained checkpoint needs refitting/revalidation. Ensembles consume the decoder
+stored in each member checkpoint; external decoder overrides are not ensemble member
+arguments. To deploy selected choices in an ensemble, train/save a member with those
+explicit decoder arguments, revalidate it and fit the ensemble again.

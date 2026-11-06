@@ -107,3 +107,19 @@ spans may overlap. Identical spans keep the largest score across windows.
 Use [the CRF prediction template](configs/crf-predict.yaml) with either new CRF architecture.
 Old CRF checkpoints retain their original decoder and mask semantics automatically; inference
 is not declared equivalent between historical and new mask definitions.
+
+
+## Binary Multi-Label checkpoints
+
+`predict_entities` loads `multilabel` format-3 checkpoints through the same API and reconstructs
+independent BIO tracks from the saved sigmoid transform and decoder. O is implicit, multiple
+types can overlap, and scores are mean **conditioned legal-state** probabilities of selected
+tags. Independent sigmoid evidence, this derived categorical score and full mention probability
+are different quantities. No calibration guarantee is implied.
+
+Run [multilabel-predict.yaml](configs/multilabel-predict.yaml). To apply choices selected on an
+independent calibration partition, add `decoder_path: assets/sweeps/multilabel-decoder/decoding.json`.
+The artifact must match the checkpoint's weights, tokenizer and catalogue. Gold never changes
+the input geometry or saved thresholds. Raw-text and annotated copies give identical predictions.
+Original gold remains in scoring; representation diagnostics expose window/word limitations
+when the input itself carries annotations. TSV/Parquet use the existing canonical columns.

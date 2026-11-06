@@ -67,3 +67,11 @@ New classic `crf` also uses the compact word-level core; old checkpoints retain 
 Training, HPO, prediction and unified ensembles consume both through their existing entry
 points. See [CRF contracts](library.md#word-level-constrained-crf-version-2) and
 [executed verification/ablations](../../verification/CONSTRAINED_CRF_STATUS.md).
+
+
+`architecture="multilabel"` is the independent binary alternative: one Transformer, two B/I
+logits per entity, sigmoid/BCE-family losses and explicit BIO reconstruction. It supports
+native training, cached decoder HPO, inference and hybrid ensembles. See
+[Multi-Label contracts](library.md#independent-binary-multi-label-bio),
+[training YAML](configs/multilabel-train.yaml) and
+[verification evidence](../../verification/MULTILABEL_RESULTS.md).

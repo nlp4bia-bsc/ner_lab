@@ -158,10 +158,16 @@ def predict_member(
     encoder = encoder_from_description(
         description["encoding"], tokenizer, require_target_label=False
     )
-    rows = encoder.encode(corpus)
+    inputs = (
+        corpus.assign(entities_json="[]", n_entities=0)
+        if getattr(model, "label_schema", None) == "multilabel"
+        else corpus
+    )
+    rows = encoder.encode(inputs)
     if rows.empty:
         raise ValueError(f"No windows from {len(corpus)} documents for {model_dir}.")
     encoded = time.perf_counter()
+    binary = getattr(model, "label_schema", None) == "multilabel"
     structured = hasattr(model, "structured_from_emissions")
     has_marginals = structured or hasattr(model, "marginals_from_emissions")
     predictions = predict_logits(
@@ -176,7 +182,16 @@ def predict_member(
         else None,
     ).astype(np.float32)
     inferred = time.perf_counter()
-    if has_marginals:
+    if binary:
+        from dataclasses import asdict
+
+        from lab.ner.evaluation.multilabel import binary_predictions, categorical_rows
+
+        rows.attrs["multilabel_decoding"] = asdict(model.decoding)
+        decisions, probabilities = binary_predictions(rows, predictions, model.entity_labels)
+        tag_ids = decisions
+        rows = categorical_rows(rows)
+    elif has_marginals:
         log_marginals, viterbi = np.split(predictions, 2, axis=-1)
         probabilities = np.exp(log_marginals) if structured else softmax(log_marginals)
         tag_ids = viterbi.argmax(axis=-1)

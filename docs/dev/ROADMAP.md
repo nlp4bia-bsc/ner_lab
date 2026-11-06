@@ -16,7 +16,7 @@ The encoder methods of `link_entities` keep the gazetteer's embeddings on disk s
 Words became Unicode UAX #29 words for every tokenizer on 2026-10-09 (D114).
 Sentences are split by pysbd, Punkt or ICU according to `language` since 2026-10-22
 (D128–D131).
-Verification stands at 1,036 checks across eleven scripts, all passing, plus one deliberate
+The original migration recorded 1,036 checks across eleven scripts, all passing, plus one deliberate
 skip — the NER-API equivalence no longer applies to byte-level tokenizers, whose token
 offsets `tokenize_document` trims and NER-API's `DataLoader` does not, and for the others it
 no longer compares the word-dependent `labels` and `word_ids` (D114); see
@@ -111,3 +111,13 @@ architecture dimensions. Evidence and the synthetic CPU comparison are linked fr
 BIOES/BILOU, partial annotation, dynamic transitions, GPU validation and clinical effectiveness
 studies remain future work. Source retrieval for the requested research references was blocked
 by the environment proxy; no full-text literature-review claim is made.
+
+
+## Independent binary NER
+
+D146–D151 add native Multi-Label sigmoid B/I, four binary objectives, threshold/Viterbi
+reconstruction, conditional loss HPO and cached decoder selection, canonical inference and
+hybrid ensembles. [MULTILABEL_RESULTS.md](../../verification/MULTILABEL_RESULTS.md) records
+executed local evidence and remaining environment/research limits. Arbitrary intraclass span
+recognition, calibrated probabilities, clinical effectiveness and GPU performance remain
+separate work; sigmoid BIO does not implement W2NER/GlobalPointer.

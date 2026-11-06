@@ -17,7 +17,7 @@ def architecture_arguments(
 ) -> TrainingArguments | Mapping[str, Any] | None:
     """Choose macro F1 only when no explicit model selection was supplied."""
     if (
-        architecture not in ("multihead", "multihead_crf")
+        architecture not in ("multihead", "multihead_crf", "multilabel")
         or arguments is not None
         and not isinstance(arguments, Mapping)
     ):

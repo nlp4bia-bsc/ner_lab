@@ -1,0 +1,14 @@
+task: ner.fit_ensemble
+model_dirs:
+- assets/runs/multilabel/best_model
+- assets/runs/multihead/best_model
+- assets/runs/multihead-crf/best_model
+- assets/runs/crf/best_model
+method: weighted
+votes: soft
+weight_scope: entity
+threshold_scope: entity
+validation: assets/splits/calibration/train_val_80_20/validation.parquet
+output_dir: assets/ensembles/multilabel-hybrid
+random_state: 42
+n_trials: 40

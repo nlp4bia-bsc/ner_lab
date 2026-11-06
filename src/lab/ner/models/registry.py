@@ -12,7 +12,7 @@ from lab.ner.models.bio import normalize_id2label, normalize_label2id
 
 Architecture = Callable[..., Any]
 
-BUILTIN_ARCHITECTURES = ("linear", "crf", "multihead", "multihead_crf")
+BUILTIN_ARCHITECTURES = ("linear", "crf", "multihead", "multihead_crf", "multilabel")
 
 
 def build_model(
@@ -43,6 +43,13 @@ def build_model(
         raise ValueError(
             f"Unknown architecture {architecture!r}; expected one of {BUILTIN_ARCHITECTURES} "
             "or a callable."
+        )
+
+    if architecture == "multilabel":
+        from lab.ner.models.multilabel import MultilabelForTokenClassification
+
+        return MultilabelForTokenClassification(
+            base_model, label2id, id2label, **architecture_kwargs
         )
 
     if architecture == "multihead":

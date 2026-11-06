@@ -133,7 +133,10 @@ def _predict(
     except TypeError:
         trainer = resolved(tokenizer=tokenizer, **arguments)
 
-    predictions = trainer.predict(to_dataset(rows)).predictions
+    dataset = to_dataset(rows)
+    if getattr(model, "label_schema", None) == "multilabel":
+        dataset = dataset.remove_columns("labels")
+    predictions = trainer.predict(dataset).predictions
 
     if isinstance(predictions, tuple):
         predictions = predictions[0]

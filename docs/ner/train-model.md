@@ -30,7 +30,7 @@ assessment.run_dir                         # where everything was written
 | `base_model` | *required* | Pretrained encoder, by hub name or local path. |
 | `target_label` | *required* | The entity type to tag. One label, three classes (D43). |
 | `language` | *required* | Sentence-segmentation language, an ISO 639-1 code: it picks pysbd, Punkt or ICU (D128). Never guessed (D33). |
-| `architecture` | `"linear"` | `"linear"`, `"crf"`, `"multihead"`, `"multihead_crf"`, or your own `(base_model, label2id, id2label, **kwargs) -> model`. |
+| `architecture` | `"linear"` | `"linear"`, `"crf"`, `"multihead"`, `"multihead_crf"`, `"multilabel"`, or your own `(base_model, label2id, id2label, **kwargs) -> model`. |
 | `architecture_kwargs` | `None` | Extra keywords for the chosen architecture, e.g. `{"dropout": 0.2}`. |
 | `training_arguments` | `None` | A `TrainingArguments`, or a mapping of overrides applied to `lab.ner.training.DEFAULTS`. The YAML path uses the mapping. |
 | `max_length` | `256` | Token budget per window, including special tokens. Each fold's model runs one CPU forward pass at it before training and prints `[check] <model>: a forward pass at max_length=N passed`; a length past the model's positions raises naming it (D115). |
@@ -140,3 +140,22 @@ and auxiliary CE off. Unsupported schemes/reductions fail rather than being appr
 At low level, construct `Encoder(..., include_word_mask=True)` and retain `crf_word_mask`
 in the rows passed to `train`. Old classic training semantics remain selectable with
 `architecture_kwargs: {crf_version: 1}`. Existing old checkpoints load automatically.
+
+
+## Independent sigmoid Multi-Label
+
+Select `architecture: multilabel` and `target_label: null`. Labels are discovered from train
+only; no entity list is required. The existing orchestrator builds binary `[L,K,2]` targets,
+a channel-aware collator and strict macro-F1 validation, using one shared Transformer.
+See [loss/decoder contracts](library.md#independent-binary-multi-label-bio).
+
+```bash
+lab run docs/ner/configs/multilabel-train.yaml
+lab run docs/ner/configs/multilabel-focal.yaml
+lab run docs/ner/configs/multilabel-asymmetric.yaml
+```
+
+Templates assume your prepared split and local backbone at their `assets/...` paths.
+Weighted BCE can instead use `architecture_kwargs: {loss: weighted_bce}`; each fold computes
+smoothed bounded weights from its own training rows. Explicit weights are keyed by entity.
+Existing `linear`, `crf`, `multihead` and `multihead_crf` semantics remain unchanged.

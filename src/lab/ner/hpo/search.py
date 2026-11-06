@@ -7,7 +7,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 from transformers import TrainingArguments
@@ -56,6 +56,9 @@ from lab.ner.training.runs import (
 )
 from lab.ner.training.tracking import gpu_hardware_info
 
+if TYPE_CHECKING:
+    from lab.ner.models.binary_loss import BinaryLoss
+
 HPO_SUMMARY_FILENAME = "hpo_summary.json"
 TUNE_VERBOSITY = 0
 
@@ -77,7 +80,7 @@ class HPOResult:
 def search_hyperparameters(
     split_dir: str | Path,
     output_dir: str | Path,
-    base_models: str | Sequence[str],
+    base_models: str | Sequence[str] | None = None,
     target_label: str | None = None,
     language: str | None = None,
     architecture: str | Architecture = "linear",
@@ -104,6 +107,12 @@ def search_hyperparameters(
     track_resources: bool = True,
     report: bool = True,
     overwrite: bool = False,
+    loss_variants: Sequence[BinaryLoss | Mapping[str, Any]] | None = None,
+    model_dir: str | Path | None = None,
+    decoder_search_space: Mapping[str, Any] | None = None,
+    threshold_scope: str = "global",
+    temperature_scope: str = "global",
+    min_gold_entities: int = 5,
 ) -> HPOResult:
     """
     Search hyperparameters for one configuration family against a prepared split.
@@ -153,20 +162,54 @@ def search_hyperparameters(
     `train_model` YAML config pointed at `<output_dir>/final_train`; nothing ever
     reads it back.
     """
+    if model_dir is not None:
+        if (
+            loss_variants is not None
+            or search_space is not None
+            or architecture_kwargs is not None
+            or base_models is not None
+        ):
+            raise ValueError("model_dir mode searches decoder_search_space, not training losses.")
+        from lab.ner.hpo.decoder_search import search_checkpoint_decoding
+
+        return search_checkpoint_decoding(
+            split_dir,
+            output_dir,
+            model_dir,
+            decoder_search_space,
+            training_arguments,
+            n_trials,
+            random_state,
+            validation_index,
+            threshold_scope,
+            temperature_scope,
+            min_gold_entities,
+            overwrite,
+        )
+    if (
+        decoder_search_space is not None
+        or threshold_scope != "global"
+        or temperature_scope != "global"
+    ):
+        raise ValueError(
+            "Post-hoc decoder search requires model_dir; reuse logits instead of retraining."
+        )
     import ray
     from ray import tune
 
     from lab.ner.training.multihead import architecture_arguments
 
+    if base_models is None:
+        raise ValueError("Training HPO requires base_models; decoder-only HPO requires model_dir.")
     if language is None:
         raise ValueError("language is required; pass an ISO 639-1 code explicitly.")
-    if (architecture in ("multihead", "multihead_crf")) != (target_label is None):
+    if (architecture in ("multihead", "multihead_crf", "multilabel")) != (target_label is None):
         raise ValueError("Use target_label=None for multihead or multihead_crf architectures.")
     training_arguments = architecture_arguments(training_arguments, architecture)
     if overlap_policy is None:
         overlap_policy = (
             "error"
-            if architecture in ("multihead", "multihead_crf")
+            if architecture in ("multihead", "multihead_crf", "multilabel")
             else "merge_same_label_then_keep_longest"
         )
     sweep_start = time.monotonic()
@@ -183,6 +226,17 @@ def search_hyperparameters(
 
     variants = build_variants(base_models, strategies, context_tokens, max_lengths)
     space = _validated_search_space(search_space)
+    if loss_variants is not None:
+        if architecture != "multilabel":
+            raise ValueError("loss_variants applies only to multilabel.")
+        from lab.ner.hpo.binary import loss_family_space
+        from lab.ner.models.binary_loss import BinaryLoss
+
+        if set(architecture_kwargs or {}) & (set(BinaryLoss.__dataclass_fields__) | {"pos_weight"}):
+            raise ValueError(
+                "Place loss-specific options inside loss_variants, not architecture_kwargs."
+            )
+        space = loss_family_space(space, loss_variants)
     from lab.ner.hpo.trial import validate_architecture_dimensions
 
     validate_architecture_dimensions(space, architecture, architecture_kwargs)
@@ -191,7 +245,7 @@ def search_hyperparameters(
     metric_key, greater_is_better = _objective(base_arguments)
 
     checked_kwargs = dict(architecture_kwargs or {})
-    if architecture in ("multihead", "multihead_crf"):
+    if architecture in ("multihead", "multihead_crf", "multilabel"):
         from lab.ner.encoding.multihead import training_entity_labels
 
         labels = training_entity_labels(partitions["train"])
@@ -219,7 +273,7 @@ def search_hyperparameters(
         "encoding": {
             **(
                 {"entity_labels": checked_kwargs["entity_labels"]}
-                if architecture in ("multihead", "multihead_crf")
+                if architecture in ("multihead", "multihead_crf", "multilabel")
                 else {}
             ),
             "target_label": target_label,
@@ -253,6 +307,7 @@ def search_hyperparameters(
             language=language,
             overlap_policy=overlap_policy,
             min_sentence_tokens=min_sentence_tokens,
+            label_schema="multilabel" if architecture == "multilabel" else "bio",
             include_word_mask=architecture in ("crf", "multihead_crf")
             and (architecture_kwargs or {}).get("crf_version", 2) == 2,
         ),
@@ -361,6 +416,8 @@ def search_hyperparameters(
 def _validated_search_space(search_space: Mapping[str, Any] | None) -> dict[str, Any]:
     space = build_search_space(search_space)
 
+    if "loss_variant" in space:
+        raise ValueError("loss_variant is reserved; use typed loss_variants instead.")
     if "variant" in space:
         raise ValueError(
             "variant is a reserved search dimension, built from base_models/strategies/"

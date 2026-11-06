@@ -80,7 +80,7 @@ def verify_registry(checks: Checks) -> None:
 
     from lab.ner.models import BUILTIN_ARCHITECTURES, build_model
 
-    checks.equal("builtin architectures", BUILTIN_ARCHITECTURES, ("linear", "crf", "multihead", "multihead_crf"))
+    checks.equal("builtin architectures", BUILTIN_ARCHITECTURES, ("linear", "crf", "multihead", "multihead_crf", "multilabel"))
 
     calls = []
 

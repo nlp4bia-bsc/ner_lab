@@ -23,6 +23,8 @@ class MultiHeadForTokenClassification(nn.Module):
     zero. The BIO class order is O, B, I; entity identity is in entity_labels.
     """
 
+    _output_channels = 3
+
     def __init__(
         self,
         base_model: str,
@@ -59,7 +61,9 @@ class MultiHeadForTokenClassification(nn.Module):
         self.config.label2id = self.label2id
         self.config.id2label = self.id2label
         self.dropout = nn.Dropout(dropout)
-        self.classifier = nn.Linear(self.config.hidden_size, self.num_entity_types * 3)
+        self.classifier = nn.Linear(
+            self.config.hidden_size, self.num_entity_types * self._output_channels
+        )
         self._accepts_token_types = (
             "token_type_ids" in inspect.signature(self.backbone.forward).parameters
         )
@@ -80,11 +84,7 @@ class MultiHeadForTokenClassification(nn.Module):
         token_type_ids: torch.Tensor | None = None,
         labels: torch.Tensor | None = None,
     ) -> TokenClassifierOutput:
-        inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
-        if self._accepts_token_types and token_type_ids is not None:
-            inputs["token_type_ids"] = token_type_ids
-        outputs = self.backbone(**inputs)
-        logits = self.classifier(self.dropout(outputs.last_hidden_state))
+        logits = self._project(input_ids, attention_mask, token_type_ids)
         logits = logits.reshape(*logits.shape[:2], self.num_entity_types, 3)
         loss = None
         if labels is not None:
@@ -98,3 +98,15 @@ class MultiHeadForTokenClassification(nn.Module):
             loss = head_loss.sum() / (counts > 0).sum().clamp_min(1)
 
         return TokenClassifierOutput(loss=loss, logits=logits)
+
+    def _project(
+        self,
+        input_ids: torch.Tensor | None,
+        attention_mask: torch.Tensor | None,
+        token_type_ids: torch.Tensor | None,
+    ) -> torch.Tensor:
+        inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
+        if self._accepts_token_types and token_type_ids is not None:
+            inputs["token_type_ids"] = token_type_ids
+        outputs = self.backbone(**inputs)
+        return self.classifier(self.dropout(outputs.last_hidden_state))

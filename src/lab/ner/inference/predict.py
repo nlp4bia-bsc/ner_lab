@@ -68,6 +68,7 @@ def predict_entities(
     include_confusion: bool = False,
     strategy: str | WindowStrategy | None = None,
     pad_to_multiple_of: int | None = 8,
+    decoder_path: str | Path | None = None,
 ) -> InferenceResult:
     """
     Predict entities with the model in `model_dir` and write them to `output_dir`.
@@ -98,14 +99,25 @@ def predict_entities(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     model, tokenizer, description = load_model(model_dir, device=device)
+    if decoder_path is not None:
+        from lab.ner.inference.binary_settings import read_binary_decoding
+
+        if getattr(model, "label_schema", None) != "multilabel":
+            raise ValueError("decoder_path requires a multilabel checkpoint.")
+        model.decoding = read_binary_decoding(decoder_path, model_dir, model.entity_labels)
     encoder = encoder_from_description(
         description["encoding"], tokenizer, strategy=strategy, require_target_label=False
     )
 
     corpus = read_documents(documents, pattern=pattern, encoding=encoding)
+    binary = getattr(model, "label_schema", None) == "multilabel"
     structured = hasattr(model, "structured_from_emissions")
     inputs = corpus.assign(entities_json="[]", n_entities=0) if structured else corpus
     rows = encoder.encode(inputs)
+    if binary:
+        from dataclasses import asdict
+
+        rows.attrs["multilabel_decoding"] = asdict(model.decoding)
 
     if rows.empty:
         raise ValueError(
@@ -162,9 +174,17 @@ def predict_entities(
             )
 
         if has_gold(corpus):
+            diagnostic_rows = encoder.encode(corpus) if structured else rows
+            if binary:
+                diagnostic_rows.attrs["multilabel_decoding"] = rows.attrs["multilabel_decoding"]
+                from lab.ner.evaluation.multilabel import gold_representation_metrics
+
+                metrics.update(
+                    gold_representation_metrics(diagnostic_rows, tokenizer, model.entity_labels)
+                )
             metrics.update(
                 token_diagnostics(
-                    rows=encoder.encode(corpus) if structured else rows,
+                    rows=diagnostic_rows,
                     predictions=predictions,
                     id2label=encoder.id2label,
                     include_confusion=include_confusion,
@@ -176,6 +196,14 @@ def predict_entities(
     manifest = {
         "model_dir": str(Path(model_dir).resolve()),
         "model": description["model"],
+        **(
+            {
+                "decoding": asdict(model.decoding),
+                "decoder_path": str(decoder_path) if decoder_path else None,
+            }
+            if binary
+            else {}
+        ),
         "encoding": description["encoding"],
         "output_dir": str(output_dir),
         "n_documents": int(corpus["doc_id"].nunique()),

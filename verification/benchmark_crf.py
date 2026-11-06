@@ -37,10 +37,16 @@ VARIANTS = {
     "crf_masked": ("crf", {}),
     "crf_auxiliary": ("crf", {"aux_ce_weight": 0.3}),
     "multihead_argmax": ("multihead", {}),
+    "multilabel_bce": ("multilabel", {}),
+    "multilabel_weighted_bce": ("multilabel", {"loss": "weighted_bce"}),
+    "multilabel_focal": ("multilabel", {"loss": "focal"}),
+    "multilabel_asymmetric": ("multilabel", {"loss": "asymmetric"}),
     "multihead_constrained": ("multihead_crf", {"loss_type": "cross_entropy"}),
     "multihead_crf": ("multihead_crf", {}),
     "multihead_crf_auxiliary": ("multihead_crf", {"aux_ce_weight": 0.3}),
 }
+
+DEFAULT_VARIANTS = tuple(name for name in VARIANTS if not name.startswith("multilabel"))
 
 
 def timed(function, repeats):
@@ -55,13 +61,19 @@ def timed(function, repeats):
 def measure(variant, seed, steps, repeats):
     torch.set_num_threads(2)
     architecture, kwargs = VARIANTS[variant]
-    multihead = variant.startswith("multihead")
+    binary = architecture == "multilabel"
+    multihead = variant.startswith("multihead") or binary
     structured = architecture in ("crf", "multihead_crf")
     tokenizer = local_tokenizer()
     corpus = overlap_corpus()
     train_corpus, validation = corpus.iloc[:6], corpus.iloc[6:]
     encoder = Encoder(
-        tokenizer, None if multihead else "SYMPTOM", "es", max_length=32, include_word_mask=True
+        tokenizer,
+        None if multihead else "SYMPTOM",
+        "es",
+        max_length=32,
+        include_word_mask=True,
+        label_schema="multilabel" if binary else "bio",
     )
     train_rows = encoder.encode(train_corpus)
     validation_rows = encoder.encode(validation)
@@ -69,6 +81,10 @@ def measure(variant, seed, steps, repeats):
         torch.manual_seed(97)
         base = tiny_base_model(Path(temporary), tokenizer)
         torch.manual_seed(seed)
+        if binary:
+            from lab.ner.training.binary import binary_architecture_kwargs
+
+            kwargs = binary_architecture_kwargs(kwargs, train_rows, encoder.entity_labels)
         model = build_model(
             str(base),
             encoder.label2id,
@@ -118,7 +134,43 @@ def measure(variant, seed, steps, repeats):
             outputs = model(**features)
             emissions = outputs.logits
             decode_seconds, marginal_seconds = 0.0, 0.0
-            if structured:
+            decoder_comparison = {}
+            if binary:
+                from lab.ner.models.binary_decoding import decode_binary
+
+                decode = lambda: decode_binary(
+                    emissions, features["word_mask"], model.decoding, model.entity_labels
+                )
+                decode_seconds = timed(decode, repeats)
+                tags = decode()
+                predictions = emissions.numpy()
+                from dataclasses import asdict
+
+                from lab.ner.evaluation.multilabel import evaluate_multilabel
+                from lab.ner.models.binary_decoding import BinaryDecoding
+
+                choices = [
+                    BinaryDecoding(),
+                    BinaryDecoding(activation="temperature_sigmoid", temperature=2.0),
+                    BinaryDecoding(activation="hard_sigmoid"),
+                    BinaryDecoding(decoder="constrained_viterbi"),
+                ]
+                for number, choice in enumerate(choices):
+                    seconds = timed(
+                        lambda: decode_binary(
+                            emissions, features["word_mask"], choice, model.entity_labels
+                        ),
+                        repeats,
+                    )
+                    scored = evaluate_multilabel(
+                        validation_rows, predictions, tokenizer, model.entity_labels, False, choice
+                    )
+                    decoder_comparison[str(number)] = {
+                        "settings": asdict(choice),
+                        "decode_ms": 1000 * seconds,
+                        "strict_macro_f1": scored["span_strict_macro_f1"],
+                    }
+            elif structured:
                 decode = lambda: model.structured_from_emissions(
                     emissions, features["crf_word_mask"], features["attention_mask"]
                 )
@@ -148,14 +200,24 @@ def measure(variant, seed, steps, repeats):
         metrics = strict_multihead_metrics(gold, spans, labels)
         illegal = 0
         for index, row in enumerate(validation_rows.itertuples()):
-            selected = tags[index, : len(row.input_ids)].numpy()[row.crf_word_mask]
+            selected = tags[index, : len(row.input_ids)].numpy()[
+                row.word_mask if binary else row.crf_word_mask
+            ]
             selected = selected[:, None] if selected.ndim == 1 else selected
             illegal += int((selected[:1] == 2).sum())
             illegal += int(((selected[1:] == 2) & (selected[:-1] == 0)).sum())
+        full_labels = sorted(spans_from_corpus(train_corpus).label.unique())
+        full_metrics = strict_multihead_metrics(spans_from_corpus(validation), spans, full_labels)
         parameters = sum(p.numel() for p in model.parameters())
         chain_parameters = sum(p.numel() for p in model.chain.parameters()) if structured else 0
         return {
             "variant": variant,
+            "cached_decoder_comparison": decoder_comparison,
+            **{
+                f"full_task_{key}": value
+                for key, value in full_metrics.items()
+                if key.startswith("span_strict")
+            },
             "seed": seed,
             "steps": steps,
             "heads": len(labels),
@@ -164,6 +226,9 @@ def measure(variant, seed, steps, repeats):
             "decode_ms": 1000 * decode_seconds,
             "decode_with_marginals_ms": 1000 * marginal_seconds,
             "windows_per_second": len(validation_rows) / (forward_seconds + decode_seconds),
+            "documents_per_second": len(validation_rows) / (forward_seconds + decode_seconds),
+            "tokens_per_second": validation_batch["attention_mask"].sum().item()
+            / (forward_seconds + decode_seconds),
             "backbone_calls": len(calls),
             "expected_backbone_calls": repeats + 4,
             "parameters": parameters,
@@ -184,6 +249,7 @@ def measure(variant, seed, steps, repeats):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--variant", choices=list(VARIANTS))
+    parser.add_argument("--variants", nargs="+", choices=list(VARIANTS))
     parser.add_argument("--seed", type=int, default=21)
     parser.add_argument("--steps", type=int, default=40)
     parser.add_argument("--repeats", type=int, default=30)
@@ -196,7 +262,7 @@ def main():
         return
     results = []
     with tempfile.TemporaryDirectory() as temporary:
-        for variant in VARIANTS:
+        for variant in args.variants or DEFAULT_VARIANTS:
             for seed in (21, 22, 23):
                 target = Path(temporary) / "result.json"
                 subprocess.run(

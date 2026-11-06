@@ -56,3 +56,6 @@ Each subpackage index names its maintainer. Behavioural checks live in
 `lab.ner` also supports `architecture="multihead"`: one shared Transformer, automatically
 discovered entity heads, and overlapping cross-type spans. See
 [Multi-Head BIO](docs/ner/library.md#multi-head-bio).
+
+`architecture="multilabel"` adds independent sigmoid B/I channels, binary losses and
+structured BIO reconstruction. See [Multi-Label BIO](docs/ner/library.md#independent-binary-multi-label-bio).

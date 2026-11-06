@@ -36,7 +36,44 @@ def load_model(
     recorded = description["model"]
     architecture = recorded["architecture"] if architecture is None else architecture
 
-    if description.get("crf_version") == 2:
+    if recorded["architecture"] == "multilabel" and architecture != "multilabel":
+        raise ValueError("Multilabel checkpoints require architecture=multilabel.")
+    if architecture == "multilabel":
+        from lab.ner.models.multilabel import MultilabelForTokenClassification
+
+        labels = description.get("entity_labels", [])
+        if (
+            description.get("format_version") != 3
+            or description.get("label_schema") != "multilabel"
+            or description.get("channels") != {"B": 0, "I": 1}
+            or description.get("bio_schema") != {"O": 0, "B": 1, "I": 2}
+            or description["encoding"].get("include_word_mask") is not True
+            or description["encoding"].get("label_schema") != "multilabel"
+            or description["encoding"].get("entity_labels") != labels
+            or description.get("num_heads") != len(labels)
+            or {str(k): v for k, v in description.get("head_to_label", {}).items()}
+            != {str(i): v for i, v in enumerate(labels)}
+        ):
+            raise ValueError("Incompatible multilabel channel schema or head catalogue.")
+        settings = dict(recorded.get("architecture_kwargs", {}))
+        if settings.get("entity_labels") != labels or "backbone_config" not in description:
+            raise ValueError("Incomplete multilabel reconstruction metadata.")
+        model = MultilabelForTokenClassification(
+            recorded["base_model"],
+            label2id,
+            id2label,
+            backbone_config=description["backbone_config"],
+            **settings,
+        )
+        state = load_state_dict(model_dir)
+        for name in ("head_catalogue_digest", "positive_weights"):
+            if name not in state or not torch.equal(state[name], model.state_dict()[name]):
+                raise ValueError(f"Checkpoint {name} disagrees with multilabel metadata.")
+        try:
+            model.load_state_dict(state, strict=True)
+        except RuntimeError as error:
+            raise ValueError(f"Incompatible multilabel checkpoint: {error}") from error
+    elif description.get("crf_version") == 2:
         from lab.ner.models.word_crf import WordCRFForTokenClassification
 
         if architecture not in ("crf", "multihead_crf") or (architecture == "multihead_crf") != (

@@ -346,3 +346,20 @@ Legacy CRFs keep their original marginal/decision adapter and checkpoint semanti
 old CRFs can mix with linear and Multi-Head members, using existing scoped weights/thresholds,
 exact span methods, metrics and manifests. Marginals are normalized probabilities under the
 member CRF, not a claim of calibration. See [hybrid CRF YAML](configs/ensemble-crf.yaml).
+
+
+## Independent sigmoid Multi-Label members
+
+`multilabel` joins linear, legacy/new CRF, Multi-Head and Multi-Head CRF through the same sparse
+word-table adapter. Each checkpoint executes one batched Transformer inference for every label.
+Hard tags follow its persisted decoder. Soft votes condition the independent Bernoulli B/I
+outputs on the three legal local states, normalizing qO/qB/qI in log space; this is a derived
+distribution, not the original model activation. `1-pB-pI` is never used. Unknown types and
+masked words remain absent evidence, and head indices are matched by entity name.
+
+A single Multi-Label soft ensemble can differ from its binary threshold decoder; hard votes
+retain its categorical decisions. Mean conditioned chosen-state probabilities define span
+confidence in both member inference and ensemble adaptation. Different-type overlaps survive;
+BIO's intraclass limitation remains. Version-1/2 ensemble artifacts keep their contracts.
+See [hybrid YAML](configs/ensemble-multilabel.yaml). Ensembles use checkpoint-persisted settings,
+not an external `decoder_path`; save and revalidate the chosen member configuration before fitting.

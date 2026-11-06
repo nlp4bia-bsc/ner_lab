@@ -168,3 +168,77 @@ metrics while the trial table reports the selected objective and its seed disper
 Search validation rejects negative/nonfinite bounds, unsupported schemes and searches that
 combine the constrained-CE baseline with nonzero auxiliary CE. Compare those in separate
 sweeps to avoid impossible trials. Namespaced options apply to version-2 CRFs only.
+
+
+## Multi-Label: training search versus cached decoder search
+
+`architecture="multilabel"` uses the same Ray Tune/Optuna training search, multiple seeds,
+variant cache, OOM handling and winner replay. Default objective is strict macro-F1.
+`loss_variants` is a sequence of the typed `BinaryLoss` schema (YAML mappings use exactly its
+fields). Each candidate describes one applicable loss family, e.g. BCE, weighted BCE,
+focal with gamma/alpha, or ASL with positive/negative exponents and clipping. One categorical
+profile is sampled, avoiding Cartesian products of irrelevant parameters. Place loss options
+inside profiles; outside them, `architecture_kwargs` can fix dropout/decoder settings.
+`search_space.architecture__dropout` remains independently searchable.
+
+Alternatively fix one loss in `architecture_kwargs` and search its applicable namespaced
+fields: `architecture__focal_gamma`, `architecture__focal_alpha`, or ASL's
+`architecture__gamma_pos`, `architecture__gamma_neg`, `architecture__clip`; weighted BCE's
+`architecture__weight_smoothing`, `architecture__max_pos_weight`,
+`architecture__pos_weight_policy`. `architecture__loss` may compare default loss families,
+and `architecture__training_temperature` changes the training objective. Incompatible
+fields fail before trials. `winner.yaml` retains the exact selected constructor arguments.
+[Training HPO YAML](configs/multilabel-hpo.yaml).
+
+For transforms/thresholds/decoders, use the **same entry point** with `model_dir` and
+`decoder_search_space`, omitting `base_models` and training loss arguments:
+
+```python
+selected = search_hyperparameters(
+    split_dir="assets/splits/calibration/train_val_80_20",
+    output_dir="assets/sweeps/decoder", model_dir="assets/runs/multilabel/best_model",
+    decoder_search_space={
+        "activation": {"type": "choice", "categories": ["sigmoid", "temperature_sigmoid", "hard_sigmoid"]},
+        "temperature": {"type": "loguniform", "low": 0.5, "high": 2.0},
+        "entity_threshold": {"type": "uniform", "low": 0.2, "high": 0.8},
+    },
+    threshold_scope="entity", temperature_scope="entity", n_trials=40, random_state=42,
+)
+```
+
+[Transform/decoder HPO YAML](configs/multilabel-decoder-hpo.yaml) also compares constrained
+Viterbi and its `entity_bias`. The checkpoint runs **once** over the selected validation
+partition; all Optuna trials reuse raw logits. Temperature is sampled only for
+`temperature_sigmoid`, threshold only for threshold BIO, bias only for Viterbi. No Transformer
+retraining occurs. The pure `lab.ner.hpo.decoding.fit_binary_decoding` accepts precomputed
+logits for the same operation without I/O. Positive temperature preserves ranking; this is
+post-processing selection, not a claim that an equivalent transform is a better model.
+
+`threshold_scope` and `temperature_scope` accept global/entity. Entity scope fits only labels
+with at least `min_gold_entities=5` unique gold mentions, falling back to checkpoint settings
+for sparse labels. A checkpoint-decoder baseline guard retains it unless a candidate improves
+the selected metric. Temperature selection optimizes span F1 here, **not calibrated NLL**.
+A reserved independent calibration/validation set or OOF predictions are required for a
+credible experiment. Known training/calibration overlap raises; missing source evidence
+warns and records unknown separation. Holdout files are never read to fit choices.
+
+Artifacts retain the existing HPO summary/trial/winner names and add `decoding.json`, with
+checkpoint fingerprints, fixed choices, per-type support and calibration provenance.
+Dictionary-valued trial fields use `*_json` Parquet columns. `predict_entities` can consume
+the decoder artifact explicitly. `winner.yaml` describes retraining with those loss and
+prediction settings, preserving the chosen fold and window configuration; **revalidate
+thresholds and temperature after retraining**, since new weights or data invalidate their
+original fitting evidence. Neither inference nor ensembles optimize them automatically.
+
+For span-metric Viterbi search, a positive temperature with zero transition potentials does
+not add a hard-decision degree of freedom: per-position O/B/I log-score differences are
+`0,zB/T,zI/T`. With a state bias, T trades with that bias. The search therefore does not
+sample temperature for Viterbi and collapses searched temperature-sigmoid to standard sigmoid
+in that branch. Configured checkpoint temperatures remain valid for confidence; baseline
+guards preserve original choices on ties. `threshold_scope="entity"` also scopes Viterbi's
+membership bias. Named checkpoint settings are retained when their field is not searched.
+No known gold support retains the baseline without optimization; a fully pinned candidate
+is evaluated once. Requested and executed trial counts are recorded separately.
+
+Native Multi-Label training winners set `save_model: true`, so replay also keeps a reloadable
+`best_model`. Other architectures retain their previous winner defaults.

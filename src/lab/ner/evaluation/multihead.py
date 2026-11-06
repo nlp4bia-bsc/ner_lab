@@ -28,6 +28,7 @@ def multihead_spans(
     texts: dict[str, str] | None = None,
     include_scores: bool = False,
     probabilities: np.ndarray | None = None,
+    tag_ids: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """Decode each head using the shared offsets and existing BIO decoder."""
     if predictions is not None:
@@ -35,7 +36,15 @@ def multihead_spans(
             raise ValueError("Multihead predictions must have shape [B,L,K,3] matching heads.")
         if len(predictions) != len(rows):
             raise ValueError("rows and predictions must have the same length.")
-    ids = None if predictions is None else predictions.argmax(axis=-1)
+    if tag_ids is not None and (
+        tag_ids.ndim != 3 or tag_ids.shape[0] != len(rows) or tag_ids.shape[2] != len(entity_labels)
+    ):
+        raise ValueError("Decoded tag_ids must have shape [rows,L,K].")
+    ids = (
+        tag_ids
+        if tag_ids is not None
+        else (None if predictions is None else predictions.argmax(axis=-1))
+    )
     if include_scores and probabilities is None:
         probabilities = softmax(predictions)
     prefix, suffix = special_token_template(tokenizer)

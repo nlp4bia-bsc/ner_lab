@@ -105,3 +105,23 @@ inference, marginal ensembles and real Ray/Optuna winner replay. Ray requires lo
 `benchmark_crf` runs nine CPU ablations with three seeds in isolated processes; its synthetic
 strict scores do not establish clinical model quality. See
 [the recorded evidence](CONSTRAINED_CRF_STATUS.md).
+
+
+## Independent sigmoid Multi-Label
+
+```bash
+OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 HF_HUB_OFFLINE=1 \
+  .venv-verify/bin/python verification/verify_multilabel.py
+OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 HF_HUB_OFFLINE=1 \
+  .venv-verify/bin/python verification/benchmark_crf.py \
+  --variants linear_argmax multihead_argmax multilabel_bce multilabel_weighted_bce \
+  multilabel_focal multilabel_asymmetric multihead_crf --output /tmp/multilabel.json
+```
+
+The new verification is registered in `run_all.py`. Numeric loss and Viterbi oracles,
+independent overlapping targets, CPU autocast, model learning, standalone checkpoints,
+nondefault decoders, cached decoder fitting, Ray conditional loss profiles, folds, CLI YAML
+and hybrid ensembles use local tiny BERT/DistilBERT fixtures. The shared benchmark retains
+its original nine default CRF ablations; `--variants` explicitly selects added binary
+families. Cached decoder comparisons reuse each binary worker's same emissions.
+[MULTILABEL_RESULTS.md](MULTILABEL_RESULTS.md) separates executed evidence, skips and blocks.

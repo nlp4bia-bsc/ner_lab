@@ -20,6 +20,8 @@ from lab.ner.evaluation.tokens import (
 if TYPE_CHECKING:
     from transformers import EvalPrediction, PreTrainedTokenizerBase
 
+    from lab.ner.models.binary_decoding import BinaryDecoding
+
 BEST_METRIC = "span_strict_f1"
 
 
@@ -34,6 +36,7 @@ def evaluate_predictions(
     include_by_entity: bool = True,
     include_confusion: bool = False,
     entity_labels: list[str] | None = None,
+    multilabel_decoding: BinaryDecoding | None = None,
 ) -> dict[str, Any]:
     """
     Score one set of predictions against the rows they were made on.
@@ -45,6 +48,12 @@ def evaluate_predictions(
     shown: after overlap resolution and windowing.
     """
     entity_labels = entity_labels or rows.attrs.get("entity_labels")
+    if rows.attrs.get("label_schema") == "multilabel":
+        from lab.ner.evaluation.multilabel import evaluate_multilabel
+
+        return evaluate_multilabel(
+            rows, predictions, tokenizer, entity_labels, include_tokens, multilabel_decoding
+        )
     if entity_labels is not None:
         from lab.ner.evaluation.multihead import multihead_spans, strict_multihead_metrics
 
@@ -117,6 +126,10 @@ def token_diagnostics(
     corpus; it is what inference adds when its input carried gold.
     """
     entity_labels = entity_labels or rows.attrs.get("entity_labels")
+    if rows.attrs.get("label_schema") == "multilabel":
+        from lab.ner.evaluation.multilabel import multilabel_token_metrics
+
+        return multilabel_token_metrics(rows, predictions) if include_tokens else {}
     if entity_labels is not None:
         from lab.ner.evaluation.spans import ensure_int_list
 
@@ -166,6 +179,7 @@ def build_compute_metrics(
     include_by_entity: bool = True,
     include_confusion: bool = False,
     entity_labels: list[str] | None = None,
+    multilabel_decoding: BinaryDecoding | None = None,
 ) -> Callable[[Any], dict[str, Any]]:
     """
     Build the `compute_metrics` callable to hand to `lab.ner.training.train`.
@@ -193,7 +207,13 @@ def build_compute_metrics(
             include_by_entity=include_by_entity,
             include_confusion=include_confusion,
             entity_labels=entity_labels,
+            multilabel_decoding=multilabel_decoding,
         )
+
+    if rows.attrs.get("label_schema") == "multilabel":
+        from lab.ner.evaluation.multilabel import decoding_settings
+
+        compute_metrics.multilabel_decoding = decoding_settings(rows, multilabel_decoding)
 
     return compute_metrics
 

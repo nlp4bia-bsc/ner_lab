@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import gc
+import json
 import math
 import statistics
 from collections.abc import Callable, Iterable
@@ -31,8 +32,17 @@ CRF_DIMENSIONS = (
     "loss_reduction",
     "tag_scheme",
 )
-ARCHITECTURE_DIMENSIONS = tuple(f"architecture__{name}" for name in CRF_DIMENSIONS)
-RESERVED_DIMENSIONS = ("variant", "effective_train_batch_size", *ARCHITECTURE_DIMENSIONS)
+from lab.ner.hpo.binary import BINARY_DIMENSIONS
+
+ARCHITECTURE_DIMENSIONS = tuple(
+    f"architecture__{name}" for name in dict.fromkeys((*CRF_DIMENSIONS, *BINARY_DIMENSIONS))
+)
+RESERVED_DIMENSIONS = (
+    "variant",
+    "loss_variant",
+    "effective_train_batch_size",
+    *ARCHITECTURE_DIMENSIONS,
+)
 
 
 def sampled_architecture_kwargs(
@@ -47,6 +57,9 @@ def sampled_architecture_kwargs(
             if name in ARCHITECTURE_DIMENSIONS
         }
     )
+    if "loss_variant" in sampled:
+        result.update(json.loads(sampled["loss_variant"]))
+
     return result
 
 
@@ -56,7 +69,14 @@ def validate_architecture_dimensions(
     settings: dict[str, Any] | None = None,
 ) -> None:
     """Reject unsupported or incompatible architecture search families before trials."""
+    if architecture == "multilabel":
+        from lab.ner.hpo.binary import validate_binary_dimensions
+
+        validate_binary_dimensions(space, settings or {})
+        return
     dimensions = set(space) & set(ARCHITECTURE_DIMENSIONS)
+    if any(name.removeprefix("architecture__") not in CRF_DIMENSIONS for name in dimensions):
+        raise ValueError("Binary loss dimensions require architecture=multilabel.")
     settings = settings or {}
     if dimensions and (
         architecture not in ("crf", "multihead_crf") or settings.get("crf_version", 2) != 2
@@ -250,6 +270,7 @@ def run_trial(
     if any(name in sampled for name in ARCHITECTURE_DIMENSIONS) and architecture not in (
         "crf",
         "multihead_crf",
+        "multilabel",
     ):
         raise ValueError("CRF architecture dimensions require crf or multihead_crf.")
     metric = base_arguments.metric_for_best_model
@@ -260,6 +281,12 @@ def run_trial(
     metric_key = metric.removeprefix("eval_")
     greater_is_better = metric_greater_is_better(base_arguments)
     variant = variants[sampled["variant"]]
+    if architecture == "multilabel":
+        from lab.ner.training.binary import binary_architecture_kwargs
+
+        architecture_kwargs = binary_architecture_kwargs(
+            architecture_kwargs, variant.train_rows, variant.entity_labels
+        )
 
     micro_batch_size, accumulation_steps = _batch_sizes(
         sampled, base_arguments, max_micro_batch_size
@@ -268,6 +295,11 @@ def run_trial(
     hyperparameters = {
         key: value for key, value in sampled.items() if key not in RESERVED_DIMENSIONS
     }
+
+    if architecture == "multilabel":
+        from lab.ner.training.binary import configure_binary_metrics
+
+        configure_binary_metrics(variant.validation_rows, architecture_kwargs)
 
     compute_metrics = build_compute_metrics(
         rows=variant.validation_rows,
@@ -361,8 +393,12 @@ def _seed_score(
     set_seed(arguments.seed)
 
     settings = dict(architecture_kwargs or {})
-    if architecture in ("multihead", "multihead_crf"):
+    if architecture in ("multihead", "multihead_crf", "multilabel"):
         settings["entity_labels"] = variant.entity_labels
+    if architecture == "multilabel":
+        from lab.ner.training.binary import binary_architecture_kwargs
+
+        settings = binary_architecture_kwargs(settings, variant.train_rows, variant.entity_labels)
     model = build_model(
         base_model=variant.base_model,
         label2id=variant.label2id,

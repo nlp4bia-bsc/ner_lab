@@ -1,0 +1,30 @@
+task: ner.search_hyperparameters
+split_dir: assets/splits/multitype/train_val_80_20
+output_dir: assets/sweeps/multilabel
+base_models:
+- assets/base-model
+architecture: multilabel
+target_label: null
+language: es
+max_lengths:
+- 256
+n_trials: 12
+seeds_per_trial: 3
+loss_variants:
+- loss: bce
+- loss: weighted_bce
+  max_pos_weight: 10.0
+- loss: focal
+  focal_gamma: 2.0
+  focal_alpha: 0.25
+- loss: asymmetric
+  gamma_neg: 4.0
+  clip: 0.05
+search_space:
+  architecture__dropout:
+    type: choice
+    categories:
+    - 0.1
+    - 0.2
+training_arguments:
+  num_train_epochs: 8

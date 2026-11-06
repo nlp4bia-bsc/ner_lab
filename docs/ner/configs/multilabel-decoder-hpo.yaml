@@ -1,0 +1,33 @@
+task: ner.search_hyperparameters
+split_dir: assets/splits/calibration/train_val_80_20
+output_dir: assets/sweeps/multilabel-decoder
+model_dir: assets/runs/multilabel/best_model
+n_trials: 40
+random_state: 42
+threshold_scope: entity
+temperature_scope: entity
+min_gold_entities: 5
+decoder_search_space:
+  activation:
+    type: choice
+    categories:
+    - sigmoid
+    - temperature_sigmoid
+    - hard_sigmoid
+  decoder:
+    type: choice
+    categories:
+    - threshold_bio
+    - constrained_viterbi
+  temperature:
+    type: loguniform
+    low: 0.5
+    high: 2.0
+  entity_threshold:
+    type: uniform
+    low: 0.2
+    high: 0.8
+  entity_bias:
+    type: uniform
+    low: -1.0
+    high: 1.0

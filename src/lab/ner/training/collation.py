@@ -44,8 +44,12 @@ def classification_collator(
     tokenizer: PreTrainedTokenizerBase,
     pad_to_multiple_of: int | None = 8,
     ignore_index: int = -100,
-) -> MultiHeadCollator | DataCollatorForTokenClassification | WordChainCollator:
+) -> (
+    MultiHeadCollator | DataCollatorForTokenClassification | WordChainCollator | MultilabelCollator
+):
     """Choose padding by the model's target representation."""
+    if getattr(model, "label_schema", None) == "multilabel":
+        return MultilabelCollator(tokenizer, pad_to_multiple_of, ignore_index)
     if hasattr(model, "chain"):
         return WordChainCollator(tokenizer, pad_to_multiple_of, ignore_index, model.multihead)
     collator = (
@@ -89,4 +93,58 @@ class WordChainCollator:
             start = mask.shape[1] - len(values) if self.tokenizer.padding_side == "left" else 0
             mask[index, start : start + len(values)] = torch.as_tensor(values, dtype=torch.bool)
         batch["crf_word_mask"] = mask
+        return batch
+
+
+@dataclass
+class MultilabelCollator:
+    """Pad binary [length,entity,channel] targets and structural word eligibility."""
+
+    tokenizer: PreTrainedTokenizerBase
+    pad_to_multiple_of: int | None = 8
+    label_pad_token_id: int = -100
+
+    def __call__(self, features: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
+        if any("word_mask" not in feature for feature in features):
+            raise ValueError("Binary rows require word_mask; use Encoder(label_schema=multilabel).")
+        supervised = ["labels" in feature for feature in features]
+        if any(supervised) != all(supervised):
+            raise ValueError("Do not mix supervised and unlabelled rows in one batch.")
+        batch = self.tokenizer.pad(
+            [
+                {key: value for key, value in feature.items() if key not in ("labels", "word_mask")}
+                for feature in features
+            ],
+            padding=True,
+            pad_to_multiple_of=self.pad_to_multiple_of,
+            return_tensors="pt",
+        )
+        width = batch["input_ids"].shape[1]
+        mask = torch.zeros_like(batch["input_ids"], dtype=torch.bool)
+        labels = None
+        if all(supervised):
+            first = torch.as_tensor(features[0]["labels"])
+            if first.ndim != 3 or first.shape[-1] != 2:
+                raise ValueError("Multilabel targets require [L,K,2].")
+            labels = torch.full(
+                (len(features), width, *first.shape[1:]),
+                self.label_pad_token_id,
+                dtype=torch.float32,
+            )
+        for index, feature in enumerate(features):
+            length = len(feature["input_ids"])
+            eligible = torch.as_tensor(feature["word_mask"], dtype=torch.bool)
+            if len(eligible) != length:
+                raise ValueError("word_mask and input_ids must have the same length.")
+            start = width - length if self.tokenizer.padding_side == "left" else 0
+            mask[index, start : start + length] = eligible
+            if labels is not None:
+                values = torch.as_tensor(feature["labels"])
+                if values.shape != (length, *labels.shape[2:]):
+                    raise ValueError("Inconsistent binary target length, catalogue or channels.")
+                labels[index, start : start + length] = values
+        if labels is not None:
+            batch["labels"] = labels
+        batch["word_mask"] = mask
+
         return batch

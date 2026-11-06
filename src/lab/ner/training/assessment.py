@@ -128,11 +128,11 @@ def train_model(
     """
     if language is None:
         raise ValueError("language is required; pass an ISO 639-1 code explicitly.")
-    if architecture in ("multihead", "multihead_crf") and target_label is not None:
+    if architecture in ("multihead", "multihead_crf", "multilabel") and target_label is not None:
         raise ValueError(
             f"architecture={architecture} requires target_label=None for automatic discovery."
         )
-    if architecture not in ("multihead", "multihead_crf") and target_label is None:
+    if architecture not in ("multihead", "multihead_crf", "multilabel") and target_label is None:
         raise ValueError("target_label is required for single-label architectures.")
     training_arguments = architecture_arguments(training_arguments, architecture)
     run_dir = claim_run_dir(output_dir, overwrite)
@@ -152,6 +152,7 @@ def train_model(
         strategy=strategy,
         context_tokens=context_tokens,
         min_sentence_tokens=min_sentence_tokens,
+        label_schema="multilabel" if architecture == "multilabel" else "bio",
         include_word_mask=architecture in ("crf", "multihead_crf")
         and (architecture_kwargs or {}).get("crf_version", 2) == 2,
     )
@@ -167,7 +168,7 @@ def train_model(
         "folds": rotations,
         **(
             {"head_discovery": "training annotations independently per fold"}
-            if architecture in ("multihead", "multihead_crf")
+            if architecture in ("multihead", "multihead_crf", "multilabel")
             else {}
         ),
         **model_encoding(encoder, base_model, architecture, architecture_kwargs),
@@ -210,7 +211,7 @@ def train_model(
         )
 
         summaries.append(result.summary)
-        if architecture in ("multihead", "multihead_crf"):
+        if architecture in ("multihead", "multihead_crf", "multilabel"):
             catalogues = manifest.setdefault("entity_labels_by_fold", {})
             catalogues[fold_directory_key(validation_index)] = result.summary["metadata"][
                 "entity_labels"
@@ -271,6 +272,8 @@ def model_encoding(
         architecture in ("crf", "multihead_crf")
         and (architecture_kwargs or {}).get("crf_version", 2) == 2
     )
+    if architecture == "multilabel" and encoder.label_schema != "multilabel":
+        raise ValueError("Multilabel metadata requires Encoder(label_schema=multilabel).")
     if structured and not encoder.include_word_mask:
         raise ValueError("New CRF encoding requires include_word_mask=True.")
     settings = dict(architecture_kwargs or {})
@@ -298,7 +301,8 @@ def model_encoding(
                 "head_to_label": dict(enumerate(encoder.entity_labels or [])),
                 "bio_schema": {"O": 0, "B": 1, "I": 2},
             }
-            if architecture in ("multihead", "multihead_crf") and encoder.entity_labels is not None
+            if architecture in ("multihead", "multihead_crf", "multilabel")
+            and encoder.entity_labels is not None
             else {}
         ),
         "model": {
@@ -309,6 +313,11 @@ def model_encoding(
             ),
         },
         "encoding": describe_encoder(encoder),
+        **(
+            {"format_version": 3, "label_schema": "multilabel", "channels": {"B": 0, "I": 1}}
+            if architecture == "multilabel"
+            else {}
+        ),
     }
 
 
@@ -370,7 +379,7 @@ def _train_fold(
     partitions = split_paths(split_dir, validation_index=validation_index)
     fold_dir = run_dir if validation_index is None else run_dir / f"fold_{validation_index:02d}"
 
-    if architecture in ("multihead", "multihead_crf"):
+    if architecture in ("multihead", "multihead_crf", "multilabel"):
         from lab.ner.encoding.encoder import encoder_from_description
         from lab.ner.encoding.multihead import training_entity_labels
 
@@ -384,6 +393,15 @@ def _train_fold(
     architecture_kwargs = head_architecture_kwargs(encoder, architecture_kwargs)
     train_rows = encode_partition(encoder, partitions["train"], encoded)
     validation_rows = encode_partition(encoder, partitions["validation"], encoded)
+
+    if architecture == "multilabel":
+        from lab.ner.training.binary import binary_architecture_kwargs, configure_binary_metrics
+
+        architecture_kwargs = binary_architecture_kwargs(
+            architecture_kwargs, train_rows, encoder.entity_labels
+        )
+        for frame in (train_rows, validation_rows):
+            configure_binary_metrics(frame, architecture_kwargs)
 
     set_seed(training_arguments.seed)
 
@@ -429,7 +447,7 @@ def _train_fold(
             **split_provenance(validation_index, partitions),
             **(
                 {"entity_labels": encoder.entity_labels, "encoding": describe_encoder(encoder)}
-                if architecture in ("multihead", "multihead_crf")
+                if architecture in ("multihead", "multihead_crf", "multilabel")
                 else {}
             ),
         },

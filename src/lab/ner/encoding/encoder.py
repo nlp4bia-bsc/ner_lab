@@ -75,8 +75,16 @@ class Encoder:
         require_target_label: bool = True,
         entity_labels: list[str] | None = None,
         include_word_mask: bool = False,
+        label_schema: str = "bio",
     ) -> None:
-        self.include_word_mask = include_word_mask
+        if (
+            label_schema not in ("bio", "multilabel")
+            or label_schema == "multilabel"
+            and target_label is not None
+        ):
+            raise ValueError("Use label_schema=bio, or multilabel with target_label=None.")
+        self.label_schema = label_schema
+        self.include_word_mask = include_word_mask or label_schema == "multilabel"
         self.tokenizer = tokenizer
         self.target_label = target_label
         self.language = language
@@ -133,6 +141,8 @@ class Encoder:
 
             result.attrs["multihead_gold"] = spans_from_corpus(corpus).to_dict("records")
             result.attrs["entity_labels"] = list(self.entity_labels)
+            if self.label_schema == "multilabel":
+                result.attrs["label_schema"] = "multilabel"
 
         return result
 
@@ -177,7 +187,12 @@ class Encoder:
             for row in rows:
                 labels = np.asarray(row["labels"])
                 eligible = labels if labels.ndim == 1 else labels[:, 0]
-                row["crf_word_mask"] = (eligible != -100).tolist()
+                mask_name = "word_mask" if self.label_schema == "multilabel" else "crf_word_mask"
+                row[mask_name] = (eligible != -100).tolist()
+                if self.label_schema == "multilabel":
+                    binary = np.stack((labels == 1, labels == 2), -1).astype(np.int8)
+                    binary[labels == -100] = -100
+                    row["labels"] = binary.tolist()
         return rows
 
     def _encode(self, documents: Iterable[tuple[str, str, list[dict]]]) -> pd.DataFrame:
@@ -294,6 +309,7 @@ def describe_encoder(encoder: Encoder) -> dict:
     return {
         **({"entity_labels": encoder.entity_labels} if encoder.target_label is None else {}),
         **({"include_word_mask": True} if encoder.include_word_mask else {}),
+        **({"label_schema": "multilabel"} if encoder.label_schema == "multilabel" else {}),
         "target_label": encoder.target_label,
         "language": encoder.language,
         "sentence_segmenter": describe_sentence_segmenter(encoder.language),
@@ -379,6 +395,8 @@ def encode_partition(
             frame.attrs = {}
         result = pd.concat(clean, ignore_index=True)
         result.attrs.update(multihead_gold=gold, entity_labels=list(encoder.entity_labels))
+        if encoder.label_schema == "multilabel":
+            result.attrs["label_schema"] = "multilabel"
 
         return result
 

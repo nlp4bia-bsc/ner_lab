@@ -80,6 +80,8 @@ def winner_configuration(
         },
     }
 
+    if architecture == "multilabel":
+        configuration["save_model"] = True
     settings = sampled_architecture_kwargs(sampled, architecture_kwargs)
     if settings:
         configuration["architecture_kwargs"] = settings

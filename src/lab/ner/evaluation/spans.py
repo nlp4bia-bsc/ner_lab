@@ -26,6 +26,10 @@ def gold_spans(
 ) -> pd.DataFrame:
     """Rebuild the annotated spans that a set of encoded rows encodes."""
     entity_labels = entity_labels or rows.attrs.get("entity_labels")
+    if rows.attrs.get("label_schema") == "multilabel":
+        from lab.ner.evaluation.multilabel import categorical_rows
+
+        rows = categorical_rows(rows)
     if entity_labels is not None:
         from lab.ner.evaluation.multihead import multihead_spans
 
@@ -79,6 +83,10 @@ def predicted_spans(
     `include_scores` adds the mean softmax probability of the tokens behind it.
     """
     entity_labels = entity_labels or rows.attrs.get("entity_labels")
+    if rows.attrs.get("label_schema") == "multilabel":
+        from lab.ner.evaluation.multilabel import multilabel_spans
+
+        return multilabel_spans(rows, predictions, tokenizer, entity_labels, texts, include_scores)
     if entity_labels is not None:
         from lab.ner.evaluation.multihead import multihead_spans
 
