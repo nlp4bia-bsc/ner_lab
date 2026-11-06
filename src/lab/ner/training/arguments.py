@@ -121,4 +121,8 @@ def for_inference(arguments: TrainingArguments) -> TrainingArguments:
     else:
         changes["evaluation_strategy"] = "no"
 
-    return dataclasses.replace(arguments, **changes)
+    resolved = dataclasses.replace(arguments, **changes)
+    _ = resolved.device
+    resolved._n_gpu = arguments.n_gpu
+
+    return resolved

@@ -184,10 +184,14 @@ def resolve_device(device: str = "auto") -> torch.device:
     if device == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    if device == "cuda" and not torch.cuda.is_available():
-        raise ValueError("device='cuda' was requested but CUDA is not available.")
+    resolved = torch.device(device)
+    if resolved.type == "cuda":
+        if not torch.cuda.is_available():
+            raise ValueError(f"device={device!r} was requested but CUDA is not available.")
+        if resolved.index is not None and resolved.index >= torch.cuda.device_count():
+            raise ValueError(f"device={device!r} exceeds the visible CUDA device count.")
 
-    return torch.device(device)
+    return resolved
 
 
 def _validate_multihead_description(description: dict) -> None:

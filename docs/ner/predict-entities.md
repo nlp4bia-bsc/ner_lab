@@ -123,3 +123,12 @@ The artifact must match the checkpoint's weights, tokenizer and catalogue. Gold 
 the input geometry or saved thresholds. Raw-text and annotated copies give identical predictions.
 Original gold remains in scoring; representation diagnostics expose window/word limitations
 when the input itself carries annotations. TSV/Parquet use the existing canonical columns.
+
+Binary decisions and conditional probabilities are computed per batch on the inference
+device before host transfer. Default inference uses BF16 on supported CUDA hardware, FP16
+otherwise, and FP32 on CPU. Prediction outputs are offloaded every eight batches to bound
+device accumulation; the final span tables and diagnostic scoring run on CPU. Select physical
+GPUs with `CUDA_VISIBLE_DEVICES` before launch and use `device: cuda`; a nonzero indexed
+device is rejected by Trainer inference instead of silently moving to its first visible GPU.
+See the [acceleration review](../../verification/ACCELERATION_REVIEW.md) for measured evidence
+and the CUDA qualification that remains outstanding.

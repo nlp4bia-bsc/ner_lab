@@ -23,14 +23,14 @@ class PackedWords:
         expected = self.mask.shape
         if values.shape[:3] != expected:
             raise ValueError("Compact values do not match packed batch/time/head dimensions.")
-        output = torch.full(
-            (expected[0], self.original_length, expected[2], *trailing),
-            absent,
-            device=values.device,
-            dtype=values.dtype,
-        )
-        batch, position, head = self.mask.nonzero(as_tuple=True)
-        output[batch, self.positions[batch, position, head], head] = values[batch, position, head]
+        width = expected[1]
+        slots = torch.arange(width, device=values.device)[None, :, None]
+        positions = torch.where(self.mask, self.positions, self.original_length + slots)
+        shape = (expected[0], self.original_length + width, expected[2], *trailing)
+        padded = torch.full(shape, absent, device=values.device, dtype=values.dtype)
+        indices = positions.reshape(*positions.shape, *((1,) * len(trailing))).expand_as(values)
+        padded.scatter_(1, indices, values)
+        output = padded[:, : self.original_length]
 
         return output[:, :, 0] if self.single_head else output
 
@@ -56,13 +56,14 @@ def pack_words(
     counts = valid.sum(1)
     width = int(counts.max().item()) if counts.numel() else 0
     ranks = valid.long().cumsum(1) - 1
-    compact = emissions.new_zeros(batch, width, heads, classes) + emissions.sum() * 0
-    positions = torch.zeros((batch, width, heads), device=emissions.device, dtype=torch.long)
-    rows, tokens, channels = valid.nonzero(as_tuple=True)
-    slots = ranks[rows, tokens, channels]
-    compact[rows, slots, channels] = emissions[rows, tokens, channels]
-    positions[rows, slots, channels] = tokens
+    tokens = torch.arange(length, device=emissions.device)[None, :, None].expand_as(valid)
+    slots = torch.where(valid, ranks, length + tokens)
+    inverse = torch.zeros((batch, 2 * length, heads), device=emissions.device, dtype=torch.long)
+    inverse.scatter_(1, slots, tokens)
+    positions = inverse[:, :width]
     compact_mask = torch.arange(width, device=emissions.device)[None, :, None] < counts[:, None, :]
+    indices = positions[..., None].expand(batch, width, heads, classes)
+    compact = emissions.gather(1, indices).masked_fill(~compact_mask[..., None], 0)
 
     return PackedWords(compact, compact_mask, positions, length, single)
 

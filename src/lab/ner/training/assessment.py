@@ -208,6 +208,7 @@ def train_model(
             include_confusion=include_confusion,
             save_model=save_model,
             track_resources=track_resources,
+            devices=devices,
         )
 
         summaries.append(result.summary)
@@ -375,6 +376,7 @@ def _train_fold(
     include_confusion: bool,
     save_model: bool,
     track_resources: bool,
+    devices: DevicePolicy,
 ) -> TrainingResult:
     partitions = split_paths(split_dir, validation_index=validation_index)
     fold_dir = run_dir if validation_index is None else run_dir / f"fold_{validation_index:02d}"
@@ -413,13 +415,15 @@ def _train_fold(
         **(architecture_kwargs or {}),
     )
     check_max_length(model, encoder.tokenizer, encoder.max_length, base_model)
+    fold_arguments = dataclasses.replace(training_arguments, output_dir=str(fold_dir))
+    apply_device_policy(fold_arguments, devices)
 
     return train(
         model=model,
         tokenizer=encoder.tokenizer,
         train_rows=train_rows,
         validation_rows=validation_rows,
-        training_arguments=dataclasses.replace(training_arguments, output_dir=str(fold_dir)),
+        training_arguments=fold_arguments,
         compute_metrics=build_compute_metrics(
             rows=validation_rows,
             tokenizer=encoder.tokenizer,

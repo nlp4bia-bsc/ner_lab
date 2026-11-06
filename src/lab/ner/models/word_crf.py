@@ -164,6 +164,8 @@ class WordCRFForTokenClassification(MultiHeadForTokenClassification):
         """Return log marginals with -inf at absent positions, using the explicit word mask."""
         if crf_word_mask is None:
             raise ValueError("Word-level marginals require explicit crf_word_mask.")
-        return self.structured_from_emissions(
-            emissions, crf_word_mask, attention_mask, probabilities=True
-        ).log_marginals
+        packed = pack_words(emissions, crf_word_mask, attention_mask)
+
+        return packed.restore(
+            self.chain.log_marginals(packed.emissions, packed.mask), absent=-torch.inf
+        )

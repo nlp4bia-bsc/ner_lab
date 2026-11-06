@@ -1,0 +1,77 @@
+{
+  "environment": {
+    "torch": "2.10.0+cpu",
+    "device": "cpu",
+    "threads": 2,
+    "gpu": null
+  },
+  "protocol": {
+    "shape": [
+      8,
+      128,
+      6,
+      3
+    ],
+    "repeats": 100,
+    "warmups": 5,
+    "gradient": false,
+    "includes_backbone": false,
+    "cuda_timing_synchronized": false
+  },
+  "current": {
+    "pack_restore": {
+      "wall_seconds_per_call": 0.00012889056000858545,
+      "incremental_peak_cuda_bytes": null,
+      "nonzero_operations": 0,
+      "scalar_extractions": 1
+    },
+    "gold_score": {
+      "wall_seconds_per_call": 0.00015697012000600807,
+      "incremental_peak_cuda_bytes": null
+    },
+    "nll": {
+      "wall_seconds_per_call": 0.003746137019988964,
+      "incremental_peak_cuda_bytes": null
+    },
+    "viterbi": {
+      "wall_seconds_per_call": 0.002471686700009741,
+      "incremental_peak_cuda_bytes": null
+    },
+    "marginals": {
+      "wall_seconds_per_call": 0.00805324026998278,
+      "incremental_peak_cuda_bytes": null
+    }
+  },
+  "baseline_revision": "ea8c4f1",
+  "baseline": {
+    "pack_restore": {
+      "wall_seconds_per_call": 0.00028410112998244585,
+      "incremental_peak_cuda_bytes": null,
+      "nonzero_operations": 2,
+      "scalar_extractions": 1
+    },
+    "gold_score": {
+      "wall_seconds_per_call": 0.0010091649900277845,
+      "incremental_peak_cuda_bytes": null
+    },
+    "nll": {
+      "wall_seconds_per_call": 0.004854085219994886,
+      "incremental_peak_cuda_bytes": null
+    },
+    "viterbi": {
+      "wall_seconds_per_call": 0.002505138550004631,
+      "incremental_peak_cuda_bytes": null
+    },
+    "marginals": {
+      "wall_seconds_per_call": 0.008070496190011909,
+      "incremental_peak_cuda_bytes": null
+    }
+  },
+  "numerical_equivalence": {
+    "pack_restore": true,
+    "gold_score": true,
+    "nll": true,
+    "viterbi": true,
+    "marginals": true
+  }
+}

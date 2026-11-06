@@ -170,6 +170,8 @@ def predict_member(
     binary = getattr(model, "label_schema", None) == "multilabel"
     structured = hasattr(model, "structured_from_emissions")
     has_marginals = structured or hasattr(model, "marginals_from_emissions")
+    from lab.ner.training.trainer import BinaryPredictionTrainer
+
     predictions = predict_logits(
         model=model,
         tokenizer=tokenizer,
@@ -177,8 +179,14 @@ def predict_member(
         batch_size=batch_size,
         device=device,
         pad_to_multiple_of=pad_to_multiple_of,
-        trainer_class=(WordMarginalTrainer if structured else MarginalCRFTrainer)
-        if has_marginals
+        trainer_class=(
+            BinaryPredictionTrainer
+            if binary
+            else WordMarginalTrainer
+            if structured
+            else MarginalCRFTrainer
+        )
+        if binary or has_marginals
         else None,
     ).astype(np.float32)
     inferred = time.perf_counter()

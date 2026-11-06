@@ -675,3 +675,31 @@ fitting. A retrained checkpoint needs refitting/revalidation. Ensembles consume 
 stored in each member checkpoint; external decoder overrides are not ensemble member
 arguments. To deploy selected choices in an ensemble, train/save a member with those
 explicit decoder arguments, revalidate it and fit the ensemble again.
+
+### Execution devices and prediction memory
+
+The shared Transformer, vectorized heads, binary losses, CRF dynamic programming and binary
+tensor decoders operate on the model's device. Native Multi-Label entity inference and ensemble
+adapters decode each batch there before transferring predictions to CPU. The internal adapter
+carries six channels (two raw logits, three derived probabilities and a decoded tag);
+ordinary `predict_logits` still returns `[B,L,K,2]` raw logits. This extra transport keeps token
+diagnostics without a second Transformer pass. Span tables, text offsets, strict scoring,
+ensemble voting and cached decoder-HPO selection remain CPU computations.
+
+Without explicit TrainingArguments, inference follows the training precision policy (BF16
+where CUDA supports it, FP16 otherwise, neither on CPU), offloads every eight batches and
+concatenates output arrays once on the host. This bounds device prediction accumulation;
+the final dense output still scales with corpus windows. Explicit `training_arguments`
+control precision and `eval_accumulation_steps`/`eval_do_concat_batches` as before.
+
+`train_model(devices=1)` pins one replica, including each copied fold's arguments;
+`devices="all"` opts into single-process DataParallel and changes the effective batch and
+schedule. Ray runs independent trials concurrently with one reserved GPU per trial.
+Ensemble members run sequentially to bound model memory. This is not a promise that all
+stages run concurrently or on CUDA, or that DDP/FSDP orchestration is qualified.
+
+For Trainer inference select physical devices with `CUDA_VISIBLE_DEVICES` before Python
+starts, then use `device="cuda"` or `"auto"`. `device="cuda:1"` is rejected by `predict_logits`
+instead of being silently replaced by the Trainer's first visible GPU. `load_model` alone
+still accepts valid indexed devices. See the
+[acceleration audit](../../verification/ACCELERATION_REVIEW.md) and hardware qualification commands.

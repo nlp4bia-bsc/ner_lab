@@ -54,7 +54,14 @@ def predict_logits(
             model, tokenizer, rows, training_arguments, pad_to_multiple_of, trainer_class
         )
 
-    on_cpu = resolve_device(device).type == "cpu"
+    resolved_device = resolve_device(device)
+    if resolved_device.type == "cuda" and resolved_device.index not in (None, 0):
+        raise ValueError(
+            "Trainer inference uses the first visible GPU; select the physical GPU with "
+            "CUDA_VISIBLE_DEVICES before launching Python and pass device='cuda'. "
+            "An indexed device other than cuda:0 would otherwise be ignored."
+        )
+    on_cpu = resolved_device.type == "cpu"
 
     with tempfile.TemporaryDirectory() as temporary_dir:
         return _predict(
@@ -65,7 +72,8 @@ def predict_logits(
                 temporary_dir,
                 per_device_eval_batch_size=batch_size,
                 use_cpu=on_cpu,
-                fp16=not on_cpu,
+                eval_accumulation_steps=8,
+                eval_do_concat_batches=False,
             ),
             pad_to_multiple_of,
             trainer_class,
@@ -138,6 +146,19 @@ def _predict(
         dataset = dataset.remove_columns("labels")
     predictions = trainer.predict(dataset).predictions
 
+    if isinstance(predictions, list):
+        batches = [batch[0] if isinstance(batch, tuple) else batch for batch in predictions]
+        if not batches:
+            return np.empty((0,))
+        width = max(batch.shape[1] for batch in batches)
+        count = sum(batch.shape[0] for batch in batches)
+        values = np.full((count, width, *batches[0].shape[2:]), -100, dtype=batches[0].dtype)
+        start = 0
+        for batch in batches:
+            values[start : start + len(batch), : batch.shape[1]] = batch
+            start += len(batch)
+
+        return values
     if isinstance(predictions, tuple):
         predictions = predictions[0]
 

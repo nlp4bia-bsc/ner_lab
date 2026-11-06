@@ -120,6 +120,44 @@ class MultiHeadTrainer(Trainer):
         return loss, logits, labels
 
 
+class BinaryPredictionTrainer(MultiHeadTrainer):
+    """Decode binary heads on the inference device before transferring predictions.
+
+    Internal transport contains raw B/I logits, three adapted state probabilities
+    and one decoded tag. The ordinary predict_logits path still returns raw logits.
+    """
+
+    def prediction_step(
+        self,
+        model: nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
+        prediction_loss_only: bool,
+        ignore_keys: list[str] | None = None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+        from lab.ner.models.binary_decoding import adapted_probabilities, decode_binary
+
+        loss, logits, labels = super().prediction_step(
+            model, inputs, prediction_loss_only, ignore_keys=ignore_keys
+        )
+        if logits is None:
+            return loss, None, labels
+        decoder = self.accelerator.unwrap_model(model)
+        mask = inputs["word_mask"].to(logits.device, non_blocking=True)
+        if self.processing_class.padding_side == "left":
+            width = logits.shape[1]
+            lengths = inputs["attention_mask"].sum(1).to(logits.device)
+            positions = (
+                torch.arange(width, device=logits.device)[None] + width - lengths[:, None]
+            ) % width
+            mask = mask.gather(1, positions)
+        with torch.no_grad():
+            tags = decode_binary(logits, mask, decoder.decoding, decoder.entity_labels)
+            probabilities = adapted_probabilities(logits, decoder.decoding, decoder.entity_labels)
+            predictions = torch.cat((logits.float(), probabilities, tags[..., None].float()), -1)
+
+        return loss, predictions, labels
+
+
 class WordCRFTrainer(Trainer):
     """Evaluate using Viterbi; optionally transport real marginal log probabilities."""
 
@@ -283,7 +321,14 @@ def train(
     )
     trainer.add_callback(metrics_logger)
 
-    tracker = ResourceTracker() if track_resources else None
+    device_ids = (
+        list(range(trainer.args.n_gpu))
+        if trainer.args.n_gpu > 1
+        else [trainer.args.device.index or 0]
+        if trainer.args.n_gpu
+        else []
+    )
+    tracker = ResourceTracker(device_ids=device_ids) if track_resources else None
     resources = None
     paths: dict[str, Path] = {}
 

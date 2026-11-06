@@ -4,6 +4,10 @@ Recorded on 2026-11-06. This report describes the local implementation and execu
 checks, including checks blocked by the environment. It does not claim clinical
 accuracy improvements or complete execution of the project's verification suite.
 
+The subsequent [acceleration review](ACCELERATION_REVIEW.md) records device-local inference,
+replica-policy fixes, memory collection changes and additional verification. The measurements
+below describe the original feature benchmark, not GPU qualification.
+
 ## Integration and architecture
 
 The integration map was established against the workspace, which already contained

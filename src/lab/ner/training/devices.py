@@ -72,6 +72,9 @@ def apply_device_policy(
 
         return arguments._n_gpu
 
+    _ = arguments.device
+    arguments._n_gpu = visible
+
     if visible > 1:
         warnings.warn(
             f"\n{BANNER}\n{multi_device_message(visible, arguments, context)}\n"

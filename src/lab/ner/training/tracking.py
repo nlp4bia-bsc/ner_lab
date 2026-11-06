@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -149,13 +149,20 @@ class ResourceTracker:
     numbers attributed to this process, not the whole node.
     """
 
-    def __init__(self, measure_power_secs: int = 1) -> None:
+    def __init__(
+        self, measure_power_secs: int = 1, device_ids: Sequence[int] | None = None
+    ) -> None:
         import torch
         from codecarbon import EmissionsTracker, OutputMethod
         from codecarbon.output_methods.logger import LoggerOutput
 
         self._torch = torch
-        self._gpu_available = torch.cuda.is_available()
+        self._device_ids = (
+            (list(device_ids) if device_ids is not None else [torch.cuda.current_device()])
+            if torch.cuda.is_available()
+            else []
+        )
+        self._gpu_available = bool(self._device_ids)
 
         self._tracker = EmissionsTracker(
             tracking_mode="process",
@@ -168,8 +175,8 @@ class ResourceTracker:
         )
 
     def start(self) -> None:
-        if self._gpu_available:
-            self._torch.cuda.reset_peak_memory_stats()
+        for device in self._device_ids:
+            self._torch.cuda.reset_peak_memory_stats(device)
 
         self._tracker.start()
 
@@ -192,6 +199,13 @@ class ResourceTracker:
         if self._gpu_available:
             stats["gpu_peak_vram_allocated_gb"] = self._torch.cuda.max_memory_allocated() / 1024**3
             stats["gpu_peak_vram_reserved_gb"] = self._torch.cuda.max_memory_reserved() / 1024**3
+            for device in self._device_ids:
+                stats[f"gpu_peak_vram_allocated_gb__cuda_{device}"] = (
+                    self._torch.cuda.max_memory_allocated(device) / 1024**3
+                )
+                stats[f"gpu_peak_vram_reserved_gb__cuda_{device}"] = (
+                    self._torch.cuda.max_memory_reserved(device) / 1024**3
+                )
 
         return stats
 

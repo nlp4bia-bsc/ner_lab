@@ -121,3 +121,13 @@ hybrid ensembles. [MULTILABEL_RESULTS.md](../../verification/MULTILABEL_RESULTS.
 executed local evidence and remaining environment/research limits. Arbitrary intraclass span
 recognition, calibrated probabilities, clinical effectiveness and GPU performance remain
 separate work; sigmoid BIO does not implement W2NER/GlobalPointer.
+
+## Acceleration qualification
+
+D153–D156 correct inference precision, device-local binary decisions, fold replica policy
+and per-device memory reporting; reduce CRF synchronization and repeated work; and bound
+default inference output accumulation. [ACCELERATION_REVIEW.md](../../verification/ACCELERATION_REVIEW.md)
+records the audit, numerical regressions and measured CPU kernel comparison.
+Actual CUDA FP16/BF16 and two-GPU qualification require GPU hardware and a CUDA-enabled
+Torch build. Multi-process DDP/FSDP orchestration and clinical-scale throughput are not
+certified by CPU fixtures or the single-process DataParallel path.

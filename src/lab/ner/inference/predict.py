@@ -124,7 +124,7 @@ def predict_entities(
             f"No windows were produced from {len(corpus)} document(s) — nothing to predict on."
         )
 
-    from lab.ner.training.trainer import WordMarginalTrainer
+    from lab.ner.training.trainer import BinaryPredictionTrainer, WordMarginalTrainer
 
     predictions = predict_logits(
         model=model,
@@ -133,7 +133,9 @@ def predict_entities(
         batch_size=batch_size,
         device=device,
         pad_to_multiple_of=pad_to_multiple_of,
-        trainer_class=WordMarginalTrainer if structured else None,
+        trainer_class=(BinaryPredictionTrainer if binary else WordMarginalTrainer)
+        if binary or structured
+        else None,
     )
 
     probabilities = None

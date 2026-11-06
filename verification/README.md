@@ -125,3 +125,25 @@ and hybrid ensembles use local tiny BERT/DistilBERT fixtures. The shared benchma
 its original nine default CRF ablations; `--variants` explicitly selects added binary
 families. Cached decoder comparisons reuse each binary worker's same emissions.
 [MULTILABEL_RESULTS.md](MULTILABEL_RESULTS.md) separates executed evidence, skips and blocks.
+
+## Acceleration qualification
+
+```bash
+OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 HF_HUB_OFFLINE=1 \
+  .venv-verify/bin/python verification/verify_acceleration.py
+CUDA_VISIBLE_DEVICES=0 python verification/verify_acceleration.py --require-cuda
+CUDA_VISIBLE_DEVICES=0,1 python verification/verify_acceleration.py --require-multi-gpu
+python verification/benchmark_acceleration.py --baseline ea8c4f1 --device cpu \
+  --repeats 100 --output /tmp/acceleration-cpu.json
+python verification/benchmark_acceleration.py --baseline ea8c4f1 --device cuda \
+  --repeats 100 --output /tmp/acceleration-cuda.json
+```
+
+The hardware-required modes fail before testing if the required CUDA build/devices are
+absent; ordinary CPU runs report CUDA/DataParallel skips. The same local fixtures cover
+all five model architectures, gradients, checkpointing, compact masks, empty chains,
+inference-device binary decisions, left/right padding, bounded batch collection, native
+training and checkpoint round-trip. Two-device tests check one backbone forward per replica
+and equivalence on equally supervised shards. GPU memory-accounting mocks test bookkeeping,
+not real VRAM. [ACCELERATION_REVIEW.md](ACCELERATION_REVIEW.md) records executed results,
+the CPU kernel measurements and the remaining hardware qualification.

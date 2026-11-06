@@ -52,7 +52,17 @@ def binary_predictions(
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """Return independent BIO tags and optional conditional legal-state probabilities."""
     settings = decoding_settings(rows, settings)
-    values = torch.as_tensor(np.asarray(logits), dtype=torch.float32)
+    logits = np.asarray(logits)
+    if logits.ndim == 4 and logits.shape[-1] == 6:
+        if logits.shape[0] != len(rows) or logits.shape[2] != len(entity_labels):
+            raise ValueError("Binary prediction transport disagrees with rows or entity labels.")
+        if settings == decoding_settings(rows):
+            tags = logits[..., 5].astype(np.int64)
+            probabilities = logits[..., 2:5] if include_probabilities else None
+
+            return tags, probabilities
+        logits = logits[..., :2]
+    values = torch.as_tensor(logits, dtype=torch.float32)
     if (
         values.ndim != 4
         or values.shape[0] != len(rows)
@@ -103,7 +113,7 @@ def multilabel_token_metrics(
 ) -> dict[str, float | int]:
     """Binary B/I diagnostics use channel threshold .5; span selection uses its own decoder."""
     labels = rows.attrs["entity_labels"]
-    values = torch.as_tensor(predictions, dtype=torch.float32)
+    values = torch.as_tensor(predictions[..., :2], dtype=torch.float32)
     chosen = binary_probabilities(values, decoding_settings(rows, settings), labels).numpy() >= 0.5
     gold = np.full(chosen.shape, -100)
     for index, row in enumerate(rows.labels):

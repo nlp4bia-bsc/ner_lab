@@ -83,7 +83,7 @@ class ConstrainedChain(nn.Module):
             self.end_transitions.float(),
         )
 
-    def _forward(self, emissions, mask):
+    def _forward(self, emissions, mask, keep_history=False):
         start, transitions, end = self._potentials()
         alpha = start.unsqueeze(0).expand(emissions.shape[0], -1, -1)
         history = []
@@ -97,7 +97,8 @@ class ConstrainedChain(nn.Module):
                 )
             )
             alpha = torch.where(mask[:, position, :, None], step, alpha)
-            history.append(alpha)
+            if keep_history:
+                history.append(alpha)
         partition = reachable_logsumexp(alpha + end, -1)
         active = mask.any(dim=1)
         partition = torch.where(active, partition, torch.zeros_like(partition))
@@ -144,11 +145,8 @@ class ConstrainedChain(nn.Module):
             heads = torch.arange(self.num_heads, device=values.device)[None, :]
             result = self.start_transitions.float()[heads, safe_tags[:, 0]] * valid[:, 0]
             result = result + (values.gather(-1, safe_tags[..., None]).squeeze(-1) * valid).sum(1)
-            for position in range(1, valid.shape[1]):
-                edge = self.transitions.float()[
-                    heads, safe_tags[:, position - 1], safe_tags[:, position]
-                ]
-                result = result + edge * valid[:, position]
+            edges = self.transitions.float()[heads[:, None, :], safe_tags[:, :-1], safe_tags[:, 1:]]
+            result = result + (edges * valid[:, 1:]).sum(1)
             lengths = valid.sum(1)
             last = safe_tags.gather(1, (lengths - 1).clamp_min(0)[:, None, :]).squeeze(1)
             result = result + self.end_transitions.float()[heads, last] * (lengths > 0)
@@ -210,7 +208,7 @@ class ConstrainedChain(nn.Module):
         """Normalized log marginals; absent positions are all -inf, not confident O."""
         with torch.autocast(device_type=emissions.device.type, enabled=False):
             values, valid, single = self._inputs(emissions, mask)
-            partition, alphas = self._forward(values, valid)
+            partition, alphas = self._forward(values, valid, keep_history=True)
             _, transitions, end = self._potentials()
             beta = end.unsqueeze(0).expand(values.shape[0], -1, -1)
             results = []

@@ -363,3 +363,9 @@ confidence in both member inference and ensemble adaptation. Different-type over
 BIO's intraclass limitation remains. Version-1/2 ensemble artifacts keep their contracts.
 See [hybrid YAML](configs/ensemble-multilabel.yaml). Ensembles use checkpoint-persisted settings,
 not an external `decoder_path`; save and revalidate the chosen member configuration before fitting.
+
+Multi-Label decisions and conditional distributions are computed batchwise on the member's
+inference device before conversion to the existing host word tables. Members are still loaded
+and released sequentially; vote alignment, NumPy combination, Optuna and span tables run on
+CPU. Per-head tensor parallelism does not imply parallel member loading. CUDA throughput and
+multi-GPU behavior need the [hardware qualification](../../verification/ACCELERATION_REVIEW.md).
