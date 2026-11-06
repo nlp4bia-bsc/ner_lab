@@ -89,3 +89,19 @@ The benchmark separates member pipeline, batched inference, alignment, combinati
 decoding and Optuna, with one process per scenario and equal padded length.
 [UNIFIED_ENSEMBLE_RESULTS.md](UNIFIED_ENSEMBLE_RESULTS.md) records actual results and limits;
 these tests do not require network downloads or imply GPU/clinical-model validation.
+
+
+Constrained CRF verification (local tiny Transformer; no model download):
+
+```bash
+OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 python verification/verify_chain.py
+OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 python verification/verify_word_crf.py
+OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 python verification/benchmark_crf.py --output /tmp/crf.json
+```
+
+`verify_chain` enumerates all legal BIO2 paths of lengths 1–5. `verify_word_crf` covers
+word compaction, classic/Multi-Head training and loading, independent annotation-free
+inference, marginal ensembles and real Ray/Optuna winner replay. Ray requires local sockets.
+`benchmark_crf` runs nine CPU ablations with three seeds in isolated processes; its synthetic
+strict scores do not establish clinical model quality. See
+[the recorded evidence](CONSTRAINED_CRF_STATUS.md).

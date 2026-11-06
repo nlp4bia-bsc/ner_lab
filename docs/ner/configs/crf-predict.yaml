@@ -1,0 +1,5 @@
+task: ner.predict_entities
+model_dir: assets/runs/crf/best_model
+documents: assets/texts
+output_dir: assets/predictions/crf
+batch_size: 16

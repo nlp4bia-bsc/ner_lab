@@ -284,7 +284,7 @@ def save_member(root, base, tokenizer, architecture, labels, outside=False):
         max_length=32,
         entity_labels=list(labels) if multihead else None,
     )
-    kwargs = {"entity_labels": labels, "dropout": 0.0} if multihead else {}
+    kwargs = {"entity_labels": labels, "dropout": 0.0} if multihead else ({"crf_version": 1} if architecture == "crf" else {})
     model = build_model(str(base), encoder.label2id, encoder.id2label, architecture, **kwargs)
     with torch.no_grad():
         model.classifier.weight.zero_()

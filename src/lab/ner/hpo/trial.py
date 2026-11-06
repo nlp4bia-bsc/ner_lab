@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import gc
+import math
 import statistics
 from collections.abc import Callable, Iterable
 from difflib import get_close_matches
@@ -22,7 +23,86 @@ from lab.ner.training.devices import require_single_device
 from lab.ner.training.tracking import ResourceTracker
 from lab.ner.training.trainer import train
 
-RESERVED_DIMENSIONS = ("variant", "effective_train_batch_size")
+CRF_DIMENSIONS = (
+    "dropout",
+    "aux_ce_weight",
+    "constrain_transitions",
+    "loss_type",
+    "loss_reduction",
+    "tag_scheme",
+)
+ARCHITECTURE_DIMENSIONS = tuple(f"architecture__{name}" for name in CRF_DIMENSIONS)
+RESERVED_DIMENSIONS = ("variant", "effective_train_batch_size", *ARCHITECTURE_DIMENSIONS)
+
+
+def sampled_architecture_kwargs(
+    sampled: dict[str, Any], settings: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Route namespaced architecture dimensions separately from optimizer arguments."""
+    result = dict(settings or {})
+    result.update(
+        {
+            name.removeprefix("architecture__"): value
+            for name, value in sampled.items()
+            if name in ARCHITECTURE_DIMENSIONS
+        }
+    )
+    return result
+
+
+def validate_architecture_dimensions(
+    space: dict[str, Any],
+    architecture: str | Architecture,
+    settings: dict[str, Any] | None = None,
+) -> None:
+    """Reject unsupported or incompatible architecture search families before trials."""
+    dimensions = set(space) & set(ARCHITECTURE_DIMENSIONS)
+    settings = settings or {}
+    if dimensions and (
+        architecture not in ("crf", "multihead_crf") or settings.get("crf_version", 2) != 2
+    ):
+        raise ValueError("CRF search dimensions require version-2 crf or multihead_crf.")
+    allowed = {
+        "tag_scheme": ["BIO2"],
+        "loss_reduction": ["word_mean"],
+        "loss_type": ["crf", "cross_entropy"],
+        "constrain_transitions": [True, False],
+    }
+    for name, options in allowed.items():
+        domain = space.get(f"architecture__{name}")
+        if domain is not None and (
+            getattr(domain, "categories", None) is None
+            or any(value not in options for value in domain.categories)
+        ):
+            raise ValueError(f"architecture__{name} must choose from {options}.")
+    for name in ("dropout", "aux_ce_weight"):
+        domain = space.get(f"architecture__{name}")
+        if domain is None:
+            continue
+        candidates = getattr(domain, "categories", None)
+        bounds = candidates if candidates is not None else [domain.lower, domain.upper]
+        if any(
+            not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+            or name == "dropout"
+            and value > 1
+            for value in bounds
+        ):
+            raise ValueError(f"Invalid nonnegative search bounds for architecture__{name}.")
+    loss_domain = space.get("architecture__loss_type")
+    losses = (
+        loss_domain.categories if loss_domain is not None else [settings.get("loss_type", "crf")]
+    )
+    auxiliary = space.get("architecture__aux_ce_weight")
+    values = (
+        (getattr(auxiliary, "categories", None) or [auxiliary.upper])
+        if auxiliary is not None
+        else [settings.get("aux_ce_weight", 0)]
+    )
+    if "cross_entropy" in losses and any(value != 0 for value in values):
+        raise ValueError("Use separate sweeps for constrained CE and nonzero auxiliary CE weights.")
+
 
 OOM_PATTERNS = (
     "cuda out of memory",
@@ -166,6 +246,12 @@ def run_trial(
         ),
     )
 
+    architecture_kwargs = sampled_architecture_kwargs(sampled, architecture_kwargs)
+    if any(name in sampled for name in ARCHITECTURE_DIMENSIONS) and architecture not in (
+        "crf",
+        "multihead_crf",
+    ):
+        raise ValueError("CRF architecture dimensions require crf or multihead_crf.")
     metric = base_arguments.metric_for_best_model
 
     if not metric:
@@ -275,7 +361,7 @@ def _seed_score(
     set_seed(arguments.seed)
 
     settings = dict(architecture_kwargs or {})
-    if architecture == "multihead":
+    if architecture in ("multihead", "multihead_crf"):
         settings["entity_labels"] = variant.entity_labels
     model = build_model(
         base_model=variant.base_model,

@@ -104,6 +104,7 @@ def encode_variants(
     language: str,
     overlap_policy: OverlapPolicy | None = None,
     min_sentence_tokens: int = 4,
+    include_word_mask: bool = False,
 ) -> dict[str, EncodedVariant]:
     """
     Window the train and validation partitions once per variant, before any trial.
@@ -134,6 +135,7 @@ def encode_variants(
             strategy=specification["strategy"],
             context_tokens=specification["context_tokens"],
             min_sentence_tokens=min_sentence_tokens,
+            include_word_mask=include_word_mask,
         )
 
         encoded[key] = EncodedVariant(

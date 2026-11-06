@@ -80,7 +80,7 @@ def verify_registry(checks: Checks) -> None:
 
     from lab.ner.models import BUILTIN_ARCHITECTURES, build_model
 
-    checks.equal("builtin architectures", BUILTIN_ARCHITECTURES, ("linear", "crf"))
+    checks.equal("builtin architectures", BUILTIN_ARCHITECTURES, ("linear", "crf", "multihead", "multihead_crf"))
 
     calls = []
 
@@ -126,9 +126,8 @@ def verify_capacity(checks: Checks) -> None:
         checks.skip("max_length check", "torch is not installed in this environment")
         return
 
-    from fixtures import tiny_base_model
+    from fixtures import local_tokenizer, tiny_base_model
     from transformers import (
-        AutoTokenizer,
         BertConfig,
         BertForTokenClassification,
         RobertaConfig,
@@ -137,7 +136,7 @@ def verify_capacity(checks: Checks) -> None:
 
     from lab.ner.models import build_model, check_max_length
 
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    tokenizer = local_tokenizer()
     sizes = {"hidden_size": 32, "num_hidden_layers": 1, "num_attention_heads": 2,
              "intermediate_size": 64, "vocab_size": tokenizer.vocab_size, "num_labels": 3}
 

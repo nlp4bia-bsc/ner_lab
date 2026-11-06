@@ -30,7 +30,7 @@ assessment.run_dir                         # where everything was written
 | `base_model` | *required* | Pretrained encoder, by hub name or local path. |
 | `target_label` | *required* | The entity type to tag. One label, three classes (D43). |
 | `language` | *required* | Sentence-segmentation language, an ISO 639-1 code: it picks pysbd, Punkt or ICU (D128). Never guessed (D33). |
-| `architecture` | `"linear"` | `"linear"`, `"crf"`, or your own `(base_model, label2id, id2label, **kwargs) -> model`. |
+| `architecture` | `"linear"` | `"linear"`, `"crf"`, `"multihead"`, `"multihead_crf"`, or your own `(base_model, label2id, id2label, **kwargs) -> model`. |
 | `architecture_kwargs` | `None` | Extra keywords for the chosen architecture, e.g. `{"dropout": 0.2}`. |
 | `training_arguments` | `None` | A `TrainingArguments`, or a mapping of overrides applied to `lab.ner.training.DEFAULTS`. The YAML path uses the mapping. |
 | `max_length` | `256` | Token budget per window, including special tokens. Each fold's model runs one CPU forward pass at it before training and prints `[check] <model>: a forward pass at max_length=N passed`; a length past the model's positions raises naming it (D115). |
@@ -120,3 +120,23 @@ The selection default is `span_strict_macro_f1`. Override
 `training_arguments.metric_for_best_model` with `span_strict_micro_f1`,
 `span_strict_f1__<exact-label>` or `eval_loss`; `greater_is_better` remains configurable.
 No entity list, additional CLI task or per-label training run is needed.
+
+
+## Constrained CRF and Multi-Head CRF
+
+New `architecture: crf` training uses the word-level constrained CRF (version 2).
+`architecture: multihead_crf` discovers all training types automatically with
+`target_label: null`. The orchestrator creates the eligibility mask, compacts chains,
+chooses Viterbi validation and saves exact architecture options; no extra pipeline is needed.
+
+Executable configuration templates (supply your existing local base model and prepared split):
+[CRF](configs/crf-train.yaml), [Multi-Head CRF](configs/multihead-crf-train.yaml), and
+[auxiliary CE ablation](configs/crf-auxiliary.yaml). Run `lab run PATH.yaml`.
+Use `architecture_kwargs: {loss_type: cross_entropy}` for a frozen-transition constrained
+BIO decoder trained with local CE. Use `constrain_transitions: false` only as an explicit
+unconstrained-CRF ablation. Defaults are BIO2, word-normalized balanced NLL, constraints on,
+and auxiliary CE off. Unsupported schemes/reductions fail rather than being approximated.
+
+At low level, construct `Encoder(..., include_word_mask=True)` and retain `crf_word_mask`
+in the rows passed to `train`. Old classic training semantics remain selectable with
+`architecture_kwargs: {crf_version: 1}`. Existing old checkpoints load automatically.

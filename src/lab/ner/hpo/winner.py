@@ -10,7 +10,7 @@ import yaml
 from transformers import TrainingArguments
 
 from lab.ner.encoding.encoder import strategy_name
-from lab.ner.hpo.trial import RESERVED_DIMENSIONS
+from lab.ner.hpo.trial import RESERVED_DIMENSIONS, sampled_architecture_kwargs
 from lab.ner.models.registry import Architecture, architecture_name
 
 FINAL_TRAIN_DIRNAME = "final_train"
@@ -80,8 +80,9 @@ def winner_configuration(
         },
     }
 
-    if architecture_kwargs:
-        configuration["architecture_kwargs"] = architecture_kwargs
+    settings = sampled_architecture_kwargs(sampled, architecture_kwargs)
+    if settings:
+        configuration["architecture_kwargs"] = settings
 
     return configuration
 

@@ -74,7 +74,9 @@ class Encoder:
         documents_per_batch: int = 500,
         require_target_label: bool = True,
         entity_labels: list[str] | None = None,
+        include_word_mask: bool = False,
     ) -> None:
+        self.include_word_mask = include_word_mask
         self.tokenizer = tokenizer
         self.target_label = target_label
         self.language = language
@@ -156,16 +158,27 @@ class Encoder:
             self.entity_labels = validate_entity_labels(self.entity_labels or [])
             entities = resolve_head_entities(doc_id, entities, text, self.overlap_policy)
         else:
+            if self.include_word_mask:
+                entities = [entity for entity in entities if entity["label"] == self.target_label]
             entities = resolve_entities(doc_id, entities, text, self.overlap_policy)
 
         sentences = split_into_sentences(text, self.language)
-        sentences = merge_sentences_crossing_entities(sentences, entities, text)
+        window_entities = [] if self.include_word_mask else entities
+        sentences = merge_sentences_crossing_entities(sentences, window_entities, text)
 
         tokens = tokenize_document(text, self.tokenizer)
         ranges = sentence_token_ranges(sentences, tokens)
-        windows = self._select_windows(ranges, tokens, entities, text, self.max_content_length)
+        windows = self._select_windows(
+            ranges, tokens, window_entities, text, self.max_content_length
+        )
 
-        return [self._row(tokens, window, entities, doc_id) for window in windows]
+        rows = [self._row(tokens, window, entities, doc_id) for window in windows]
+        if self.include_word_mask:
+            for row in rows:
+                labels = np.asarray(row["labels"])
+                eligible = labels if labels.ndim == 1 else labels[:, 0]
+                row["crf_word_mask"] = (eligible != -100).tolist()
+        return rows
 
     def _encode(self, documents: Iterable[tuple[str, str, list[dict]]]) -> pd.DataFrame:
         rows: list[dict] = []
@@ -280,6 +293,7 @@ def describe_encoder(encoder: Encoder) -> dict:
     """
     return {
         **({"entity_labels": encoder.entity_labels} if encoder.target_label is None else {}),
+        **({"include_word_mask": True} if encoder.include_word_mask else {}),
         "target_label": encoder.target_label,
         "language": encoder.language,
         "sentence_segmenter": describe_sentence_segmenter(encoder.language),

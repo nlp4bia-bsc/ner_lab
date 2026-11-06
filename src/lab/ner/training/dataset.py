@@ -9,7 +9,7 @@ import pandas as pd
 from datasets import Dataset
 
 REQUIRED_COLUMNS = ("input_ids", "attention_mask", "labels")
-OPTIONAL_COLUMNS = ("token_type_ids",)
+OPTIONAL_COLUMNS = ("token_type_ids", "crf_word_mask")
 
 
 def to_dataset(rows: pd.DataFrame) -> Dataset:

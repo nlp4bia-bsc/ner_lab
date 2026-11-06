@@ -1,0 +1,17 @@
+task: ner.train_model
+split_dir: assets/splits/multitype/train_val_80_20
+output_dir: assets/runs/crf
+base_model: assets/base-model
+architecture: crf
+target_label: SYMPTOM
+language: es
+max_length: 256
+architecture_kwargs:
+  dropout: 0.1
+  constrain_transitions: true
+  aux_ce_weight: 0.0
+training_arguments:
+  num_train_epochs: 8
+  learning_rate: 3.0e-05
+  per_device_train_batch_size: 8
+save_model: true

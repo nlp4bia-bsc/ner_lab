@@ -92,3 +92,18 @@ With annotated input or `reference`, all annotated labels are scored. Unknown ty
 count as micro false negatives without changing the model. Strict per-type, macro and micro
 metrics replace the single-label SemEval scenarios; character metrics remain available.
 See [metric definitions](library.md#strict-metrics). TSV and Parquet retain the same columns.
+
+
+## Word-level CRF checkpoints
+
+New classic and Multi-Head CRF checkpoints reconstruct their backbone and all independent
+chains from local weights plus `encoding.json`. New prediction windows and eligible positions
+are annotation independent: the same documents with and without gold produce identical spans
+and scores. Viterbi runs on compact first-subword core positions. Scores are mean real CRF
+marginals of the selected tags, not softmax emissions or one-hot decisions. They are not
+calibrated mention probabilities. All heads share the same backbone inference, and cross-type
+spans may overlap. Identical spans keep the largest score across windows.
+
+Use [the CRF prediction template](configs/crf-predict.yaml) with either new CRF architecture.
+Old CRF checkpoints retain their original decoder and mask semantics automatically; inference
+is not declared equivalent between historical and new mask definitions.

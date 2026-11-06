@@ -119,8 +119,61 @@ class MultiHeadTrainer(Trainer):
         return loss, logits, labels
 
 
+class WordCRFTrainer(Trainer):
+    """Evaluate using Viterbi; optionally transport real marginal log probabilities."""
+
+    include_marginals = False
+
+    def prediction_step(
+        self,
+        model: nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
+        prediction_loss_only: bool,
+        ignore_keys: list[str] | None = None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+        from lab.ner.models.word_crf import decision_logits
+
+        inputs = self._prepare_inputs(inputs)
+        labels = inputs.get("labels")
+        with torch.no_grad(), self.compute_loss_context_manager():
+            outputs = model(**inputs)
+            loss = outputs.loss.detach() if outputs.loss is not None else None
+            if prediction_loss_only:
+                return loss, None, None
+            decoder = model.module if hasattr(model, "module") else model
+            result = decoder.structured_from_emissions(
+                outputs.logits,
+                inputs["crf_word_mask"],
+                inputs.get("attention_mask"),
+                probabilities=self.include_marginals,
+            )
+            logits = decision_logits(result.tags)
+            if self.include_marginals:
+                logits = torch.cat((result.log_marginals, logits), dim=-1)
+            if self.processing_class.padding_side == "left":
+                width = logits.shape[1]
+                lengths = inputs["attention_mask"].sum(1)
+                positions = (
+                    torch.arange(width, device=logits.device)[None] + width - lengths[:, None]
+                ) % width
+                shape = (*positions.shape, *((1,) * (logits.ndim - 2)))
+                logits = logits.gather(1, positions.reshape(shape).expand_as(logits))
+                if labels is not None:
+                    shape = (*positions.shape, *((1,) * (labels.ndim - 2)))
+                    labels = labels.gather(1, positions.reshape(shape).expand_as(labels))
+        return loss, logits.detach(), labels.detach() if labels is not None else None
+
+
+class WordMarginalTrainer(WordCRFTrainer):
+    """Return both log marginals and decisions from the same Transformer emissions."""
+
+    include_marginals = True
+
+
 def resolve_trainer_class(model: nn.Module) -> type[Trainer]:
     """Pick `CRFTrainer` for a model that can Viterbi-decode, `Trainer` otherwise."""
+    if hasattr(model, "structured_from_emissions"):
+        return WordCRFTrainer
     if hasattr(model, "entity_labels"):
         return MultiHeadTrainer
 
@@ -172,6 +225,13 @@ def train(
     validate_rows(train_rows, "train_rows")
     validate_rows(validation_rows, "validation_rows")
 
+    if hasattr(model, "chain"):
+        for name, frame in (("train_rows", train_rows), ("validation_rows", validation_rows)):
+            if "crf_word_mask" not in frame:
+                raise ValueError(f"{name} needs crf_word_mask from include_word_mask=True.")
+            from lab.ner.encoding.supervision import validate_word_supervision
+
+            validate_word_supervision(frame, model.entity_labels)
     if hasattr(model, "entity_labels"):
         if ignore_index != -100:
             raise ValueError("Multihead uses ignore_index=-100; keep that padding convention.")
@@ -407,6 +467,20 @@ def _save_best_model(
             **recorded_model.get("architecture_kwargs", {}),
             "dropout": trainer.model.dropout.p,
         }
+        if hasattr(trainer.model, "chain"):
+            recorded_model["architecture_kwargs"].update(
+                {
+                    "crf_version": 2,
+                    "tag_scheme": "BIO2",
+                    "constrain_transitions": trainer.model.constrain_transitions,
+                    "aux_ce_weight": trainer.model.aux_ce_weight,
+                    "loss_type": trainer.model.loss_type,
+                    "loss_reduction": "word_mean",
+                    "head_weights": dict(
+                        zip(trainer.model.entity_labels, trainer.model.loss_head_weights.tolist())
+                    ),
+                }
+            )
         model_encoding["model"] = recorded_model
         model_encoding["backbone_config"] = trainer.model.config.to_dict()
 

@@ -16,7 +16,11 @@ def architecture_arguments(
     architecture: Any,
 ) -> TrainingArguments | Mapping[str, Any] | None:
     """Choose macro F1 only when no explicit model selection was supplied."""
-    if architecture != "multihead" or arguments is not None and not isinstance(arguments, Mapping):
+    if (
+        architecture not in ("multihead", "multihead_crf")
+        or arguments is not None
+        and not isinstance(arguments, Mapping)
+    ):
         return arguments
     settings = dict(arguments or {})
     if settings.get("metric_for_best_model") is None:

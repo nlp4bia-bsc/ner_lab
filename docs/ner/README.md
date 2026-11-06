@@ -60,3 +60,10 @@ survive in one canonical span output. Start with
 `fit_ensemble` now combines legacy, Multi-Head and hybrid members with different entity
 catalogues. Metadata-derived coverage, scoped weights/thresholds and exact span consensus
 share the same entry points; [ensemble.md](ensemble.md) documents format-1 compatibility.
+
+
+`architecture="multihead_crf"` adds independent exact BIO2 chains over the shared Transformer.
+New classic `crf` also uses the compact word-level core; old checkpoints retain their decoder.
+Training, HPO, prediction and unified ensembles consume both through their existing entry
+points. See [CRF contracts](library.md#word-level-constrained-crf-version-2) and
+[executed verification/ablations](../../verification/CONSTRAINED_CRF_STATUS.md).

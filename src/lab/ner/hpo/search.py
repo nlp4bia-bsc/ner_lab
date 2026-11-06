@@ -160,12 +160,14 @@ def search_hyperparameters(
 
     if language is None:
         raise ValueError("language is required; pass an ISO 639-1 code explicitly.")
-    if (architecture == "multihead") != (target_label is None):
-        raise ValueError("Use target_label=None exactly when architecture='multihead'.")
+    if (architecture in ("multihead", "multihead_crf")) != (target_label is None):
+        raise ValueError("Use target_label=None for multihead or multihead_crf architectures.")
     training_arguments = architecture_arguments(training_arguments, architecture)
     if overlap_policy is None:
         overlap_policy = (
-            "error" if architecture == "multihead" else "merge_same_label_then_keep_longest"
+            "error"
+            if architecture in ("multihead", "multihead_crf")
+            else "merge_same_label_then_keep_longest"
         )
     sweep_start = time.monotonic()
 
@@ -181,12 +183,15 @@ def search_hyperparameters(
 
     variants = build_variants(base_models, strategies, context_tokens, max_lengths)
     space = _validated_search_space(search_space)
+    from lab.ner.hpo.trial import validate_architecture_dimensions
+
+    validate_architecture_dimensions(space, architecture, architecture_kwargs)
 
     base_arguments = resolve_base_arguments(training_arguments, run_dir, random_state)
     metric_key, greater_is_better = _objective(base_arguments)
 
     checked_kwargs = dict(architecture_kwargs or {})
-    if architecture == "multihead":
+    if architecture in ("multihead", "multihead_crf"):
         from lab.ner.encoding.multihead import training_entity_labels
 
         labels = training_entity_labels(partitions["train"])
@@ -214,7 +219,7 @@ def search_hyperparameters(
         "encoding": {
             **(
                 {"entity_labels": checked_kwargs["entity_labels"]}
-                if architecture == "multihead"
+                if architecture in ("multihead", "multihead_crf")
                 else {}
             ),
             "target_label": target_label,
@@ -248,6 +253,8 @@ def search_hyperparameters(
             language=language,
             overlap_policy=overlap_policy,
             min_sentence_tokens=min_sentence_tokens,
+            include_word_mask=architecture in ("crf", "multihead_crf")
+            and (architecture_kwargs or {}).get("crf_version", 2) == 2,
         ),
         "architecture": architecture,
         "architecture_kwargs": architecture_kwargs,

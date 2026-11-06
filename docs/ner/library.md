@@ -25,7 +25,10 @@ validation = read_corpus("assets/splits/disease/train_val_80_20/validation.parqu
 base_model = "PlanTL-GOB-ES/roberta-base-biomedical-clinical-es"
 tokenizer = AutoTokenizer.from_pretrained(base_model)
 
-encoder = Encoder(tokenizer, target_label="DISEASE", language="es", max_length=256)
+encoder = Encoder(
+    tokenizer, target_label="DISEASE", language="es", max_length=256,
+    include_word_mask=True,
+)
 train_rows = encoder.encode(corpus)
 validation_rows = encoder.encode(validation)
 
@@ -130,11 +133,11 @@ build_model(base_model, label2id, id2label, architecture="linear", **architectur
 | `base_model` | *required* | Pretrained encoder, by hub name or local path. |
 | `label2id` | *required* | Pass the `Encoder`'s, so the model's label ids are the ones the rows were encoded against. |
 | `id2label` | *required* | The same, inverted. |
-| `architecture` | `"linear"` | `"linear"`, `"crf"`, or a callable `(base_model, label2id, id2label, **kwargs) -> model`. |
+| `architecture` | `"linear"` | `"linear"`, `"crf"`, `"multihead"`, `"multihead_crf"`, or a callable `(base_model, label2id, id2label, **kwargs) -> model`. |
 | `**architecture_kwargs` | — | Forwarded to the chosen architecture, e.g. `dropout=0.2`. |
 
-`"linear"` is the stock `AutoModelForTokenClassification` head. `"crf"` is
-`lab.ner.models.crf.CRFForTokenClassification`, which decodes by Viterbi under BIO transition
+`"linear"` is the stock `AutoModelForTokenClassification` head. New `"crf"` models use
+`lab.ner.models.word_crf.WordCRFForTokenClassification`, which decodes by Viterbi under BIO transition
 constraints. A callable must return a model whose `forward` accepts
 `input_ids`/`attention_mask`/`labels` and returns an object with `loss` and `logits`.
 
@@ -282,7 +285,8 @@ call that joins them, and `token_diagnostics` the call that adds the token half.
 ## Multi-Head BIO
 
 `architecture="multihead"` extends the single-label contract (D132–D135); `linear`,
-`crf`, their three-dimensional outputs and their existing checkpoints keep their semantics.
+legacy `crf` checkpoints keep their semantics. New CRF training uses the word-level
+constrained implementation described below; classic emissions remain three-dimensional.
 One `AutoModel` backbone runs once per batch. A dropout and a single
 `Linear(hidden_size, 3 * K)` projection implement K independent categorical heads:
 
@@ -357,7 +361,7 @@ Inference takes argmax over the final **class** axis. The common BIO decoder rep
 orphan I as a new span, independently per head, as it does for `linear`; this is not CRF
 Viterbi or constrained-logit decoding. A span score is the mean softmax probability of its
 selected BIO tags. Duplicate `(filename,label,start,end)` predictions keep the highest score;
-different overlapping spans survive. No Multi-Head CRF or local CNN is included.
+different overlapping spans survive. `multihead_crf` adds independent constrained chains as described below. No local CNN is included.
 
 ### Strict metrics
 
@@ -418,3 +422,97 @@ label and reuses `WordVotes`; `decode_entities` applies independent two-stage BI
 and sparse-gold fallback. These helpers live in their concern modules under
 `lab.ner.ensemble`; the public stage functions remain `fit_ensemble` and `predict_ensemble`.
 See [the guide](ensemble.md) for supported combinations and provenance requirements.
+
+
+## Word-level constrained CRF (version 2)
+
+`architecture="crf"` now builds `WordCRFForTokenClassification`; `multihead_crf` uses the
+same composition with one shared Transformer and independent transition parameters per type.
+The Multi-Head catalogue is discovered from training annotations only, separately in each
+fold. All existing training, prediction, HPO and ensemble orchestrators are reused.
+
+The common `models.chain.ConstrainedChain` accepts `[B,T,C]` or `[B,T,K,C]`. The model's
+emissions retain token positions: `[B,L,3]` or `[B,L,K,3]`. Gold and restored Viterbi tags
+are `[B,L]` or `[B,L,K]`; absent decoded positions are `-100`. One projection produces all
+heads, and one backbone forward serves the batch.
+
+For a legal path, the score is its start potential, emissions, successive transition
+potentials and final potential. NLL is `log_partition - gold_score`, where partition sums
+**only legal paths**. BIO2 disallows START→I and O→I; B→I, I→I, B→B and ending in B are
+legal. The core also supports flat B-X/I-X vocabularies and prohibits cross-type inside
+transitions. The integrated models use three states per head.
+
+Boolean buffers mask the effective potentials with exact `-inf`, identically in partition,
+Viterbi and forward-backward. Parameters are never clamped or modified by gradient hooks.
+An all-unreachable reduction has an explicit zero-gradient branch. Dynamic programming
+runs in FP32 with autocast disabled, even when Transformer emissions use reduced precision.
+
+### Attention, eligibility and gold
+
+Low-level callers must use `Encoder(..., include_word_mask=True)` for new CRFs. Its
+`crf_word_mask` selects first subwords in the window core; specials, continuation subwords,
+padding and context flanks are excluded. `attention_mask` still exposes all real tokens to
+the Transformer. `WordChainCollator` pads these two masks independently, with `-100` labels.
+`pack_words` compacts all batch/head chains with indexed tensor operations, and `PackedWords`
+restores decisions and distributions to their original token positions. No retokenization
+or character-level dense annotations are introduced.
+
+New word-CRF window geometry uses text only, independently of annotations. The existing
+window-local IOB2 tagger starts a clipped entity with B at a new supervised core; it does
+not repair gold inside the loss. Long entities crossing cores can consequently be split
+into fragments, so maximum length/context remain modelling choices. A classic word CRF
+resolves only annotations of its own target type before tagging. Legacy windowing and
+legacy overlap resolution remain available for version-1 CRFs.
+
+Gold must be completely observed at every eligible word. Training rejects unknown whole
+words and illegal BIO2 with document, window, entity, position and transition diagnostics.
+The core reports batch/head coordinates when called directly. It never drops an unknown
+whole word and joins its neighbours. Partial annotation, independent missing-gold segments
+and partially observed partition losses are not implemented. Entirely empty chains have
+absent decisions and zero probability mass; inactive heads are omitted from the loss.
+
+### Options and loss
+
+The following explicit `architecture_kwargs` apply to version-2 `crf`/`multihead_crf`:
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `dropout` | `0.1` | Dropout before the shared emission projection. |
+| `constrain_transitions` | `True` | Exact BIO2 restrictions; `False` is an unconstrained ablation. |
+| `aux_ce_weight` | `0.0` | Nonnegative auxiliary local emission CrossEntropy weight. |
+| `head_weights` | `None` | Finite nonnegative weights keyed by entity name; omitted names weigh 1. |
+| `loss_reduction` | `"word_mean"` | Sum sequence NLL per head / supervised words, then weighted mean of active heads. Only this reduction is supported. |
+| `loss_type` | `"crf"` | `"cross_entropy"` freezes zero transitions and trains local CE, yielding the constrained-decoding baseline. |
+| `tag_scheme` | `"BIO2"` | Only BIO2 is implemented; BIOES/BILOU fail explicitly. |
+| `crf_version` | `2` | Set `1` with classic `crf` only to reproduce the historical implementation. |
+
+The objective is `word_normalized_crf_nll + aux_ce_weight * balanced_local_ce`. Empty batches
+return a differentiable zero. The CE baseline uses only balanced local CE and no trainable
+transition parameters; `aux_ce_weight` must remain zero in that mode.
+
+`WordCRFTrainer` evaluates Viterbi paths, including early stopping and best-checkpoint
+selection. Multi-Head defaults to `span_strict_macro_f1`; classic defaults stay unchanged.
+An explicit metric, including `eval_loss` with minimization, takes precedence.
+
+### Decisions, probabilities and checkpoints
+
+`forward` returns actual emissions and optional loss. To reuse them, call
+`model.structured_from_emissions(emissions, crf_word_mask, attention_mask,
+probabilities=True)`. Its typed `StructuredPrediction` carries restored Viterbi `tags` and
+optional `log_marginals`. Without probabilities, forward-backward is not computed.
+`decode_from_emissions` and `marginals_from_emissions` also require the explicit word mask.
+
+Trainer's historical `predict_logits` interface transports Viterbi decisions as compatibility
+logits; these values are **not confidence**. `WordMarginalTrainer` carries log marginals and
+Viterbi in separate last-axis blocks. `predict_entities` uses real marginal probabilities
+of the Viterbi-selected tags for mean span confidence. This is not a full mention probability
+or a claim of calibration. Zero evidence is not converted to confident O.
+
+Version-2 metadata records `crf_version`, the structural mask policy, ordered heads, backbone
+configuration and all model options; normal checkpoint tensors hold learned start,
+transition and end parameters. Loading is standalone and strict: catalogue digests, shapes,
+constraint buffers and named weights must agree with metadata. Old CRF metadata without a
+version loads the original class with its historical attention-token semantics and its
+existing parameter names. It is not silently migrated to the new word chain.
+
+See [verification and measurements](../../verification/CONSTRAINED_CRF_STATUS.md).

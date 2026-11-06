@@ -556,7 +556,8 @@ def verify_legacy(checks, base, tokenizer, corpus, root):
     rows = encoder.encode(corpus)
     for architecture in ["linear", "crf"]:
         model = build_model(
-            str(base), encoder.label2id, encoder.id2label, architecture=architecture
+            str(base), encoder.label2id, encoder.id2label, architecture=architecture,
+            **({"crf_version": 1} if architecture == "crf" else {}),
         )
         arguments = training_arguments(
             root / architecture, num_train_epochs=1, use_cpu=True, disable_tqdm=True
@@ -569,7 +570,8 @@ def verify_legacy(checks, base, tokenizer, corpus, root):
             arguments,
             compute_metrics=build_compute_metrics(rows, tokenizer, encoder.id2label),
             save_model=True,
-            model_encoding=model_encoding(encoder, str(base), architecture),
+            model_encoding=model_encoding(encoder, str(base), architecture,
+                {"crf_version": 1} if architecture == "crf" else None),
         )
         loaded, restored_tokenizer, description = load_model(result.paths["best_model"])
         before = predict_logits(result.model, tokenizer, rows, device="cpu")

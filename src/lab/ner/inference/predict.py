@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from lab.core.provenance import write_manifest
@@ -102,12 +103,16 @@ def predict_entities(
     )
 
     corpus = read_documents(documents, pattern=pattern, encoding=encoding)
-    rows = encoder.encode(corpus)
+    structured = hasattr(model, "structured_from_emissions")
+    inputs = corpus.assign(entities_json="[]", n_entities=0) if structured else corpus
+    rows = encoder.encode(inputs)
 
     if rows.empty:
         raise ValueError(
             f"No windows were produced from {len(corpus)} document(s) — nothing to predict on."
         )
+
+    from lab.ner.training.trainer import WordMarginalTrainer
 
     predictions = predict_logits(
         model=model,
@@ -116,7 +121,13 @@ def predict_entities(
         batch_size=batch_size,
         device=device,
         pad_to_multiple_of=pad_to_multiple_of,
+        trainer_class=WordMarginalTrainer if structured else None,
     )
+
+    probabilities = None
+    if structured:
+        log_marginals, predictions = np.split(predictions, 2, axis=-1)
+        probabilities = np.exp(log_marginals)
 
     spans = decode_spans(
         rows=rows,
@@ -125,6 +136,7 @@ def predict_entities(
         id2label=encoder.id2label,
         texts=dict(zip(corpus["doc_id"], corpus["text"])),
         min_score=min_score,
+        probabilities=probabilities,
     )
 
     paths = {
@@ -152,7 +164,7 @@ def predict_entities(
         if has_gold(corpus):
             metrics.update(
                 token_diagnostics(
-                    rows=rows,
+                    rows=encoder.encode(corpus) if structured else rows,
                     predictions=predictions,
                     id2label=encoder.id2label,
                     include_confusion=include_confusion,

@@ -29,7 +29,7 @@ from lab.ner.inference.loading import load_model
 from lab.ner.inference.prediction import predict_logits
 from lab.ner.models.crf import decoded_paths_to_logits
 from lab.ner.training.assessment import release_accelerator_memory
-from lab.ner.training.trainer import CRFTrainer, read_model_encoding
+from lab.ner.training.trainer import CRFTrainer, WordMarginalTrainer, read_model_encoding
 
 TAGS = ("O", "B", "I")
 PROBABILITY_COLUMNS = [f"p_{tag}" for tag in TAGS]
@@ -162,7 +162,8 @@ def predict_member(
     if rows.empty:
         raise ValueError(f"No windows from {len(corpus)} documents for {model_dir}.")
     encoded = time.perf_counter()
-    has_marginals = hasattr(model, "marginals_from_emissions")
+    structured = hasattr(model, "structured_from_emissions")
+    has_marginals = structured or hasattr(model, "marginals_from_emissions")
     predictions = predict_logits(
         model=model,
         tokenizer=tokenizer,
@@ -170,12 +171,15 @@ def predict_member(
         batch_size=batch_size,
         device=device,
         pad_to_multiple_of=pad_to_multiple_of,
-        trainer_class=MarginalCRFTrainer if has_marginals else None,
+        trainer_class=(WordMarginalTrainer if structured else MarginalCRFTrainer)
+        if has_marginals
+        else None,
     ).astype(np.float32)
     inferred = time.perf_counter()
     if has_marginals:
         log_marginals, viterbi = np.split(predictions, 2, axis=-1)
-        probabilities, tag_ids = softmax(log_marginals), viterbi.argmax(axis=-1)
+        probabilities = np.exp(log_marginals) if structured else softmax(log_marginals)
+        tag_ids = viterbi.argmax(axis=-1)
     else:
         probabilities, tag_ids = softmax(predictions), predictions.argmax(axis=-1)
     labels = tuple(encoder.entity_labels or [encoder.target_label])

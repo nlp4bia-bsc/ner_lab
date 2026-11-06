@@ -36,7 +36,51 @@ def load_model(
     recorded = description["model"]
     architecture = recorded["architecture"] if architecture is None else architecture
 
-    if architecture == "multihead":
+    if description.get("crf_version") == 2:
+        from lab.ner.models.word_crf import WordCRFForTokenClassification
+
+        if architecture not in ("crf", "multihead_crf") or (architecture == "multihead_crf") != (
+            description["encoding"]["target_label"] is None
+        ):
+            raise ValueError("A word-level CRF checkpoint requires its recorded architecture.")
+        labels = description.get("entity_labels", [])
+        expected_heads = {str(index): label for index, label in enumerate(labels)}
+        actual_heads = {
+            str(index): label for index, label in description.get("head_to_label", {}).items()
+        }
+        if (
+            description.get("format_version") != 2
+            or description.get("num_heads") != len(labels)
+            or actual_heads != expected_heads
+            or description.get("bio_schema") != {"O": 0, "B": 1, "I": 2}
+        ):
+            raise ValueError("Word CRF head catalogue or BIO schema is inconsistent.")
+        if architecture == "multihead_crf":
+            _validate_multihead_description(description)
+        if not description["encoding"].get("include_word_mask"):
+            raise ValueError("Word CRF checkpoint is missing its structural mask policy.")
+        settings = dict(recorded.get("architecture_kwargs", {}))
+        if settings.get("crf_version") != 2 or "backbone_config" not in description:
+            raise ValueError("Incomplete word CRF architecture metadata.")
+        settings["backbone_config"] = description["backbone_config"]
+        model = WordCRFForTokenClassification(
+            recorded["base_model"], label2id, id2label, **settings
+        )
+        if model.entity_labels != description.get("entity_labels"):
+            raise ValueError("Checkpoint entity catalogue disagrees with encoding metadata.")
+        state = load_state_dict(model_dir)
+        if not torch.equal(
+            state.get("head_catalogue_digest", torch.empty(0)), model.head_catalogue_digest
+        ):
+            raise ValueError("Checkpoint head order disagrees with encoding.json.")
+        for name in ("chain.invalid_start", "chain.invalid_transitions", "loss_head_weights"):
+            if name not in state or not torch.equal(state[name], model.state_dict()[name]):
+                raise ValueError(f"Checkpoint {name} disagrees with its architecture metadata.")
+        try:
+            model.load_state_dict(state, strict=True)
+        except RuntimeError as error:
+            raise ValueError(f"Incompatible word CRF checkpoint in {model_dir}: {error}") from error
+    elif architecture == "multihead":
         _validate_multihead_description(description)
         settings = dict(recorded.get("architecture_kwargs", {}))
         settings["backbone_config"] = description["backbone_config"]
@@ -68,7 +112,10 @@ def load_model(
             label2id=label2id,
             id2label=id2label,
             architecture=architecture,
-            **recorded.get("architecture_kwargs", {}),
+            **{
+                **recorded.get("architecture_kwargs", {}),
+                **({"crf_version": 1} if architecture == "crf" else {}),
+            },
         )
         model.load_state_dict(load_state_dict(model_dir))
 

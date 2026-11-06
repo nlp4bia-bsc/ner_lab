@@ -64,6 +64,7 @@ def predicted_spans(
     texts: dict[str, str] | None = None,
     include_scores: bool = False,
     entity_labels: list[str] | None = None,
+    probabilities: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """
     Rebuild the spans a model predicted.
@@ -89,6 +90,7 @@ def predicted_spans(
             ignore_index=ignore_index,
             texts=texts,
             include_scores=include_scores,
+            probabilities=probabilities,
         )
 
     _require_columns(rows)
@@ -102,7 +104,8 @@ def predicted_spans(
         )
 
     id2label = _normalize_id2label(id2label)
-    probabilities = softmax(predictions) if include_scores else None
+    if include_scores and probabilities is None:
+        probabilities = softmax(predictions)
     prefix_ids, suffix_ids = special_token_template(tokenizer)
     spans: list[dict[str, Any]] = []
 

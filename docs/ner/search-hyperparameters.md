@@ -143,3 +143,28 @@ winner machinery are reused. The default objective becomes `span_strict_macro_f1
 `winner.yaml` keeps Multi-Head, automatic discovery, window/overlap settings and the selection
 metric. Re-running it rediscovers heads from each final-training fold's authorized train;
 those catalogues can differ from the searched rotation. See [fold semantics](library.md#strict-metrics).
+
+
+## CRF search dimensions
+
+`crf` and `multihead_crf` participate in the existing Ray Tune + Optuna sweep, including
+cached encoded variants, multiple seeds, OOM handling, epoch scoring and `winner.yaml`.
+The latter defaults to strict macro-F1 and uses training-only head discovery.
+
+Namespaced dimensions in the existing `search_space` route to `architecture_kwargs`, never
+to `TrainingArguments`: `architecture__dropout`, `architecture__aux_ce_weight`,
+`architecture__constrain_transitions`, `architecture__loss_type`,
+`architecture__loss_reduction`, `architecture__tag_scheme`. Only `word_mean` and `BIO2`
+are accepted for the last two. CRF dimensions are rejected for non-CRF architectures.
+Architecture itself remains fixed per sweep; run comparable explicit sweeps to compare
+linear/CRF/Multi-Head families, without sampling irrelevant conditional parameters.
+
+[Classic CRF search](configs/crf-hpo.yaml) and
+[Multi-Head CRF search](configs/multihead-crf-hpo.yaml) are valid `lab run` templates.
+The winning namespaced values are converted back to ordinary `architecture_kwargs` in
+`winner.yaml`; replay it with `lab run`. Per-seed `epoch_metrics.parquet` records per-type
+metrics while the trial table reports the selected objective and its seed dispersion.
+
+Search validation rejects negative/nonfinite bounds, unsupported schemes and searches that
+combine the constrained-CE baseline with nonzero auxiliary CE. Compare those in separate
+sweeps to avoid impossible trials. Namespaced options apply to version-2 CRFs only.

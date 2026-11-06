@@ -1,0 +1,29 @@
+task: ner.search_hyperparameters
+split_dir: assets/splits/multitype/train_val_80_20
+output_dir: assets/sweeps/crf
+base_models:
+- assets/base-model
+architecture: crf
+target_label: SYMPTOM
+language: es
+max_lengths:
+- 256
+n_trials: 12
+seeds_per_trial: 3
+architecture_kwargs:
+  constrain_transitions: true
+search_space:
+  architecture__dropout:
+    type: choice
+    categories:
+    - 0.1
+    - 0.2
+  architecture__aux_ce_weight:
+    type: choice
+    categories:
+    - 0.0
+    - 0.1
+    - 0.3
+    - 0.5
+training_arguments:
+  num_train_epochs: 8

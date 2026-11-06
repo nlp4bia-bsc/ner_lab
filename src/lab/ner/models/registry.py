@@ -12,7 +12,7 @@ from lab.ner.models.bio import normalize_id2label, normalize_label2id
 
 Architecture = Callable[..., Any]
 
-BUILTIN_ARCHITECTURES = ("linear", "crf", "multihead")
+BUILTIN_ARCHITECTURES = ("linear", "crf", "multihead", "multihead_crf")
 
 
 def build_model(
@@ -52,7 +52,22 @@ def build_model(
             base_model, label2id, id2label, **architecture_kwargs
         )
 
+    if architecture == "crf" and architecture_kwargs.get("crf_version", 2) not in (1, 2):
+        raise ValueError("crf_version must be 1 (legacy) or 2 (word-level).")
+    if architecture == "crf" and "entity_labels" in architecture_kwargs:
+        raise ValueError("Use architecture=multihead_crf for multiple entity heads.")
+    if architecture == "multihead_crf" and "entity_labels" not in architecture_kwargs:
+        raise ValueError("multihead_crf requires entity_labels discovered from training.")
+    if architecture == "multihead_crf" and architecture_kwargs.get("crf_version", 2) != 2:
+        raise ValueError("multihead_crf requires crf_version=2.")
+
+    if architecture in ("crf", "multihead_crf") and architecture_kwargs.get("crf_version", 2) == 2:
+        from lab.ner.models.word_crf import WordCRFForTokenClassification
+
+        return WordCRFForTokenClassification(base_model, label2id, id2label, **architecture_kwargs)
+
     if architecture == "crf":
+        architecture_kwargs.pop("crf_version", None)
         from lab.ner.models.crf import CRFForTokenClassification
 
         return CRFForTokenClassification(base_model, label2id, id2label, **architecture_kwargs)

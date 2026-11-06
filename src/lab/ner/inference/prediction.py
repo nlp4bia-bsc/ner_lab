@@ -81,6 +81,7 @@ def decode_spans(
     min_score: float = 0.0,
     ignore_index: int = IGNORE_INDEX,
     entity_labels: list[str] | None = None,
+    probabilities: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """
     Decode predictions into scored entity spans, dropping those below `min_score`.
@@ -97,6 +98,7 @@ def decode_spans(
         texts=texts or {},
         include_scores=True,
         entity_labels=entity_labels,
+        probabilities=probabilities,
     )
 
     if min_score > 0:

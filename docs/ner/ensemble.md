@@ -24,10 +24,10 @@ result = predict_ensemble(
 result.spans    # DataFrame: filename | label | start_span | end_span | text | score
 ```
 
-An ensemble combines independently trained `linear`, `crf` and `multihead` checkpoints,
+An ensemble combines independently trained `linear`, `crf`, `multihead` and `multihead_crf` checkpoints,
 including members with different label catalogues, backbones, tokenizers and windowings.
 Fitting records how their evidence combines; predicting loads those fixed choices.
-Multi-Head CRF is not implemented in this repository. The legacy single-label examples
+Multi-Head CRF uses the same unified member adapter. The legacy single-label examples
 below remain valid; see the unified methods and format compatibility sections further down.
 
 ## `fit_ensemble`
@@ -329,6 +329,20 @@ result = predict_ensemble(
 ```
 
 See [verification evidence](../../verification/UNIFIED_ENSEMBLE_RESULTS.md) for executed checks,
-benchmarks and remaining hardware/access limits. No Multi-Head CRF, learned stacking,
+benchmarks and remaining hardware/access limits. No learned stacking,
 partial-span clustering, probability calibration or alternative Viterbi combiner is added.
 The existing two-stage decoder already produces coherent BIO spans.
+
+
+## Word-level constrained CRF members
+
+`crf` version 2 and `multihead_crf` reuse the unified member table. One Transformer inference
+per member batch yields all emissions. The adapter compacts eligible words once per structured
+operation, restores Viterbi tags for hard votes and forward-backward marginal distributions
+for soft votes. It never softmaxes Viterbi compatibility logits. Head identity comes from
+metadata, not index coincidence. Missing types remain absent evidence.
+
+Legacy CRFs keep their original marginal/decision adapter and checkpoint semantics. New and
+old CRFs can mix with linear and Multi-Head members, using existing scoped weights/thresholds,
+exact span methods, metrics and manifests. Marginals are normalized probabilities under the
+member CRF, not a claim of calibration. See [hybrid CRF YAML](configs/ensemble-crf.yaml).

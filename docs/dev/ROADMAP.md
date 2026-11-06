@@ -89,7 +89,7 @@ D132–D135 add a shared-backbone Multi-Head BIO architecture through the existi
 HPO and inference entry points. Offline functional checks and an efficiency benchmark live
 in `verification/verify_multihead.py` and `verification/benchmark_multihead.py`.
 [Validation evidence](../../verification/MULTIHEAD_RESULTS.md) separates executed local checks
-from blocked external regressions and scientific-source review. Multi-Head CRF, CNNs, adaptive context, distillation and knowledge-based features remain
+from blocked external regressions and scientific-source review. CNNs, adaptive context, distillation and knowledge-based features remain
 optional research. Unified ensembles are implemented by D136–D140.
 
 ## Unified ensembles
@@ -100,3 +100,14 @@ checks and CPU measurements are recorded in
 [UNIFIED_ENSEMBLE_RESULTS.md](../../verification/UNIFIED_ENSEMBLE_RESULTS.md). Real clinical
 checkpoint/GPU experiments, probability calibration, OOF stacking and alternative structured
 combiners remain unverified or unimplemented; none is required by the new minimum contract.
+
+
+## Constrained CRF
+
+D141–D145 add exact word-level classic/Multi-Head CRFs, Viterbi validation, marginal
+inference/ensembles, optional local CE, constrained-CE baselines and reproducible HPO
+architecture dimensions. Evidence and the synthetic CPU comparison are linked from
+[CONSTRAINED_CRF_STATUS.md](../../verification/CONSTRAINED_CRF_STATUS.md).
+BIOES/BILOU, partial annotation, dynamic transitions, GPU validation and clinical effectiveness
+studies remain future work. Source retrieval for the requested research references was blocked
+by the environment proxy; no full-text literature-review claim is made.
