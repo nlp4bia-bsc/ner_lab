@@ -1,0 +1,7 @@
+task: ner.fit_ensemble
+model_dirs:
+  - assets/models/disease-crf/best_model
+  - assets/models/multihead/best_model
+method: span_consensus
+min_support: 2
+output_dir: assets/ensembles/spans

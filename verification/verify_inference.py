@@ -375,7 +375,7 @@ def verify_missing_encoding(checks: Checks) -> None:
         )
 
 
-def train_saved_model(root: Path, architecture: str) -> Path:
+def train_saved_model(root: Path, architecture: str, tokenizer=None) -> Path:
     """Train the miniature BERT for one epoch with weights kept, returning best_model/."""
     from fixtures import synthetic_corpus, tiny_base_model
     from transformers import AutoTokenizer
@@ -383,7 +383,8 @@ def train_saved_model(root: Path, architecture: str) -> Path:
     from lab.core import prepare_dataset, write_corpus
     from lab.ner.training import train_model
 
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    if tokenizer is None:
+        tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     base_model = tiny_base_model(root, tokenizer)
     source = write_corpus(synthetic_corpus(16), root / "source" / "documents.parquet")
     prepared = prepare_dataset(

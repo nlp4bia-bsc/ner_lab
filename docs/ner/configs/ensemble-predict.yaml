@@ -1,0 +1,6 @@
+task: ner.predict_ensemble
+ensemble_dir: assets/ensembles/scoped
+documents: assets/texts
+output_dir: assets/predictions/ensemble
+batch_size: 16
+min_score: 0.0

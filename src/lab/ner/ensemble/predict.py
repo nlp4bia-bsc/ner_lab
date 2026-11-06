@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -9,8 +10,10 @@ from typing import Any
 import pandas as pd
 
 from lab.core.provenance import write_manifest
-from lab.ner.ensemble.io import check_member_weights, read_ensemble
-from lab.ner.ensemble.tables import predict_word_tables
+from lab.ner.ensemble.combination import combine_predictions
+from lab.ner.ensemble.entities import align_entities, score_ensemble
+from lab.ner.ensemble.io import check_member_weights, parameters_from_ensemble, read_ensemble
+from lab.ner.ensemble.tables import predict_members, predict_word_tables
 from lab.ner.ensemble.voting import align_votes, ensemble_spans
 from lab.ner.evaluation.scoring import span_metrics
 from lab.ner.inference.io import read_documents, resolve_gold, write_gold, write_predictions
@@ -79,29 +82,73 @@ def predict_ensemble(
     output_dir = Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    started = time.perf_counter()
+    timings = {}
     ensemble = read_ensemble(ensemble_dir)
     check_member_weights(ensemble)
     members = ensemble["members"]
-    target_label = ensemble["target_label"]
+    target_label = (
+        ensemble["target_label"]
+        if ensemble["format_version"] == 1 or ensemble["legacy_semantics"]
+        else None
+    )
 
     corpus = read_documents(documents, pattern=pattern, encoding=encoding)
-    tables = predict_word_tables(
-        [member["model_dir"] for member in members],
-        corpus,
-        batch_size=batch_size,
-        device=device,
-        pad_to_multiple_of=pad_to_multiple_of,
-    )
-    word_votes = align_votes(tables)
+    if ensemble["format_version"] == 1:
+        tables = predict_word_tables(
+            [member["model_dir"] for member in members],
+            corpus,
+            batch_size=batch_size,
+            device=device,
+            pad_to_multiple_of=pad_to_multiple_of,
+        )
+        word_votes = align_votes(tables)
 
-    spans = ensemble_spans(
-        word_votes,
-        weights=[member["weight"] for member in members],
-        threshold=ensemble["threshold"],
-        votes=ensemble["votes"],
-        texts=dict(zip(corpus["doc_id"], corpus["text"])),
-        target_label=target_label,
-    )
+        spans = ensemble_spans(
+            word_votes,
+            weights=[member["weight"] for member in members],
+            threshold=ensemble["threshold"],
+            votes=ensemble["votes"],
+            texts=dict(zip(corpus["doc_id"], corpus["text"])),
+            target_label=target_label,
+        )
+        n_words = len(word_votes.words)
+    else:
+        predictions = predict_members(
+            [member["model_dir"] for member in members],
+            corpus,
+            batch_size,
+            device,
+            pad_to_multiple_of,
+            use_annotations=ensemble["legacy_semantics"],
+        )
+        aligned_started = time.perf_counter()
+        aligned = (
+            align_entities(predictions, ensemble["entity_labels"])
+            if ensemble["method"] in ("majority", "soft", "weighted")
+            else {}
+        )
+        timings["alignment_sec"] = time.perf_counter() - aligned_started
+        combined_started = time.perf_counter()
+        spans = combine_predictions(
+            predictions,
+            aligned,
+            ensemble["method"],
+            parameters_from_ensemble(ensemble),
+            ensemble["votes"],
+            dict(zip(corpus["doc_id"], corpus["text"])),
+            ensemble["selected_members"],
+            ensemble["min_support"],
+            ensemble["missing_policy"],
+            entity_labels=ensemble["entity_labels"],
+        )
+        timings["combine_decode_sec"] = time.perf_counter() - combined_started
+        timings["members"] = [prediction.timings for prediction in predictions]
+        n_words = len(
+            pd.concat(
+                [member.words[["doc_id", "word_id"]] for member in predictions]
+            ).drop_duplicates()
+        )
 
     if min_score > 0:
         spans = spans[spans["score"] >= min_score].reset_index(drop=True)
@@ -116,12 +163,24 @@ def predict_ensemble(
 
     if gold is not None:
         paths["gold"] = write_gold(gold, output_dir / GOLD_FILENAME)
-        metrics = span_metrics(
-            gold=gold,
-            predicted=spans,
-            tags=[target_label],
-            min_overlap_percentage=min_overlap_percentage,
-        )
+        if ensemble["format_version"] == 1:
+            metrics = span_metrics(
+                gold=gold,
+                predicted=spans,
+                tags=[target_label],
+                min_overlap_percentage=min_overlap_percentage,
+            )
+        else:
+            if ensemble["restrict_gold"]:
+                gold = gold[gold["label"].isin(ensemble["entity_labels"])].reset_index(drop=True)
+                paths["gold"] = write_gold(gold, output_dir / GOLD_FILENAME)
+            metrics = score_ensemble(
+                gold,
+                spans,
+                ensemble["entity_labels"],
+                ensemble["legacy_semantics"],
+                min_overlap_percentage,
+            )
         paths["metrics"] = write_manifest(metrics, output_dir / METRICS_FILENAME)
 
     manifest = {
@@ -129,9 +188,11 @@ def predict_ensemble(
         "ensemble": ensemble,
         "output_dir": str(output_dir),
         "n_documents": int(corpus["doc_id"].nunique()),
-        "n_words": int(len(word_votes.words)),
+        "n_words": int(n_words),
         "n_predicted_entities": int(len(spans)),
         "min_score": float(min_score),
+        "timings": timings,
+        "duration_sec": time.perf_counter() - started,
         "scored_against_gold": metrics is not None,
         "reference": None if reference is None else str(Path(reference).resolve()),
     }

@@ -125,3 +125,28 @@ def tiny_base_model(root: Path, tokenizer) -> Path:
     tokenizer.save_pretrained(base_model)
 
     return base_model
+
+
+def local_tokenizer():
+    """Small real WordPiece tokenizer, including a split clinical word."""
+    from transformers import BertTokenizer
+
+    words = [
+        "[PAD]",
+        "[UNK]",
+        "[CLS]",
+        "[SEP]",
+        "[MASK]",
+        "paciente",
+        "con",
+        "dolor",
+        "abdominal",
+        "intens",
+        "##o",
+        "sin",
+        "fiebre",
+        ".",
+        "a",
+        "otro",
+    ]
+    return BertTokenizer(vocab={word: index for index, word in enumerate(words)})

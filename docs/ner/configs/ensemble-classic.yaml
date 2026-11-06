@@ -1,0 +1,6 @@
+task: ner.fit_ensemble
+model_dirs:
+  - assets/models/disease-linear/best_model
+  - assets/models/disease-crf/best_model
+method: majority
+output_dir: assets/ensembles/classic

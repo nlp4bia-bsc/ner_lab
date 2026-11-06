@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from lab.ner.ensemble.entities import (
+    EntityVotes,
+    VotingParameters,
+    align_entities,
+    decode_entities,
+)
 from lab.ner.ensemble.fit import (
     ENSEMBLE_MANIFEST_FILENAME,
     ENSEMBLE_METRICS_FILENAME,
@@ -19,10 +25,19 @@ from lab.ner.ensemble.io import (
     write_ensemble,
 )
 from lab.ner.ensemble.predict import EnsembleInference, predict_ensemble
-from lab.ner.ensemble.search import SearchResult, search_ensemble
+from lab.ner.ensemble.search import (
+    EntitySearchResult,
+    SearchResult,
+    search_ensemble,
+    search_entity_parameters,
+)
+from lab.ner.ensemble.spans import combine_spans
 from lab.ner.ensemble.tables import (
     WORD_TABLE_COLUMNS,
     MarginalCRFTrainer,
+    MemberPredictions,
+    predict_member,
+    predict_members,
     predict_word_table,
     predict_word_tables,
     word_table,
@@ -47,6 +62,16 @@ __all__ = [
     "VOTES",
     "WORD_TABLE_COLUMNS",
     "CombinedWords",
+    "EntityVotes",
+    "VotingParameters",
+    "MemberPredictions",
+    "EntitySearchResult",
+    "align_entities",
+    "decode_entities",
+    "combine_spans",
+    "predict_member",
+    "predict_members",
+    "search_entity_parameters",
     "EnsembleFit",
     "EnsembleInference",
     "MarginalCRFTrainer",

@@ -173,8 +173,7 @@ def verify_voting(checks: Checks) -> None:
 
 
 def verify_single_member_equivalence(checks: Checks) -> None:
-    from fixtures import synthetic_corpus
-    from transformers import AutoTokenizer
+    from fixtures import local_tokenizer, synthetic_corpus
 
     from lab.ner.encoding import Encoder
     from lab.ner.ensemble.tables import word_table
@@ -182,7 +181,7 @@ def verify_single_member_equivalence(checks: Checks) -> None:
     from lab.ner.evaluation.spans import softmax
     from lab.ner.inference import decode_spans
 
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    tokenizer = local_tokenizer()
     encoder = Encoder(tokenizer=tokenizer, target_label="DISEASE", language="es", max_length=256)
     corpus = synthetic_corpus(12)
     rows = encoder.encode(corpus)
@@ -409,7 +408,7 @@ def verify_task_registration(checks: Checks) -> None:
 
 
 def verify_end_to_end(checks: Checks) -> None:
-    from fixtures import synthetic_corpus
+    from fixtures import local_tokenizer, synthetic_corpus
     from verify_inference import train_saved_model
 
     from lab.core.spans import SCORED_SPAN_COLUMNS
@@ -419,9 +418,19 @@ def verify_end_to_end(checks: Checks) -> None:
     shared = tempfile.TemporaryDirectory()
     root = Path(shared.name)
 
-    linear_dir = train_saved_model(root / "linear", "linear")
-    crf_dir = train_saved_model(root / "crf", "crf")
+    linear_dir = train_saved_model(root / "linear", "linear", tokenizer=local_tokenizer())
+    crf_dir = train_saved_model(root / "crf", "crf", tokenizer=local_tokenizer())
     validation = synthetic_corpus(8)
+    validation["doc_id"] = "validation_" + validation["doc_id"]
+    for index in validation.index:
+        prefix = f"Independent validation {index}. "
+        entities = json.loads(validation.loc[index, "entities_json"])
+        for entity in entities:
+            entity["start"] += len(prefix)
+            entity["end"] += len(prefix)
+        validation.loc[index, "text"] = prefix + validation.loc[index, "text"]
+        validation.loc[index, "entities_json"] = json.dumps(entities)
+
     documents = synthetic_corpus(6)
 
     single = predict_entities(
@@ -574,6 +583,9 @@ def main() -> int:
     verify_arguments(checks)
     verify_task_registration(checks)
     verify_end_to_end(checks)
+    from verify_unified_ensemble import verify_all
+
+    verify_all(checks)
 
     return checks.report()
 

@@ -1,0 +1,6 @@
+task: ner.fit_ensemble
+model_dirs:
+  - assets/models/multihead-a/best_model
+  - assets/models/multihead-b/best_model
+method: soft
+output_dir: assets/ensembles/multihead

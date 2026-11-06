@@ -68,6 +68,19 @@ def align_votes(tables: Sequence[pd.DataFrame]) -> WordVotes:
     probabilities = np.zeros((n_words, n_members, len(TAGS)), dtype=np.float64)
 
     for member, table in enumerate(tables):
+        values = table[PROBABILITY_COLUMNS].to_numpy(dtype=float)
+        if (
+            not np.isfinite(values).all()
+            or (values < 0).any()
+            or not np.allclose(values.sum(axis=1), 1.0, atol=1e-5)
+        ):
+            raise ValueError(
+                f"Member {member} has invalid BIO probabilities; expected distributions."
+            )
+        if table.duplicated(["doc_id", "word_id"]).any():
+            raise ValueError(
+                f"Member {member} has duplicate word votes; deduplicate windows first."
+            )
         positions = index.get_indexer(pd.MultiIndex.from_frame(table[["doc_id", "word_id"]]))
 
         present[positions, member] = True
@@ -96,7 +109,10 @@ def combine_votes(
     if len(weights) != word_votes.n_members:
         raise ValueError(f"Received {len(weights)} weights for {word_votes.n_members} members.")
 
-    present_weights = word_votes.present * np.asarray(weights, dtype=np.float64)
+    values = np.asarray(weights, dtype=np.float64)
+    if not np.isfinite(values).all() or (values < 0).any():
+        raise ValueError("Weights must be finite and non-negative.")
+    present_weights = word_votes.present * values
     totals = present_weights.sum(axis=1)
 
     if votes == "hard":
@@ -133,6 +149,8 @@ def decode_combined(
     threshold: float,
     texts: dict[str, str],
     target_label: str,
+    missing_policy: Literal["skip", "break"] = "skip",
+    word_spans: dict[str, list[dict]] | None = None,
 ) -> pd.DataFrame:
     """
     Decode combined votes into scored spans, document by document.
@@ -145,6 +163,10 @@ def decode_combined(
     word's start to its last word's end, as `split_into_words` draws them, and its
     score is the mean combined probability of the tag each of its words took.
     """
+    if missing_policy not in ("skip", "break"):
+        raise ValueError("missing_policy must be 'skip' or 'break'.")
+    if not np.isfinite(threshold) or not 0 <= threshold <= 1:
+        raise ValueError("threshold must be finite and between 0 and 1.")
     spans: list[dict[str, Any]] = []
     words_df = combined.words
     boundaries = np.flatnonzero(words_df["doc_id"].ne(words_df["doc_id"].shift()))
@@ -152,11 +174,20 @@ def decode_combined(
     for start, end in zip(boundaries, [*boundaries[1:], len(words_df)]):
         doc_id = str(words_df["doc_id"].iat[start])
         text = texts[doc_id]
-        words = split_into_words(text)
+        words = split_into_words(text) if word_spans is None else word_spans[doc_id]
         current: dict[str, Any] | None = None
         scores: list[float] = []
 
+        previous_word = None
         for position in range(start, end):
+            word_id = int(words_df["word_id"].iat[position])
+            if (
+                missing_policy == "break"
+                and previous_word is not None
+                and word_id != previous_word + 1
+            ):
+                current = None
+            previous_word = word_id
             if combined.entity[position] - threshold <= TOLERANCE:
                 current = None
                 continue
@@ -192,18 +223,27 @@ def ensemble_spans(
     votes: Votes,
     texts: dict[str, str],
     target_label: str,
+    missing_policy: Literal["skip", "break"] = "skip",
+    word_spans: dict[str, list[dict]] | None = None,
 ) -> pd.DataFrame:
     """The spans an ensemble predicts: combine the votes, then decode them."""
     combined = combine_votes(word_votes, weights=weights, votes=votes)
 
-    return decode_combined(combined, threshold=threshold, texts=texts, target_label=target_label)
+    return decode_combined(
+        combined,
+        threshold=threshold,
+        texts=texts,
+        target_label=target_label,
+        missing_policy=missing_policy,
+        word_spans=word_spans,
+    )
 
 
 def normalize_weights(weights: Sequence[float]) -> list[float]:
     """Scale non-negative weights to sum to one."""
     values = np.asarray(weights, dtype=np.float64)
 
-    if values.size == 0 or (values < 0).any() or values.sum() <= 0:
+    if values.size == 0 or not np.isfinite(values).all() or (values < 0).any() or values.sum() <= 0:
         raise ValueError(f"Weights must be non-negative with a positive sum, got {list(weights)}.")
 
     return (values / values.sum()).tolist()

@@ -11,8 +11,8 @@ import numpy as np
 import pandas as pd
 import torch
 from _harness import Checks, run
-from fixtures import tiny_base_model
-from transformers import AutoModel, BertTokenizer, DistilBertConfig
+from fixtures import local_tokenizer, tiny_base_model
+from transformers import AutoModel, DistilBertConfig
 
 from lab.core import build_corpus, prepare_dataset
 from lab.core.spans import span_dataframe
@@ -26,29 +26,6 @@ from lab.ner.models.capacity import check_max_length
 from lab.ner.training import model_encoding, train
 from lab.ner.training.collation import MultiHeadCollator
 from lab.ner.training.dataset import to_dataset
-
-
-def local_tokenizer():
-    """Small real WordPiece tokenizer, including a split clinical word."""
-    words = [
-        "[PAD]",
-        "[UNK]",
-        "[CLS]",
-        "[SEP]",
-        "[MASK]",
-        "paciente",
-        "con",
-        "dolor",
-        "abdominal",
-        "intens",
-        "##o",
-        "sin",
-        "fiebre",
-        ".",
-        "a",
-        "otro",
-    ]
-    return BertTokenizer(vocab={word: index for index, word in enumerate(words)})
 
 
 def overlap_corpus():
@@ -502,8 +479,10 @@ def verify_training(checks, base, encoder, rows, model, root, corpus):
     weight_path.write_bytes(weight_bytes)
     from lab.ner.ensemble.io import describe_member
 
-    checks.raises(
-        "ensemble boundary explicit", ValueError, describe_member, saved, match="Multihead"
+    checks.equal(
+        "ensemble discovers multihead catalogue",
+        describe_member(saved)["entity_labels"],
+        encoder.entity_labels,
     )
     # Exercise the existing orchestrator and CLI dispatch using actual YAML.
     from lab.cli import main as cli_run

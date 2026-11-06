@@ -1,0 +1,14 @@
+task: ner.fit_ensemble
+model_dirs:
+  - assets/models/disease-crf/best_model
+  - assets/models/symptom-linear/best_model
+  - assets/models/multihead/best_model
+method: weighted
+votes: soft
+weight_scope: entity
+threshold_scope: entity
+validation: assets/splits/validation.parquet
+min_gold_entities: 5
+n_trials: 100
+random_state: 42
+output_dir: assets/ensembles/scoped

@@ -1,5 +1,8 @@
 # Multi-Head integration: validation record
 
+Historical record before unified ensembles (D136–D140). Current ensemble support and checks
+are described in [UNIFIED_ENSEMBLE_RESULTS.md](UNIFIED_ENSEMBLE_RESULTS.md).
+
 2026-11-06. The implementation is integrated and locally verified; full acceptance remains
 blocked by remote tokenizer access and review of the four requested scientific sources.
 No large clinical checkpoint or GPU was used. No new runtime dependency was added to the

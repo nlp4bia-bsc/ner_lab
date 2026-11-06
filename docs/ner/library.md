@@ -407,3 +407,14 @@ validates mappings, dimensions and digest and uses strict state-dict loading; it
 need the original backbone directory or a network download. Old `linear`/`crf` encodings
 remain readable. A bare Multi-Head checkpoint without encoding metadata is not loadable;
 pass `model_encoding` when saving through `train`.
+
+## Unified ensembles underneath
+
+`lab.ner.ensemble.tables.MemberPredictions` holds sparse per-type word distributions and
+original decoded spans from one inference. `align_entities` groups eligible members by
+label and reuses `WordVotes`; `decode_entities` applies independent two-stage BIO decoding.
+`combine_spans` preserves exact interval identities for union/consensus/intersection.
+`search_entity_parameters` fits scoped values on cached predictions with a uniform baseline
+and sparse-gold fallback. These helpers live in their concern modules under
+`lab.ner.ensemble`; the public stage functions remain `fit_ensemble` and `predict_ensemble`.
+See [the guide](ensemble.md) for supported combinations and provenance requirements.

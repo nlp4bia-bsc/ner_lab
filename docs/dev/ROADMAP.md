@@ -89,5 +89,14 @@ D132–D135 add a shared-backbone Multi-Head BIO architecture through the existi
 HPO and inference entry points. Offline functional checks and an efficiency benchmark live
 in `verification/verify_multihead.py` and `verification/benchmark_multihead.py`.
 [Validation evidence](../../verification/MULTIHEAD_RESULTS.md) separates executed local checks
-from blocked external regressions and scientific-source review. Multi-Head CRF, ensembles,
-CNNs, adaptive context, distillation and knowledge-based features remain optional research.
+from blocked external regressions and scientific-source review. Multi-Head CRF, CNNs, adaptive context, distillation and knowledge-based features remain
+optional research. Unified ensembles are implemented by D136–D140.
+
+## Unified ensembles
+
+D136–D140 unify classic, Multi-Head and hybrid prediction coverage; add scoped fitting,
+specialists and exact span ensembles; and retain format-1 inference. Local tiny-checkpoint
+checks and CPU measurements are recorded in
+[UNIFIED_ENSEMBLE_RESULTS.md](../../verification/UNIFIED_ENSEMBLE_RESULTS.md). Real clinical
+checkpoint/GPU experiments, probability calibration, OOF stacking and alternative structured
+combiners remain unverified or unimplemented; none is required by the new minimum contract.

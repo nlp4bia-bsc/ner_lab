@@ -71,3 +71,21 @@ scripts still fetch BERT/GPT-2 **tokenizers**, even though their model weights a
 The benchmark runs separate processes and reports forward counts, model-only elapsed time,
 throughput, parameters and peak process RSS; it does not measure end-to-end application time.
 See [MULTIHEAD_RESULTS.md](MULTIHEAD_RESULTS.md) for executed results and remaining blockers.
+
+## Unified ensembles
+
+```bash
+OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 HF_HUB_OFFLINE=1 \
+  .venv-verify/bin/python verification/verify_ensemble.py
+.venv-verify/bin/python verification/benchmark_ensemble.py --repeats 50
+```
+
+The original ensemble suite now uses a shared local WordPiece tokenizer and still trains
+its tiny legacy models through the existing training orchestrator. It also calls
+`verify_unified_ensemble.py`, separated for heterogeneous catalogue/coverage combinatorics,
+all native member families, hybrid A–F, scoped optimization, exact span methods, old/new
+artifacts, calibration provenance, all six documented YAMLs and composition with NEL.
+The benchmark separates member pipeline, batched inference, alignment, combination,
+decoding and Optuna, with one process per scenario and equal padded length.
+[UNIFIED_ENSEMBLE_RESULTS.md](UNIFIED_ENSEMBLE_RESULTS.md) records actual results and limits;
+these tests do not require network downloads or imply GPU/clinical-model validation.
