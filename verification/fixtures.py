@@ -74,6 +74,26 @@ def synthetic_corpus(n_documents: int = 24, label: str = "DISEASE") -> pd.DataFr
     return build_corpus(documents, annotations)
 
 
+def multitype_corpus(n_documents: int = 24) -> pd.DataFrame:
+    """
+    A canonical corpus with two entity types that overlap: every mention is a DISEASE,
+    and its first word is also a SYMPTOM.
+
+    What a multihead model is for, and what a single-label one cannot hold at once.
+    """
+    from lab.core import build_corpus
+
+    documents, diseases = synthetic_documents(n_documents, "DISEASE")
+    symptoms = diseases.copy()
+    symptoms["label"] = "SYMPTOM"
+    symptoms["mark"] = symptoms["mark"].str.replace("T", "S", regex=False)
+    first_word = symptoms["text"].str.split(" ").str[0]
+    symptoms["end_span"] = symptoms["start_span"] + first_word.str.len()
+    symptoms["text"] = first_word
+
+    return build_corpus(documents, pd.concat([diseases, symptoms], ignore_index=True))
+
+
 def write_brat(root: Path, documents: dict[str, str], annotations: pd.DataFrame) -> tuple[Path, Path]:
     """Write a synthetic corpus to disk as .txt and .ann directories."""
     txt_dir = root / "txt"

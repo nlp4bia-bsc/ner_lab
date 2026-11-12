@@ -44,6 +44,35 @@ def verify_rows(checks: Checks) -> None:
     checks.raises("empty rows raise", ValueError, validate_rows, rows.iloc[0:0], match="empty")
 
 
+def verify_collation(checks: Checks) -> None:
+    from transformers import AutoTokenizer
+
+    from lab.ner.training.collation import TokenClassificationCollator
+
+    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    short = {"input_ids": [101, 7592, 102], "attention_mask": [1, 1, 1], "labels": [-100, 1, -100]}
+    long = {"input_ids": [101, 7592, 2088, 999, 102], "attention_mask": [1] * 5, "labels": [-100, 1, 2, 0, -100]}
+
+    batch = TokenClassificationCollator(tokenizer)([short, long])
+
+    checks.equal("the batch pads to a multiple of eight", tuple(batch["input_ids"].shape), (2, 8))
+    checks.equal("a short row keeps its tokens at the front", batch["input_ids"][0, :3].tolist(), short["input_ids"])
+    checks.equal("its labels stay aligned with them", batch["labels"][0, :3].tolist(), short["labels"])
+    checks.check("label padding is ignored", (batch["labels"][0, 3:] == -100).all().item())
+
+    tokenizer.padding_side = "left"
+    left = TokenClassificationCollator(tokenizer)([short, long])
+
+    checks.equal("a left-padding tokenizer still pads right", left["input_ids"].tolist(), batch["input_ids"].tolist())
+    checks.equal("and so do its labels", left["labels"].tolist(), batch["labels"].tolist())
+
+    nested = TokenClassificationCollator(tokenizer, pad_to_multiple_of=None)(
+        [{**short, "labels": [[-100, -100], [1, 0], [-100, -100]]}, {**long, "labels": [[0, 0]] * 5}]
+    )
+
+    checks.equal("per-head labels pad to [batch, length, heads]", tuple(nested["labels"].shape), (2, 5, 2))
+
+
 def verify_arguments(checks: Checks) -> None:
     try:
         import torch  # noqa: F401
@@ -227,6 +256,10 @@ def verify_end_to_end(checks: Checks) -> None:
         )
 
         checks.check("training produced a step", result.summary["train_output"]["global_step"] > 0)
+        checks.check(
+            "the loss is divided by accumulation although forward takes **kwargs",
+            result.trainer.model_accepts_loss_kwargs is False,
+        )
         checks.equal("epoch metrics has one eval row", len(result.epoch_metrics), 1)
         checks.check("the summary was written", result.paths["summary"].exists())
         checks.check(
@@ -291,6 +324,10 @@ def verify_end_to_end(checks: Checks) -> None:
 
         checks.check("the CRF model trains", crf_result.summary["train_output"]["global_step"] > 0)
         checks.check(
+            "the CRF loss is divided by accumulation too",
+            crf_result.trainer.model_accepts_loss_kwargs is False,
+        )
+        checks.check(
             "the CRF loss is finite", crf_result.summary["train_output"]["training_loss"] == crf_result.summary["train_output"]["training_loss"]
         )
 
@@ -333,6 +370,7 @@ def main() -> int:
     checks = Checks("training")
 
     verify_rows(checks)
+    verify_collation(checks)
     verify_arguments(checks)
     verify_devices(checks)
     verify_end_to_end(checks)

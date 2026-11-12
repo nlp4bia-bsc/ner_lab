@@ -220,7 +220,7 @@ train(
 | `train_compute_metrics` | `None` | Used for the extra training-set pass under `metrics_scope="both"`. |
 | `trainer_class` | `None` | Defaults to `CRFTrainer` for a CRF model, `Trainer` otherwise. |
 | `early_stopping_patience` | `5` | Epochs without improvement before stopping. `None` disables it. |
-| `pad_to_multiple_of` | `8` | Pad batches to a multiple of this. |
+| `pad_to_multiple_of` | `8` | Pad batches to a multiple of this. Batches always pad on the right, whatever the tokenizer's `padding_side`, so predictions line up with the rows they are decoded against. |
 | `ignore_index` | `-100` | Label id excluded from the loss and from scoring. |
 | `metrics_scope` | `"eval"` | `"both"` also scores the training set each epoch, at the cost of a second pass. |
 | `save_model` | `False` | Keep the weights. Otherwise the selection checkpoints are removed afterwards, including when training raises. |

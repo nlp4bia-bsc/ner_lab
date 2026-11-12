@@ -65,6 +65,26 @@ def build_row(
     time can grow a labelled position back out to its whole word — without it a
     span ending on a multi-subword word would stop at that word's first subword.
     """
+    label_ids = build_label_ids(labelled_tokens, label2id)
+    input_ids = [*prefix_ids, *(token["token_id"] for token in labelled_tokens), *suffix_ids]
+
+    return {
+        "input_ids": input_ids,
+        "attention_mask": [1] * len(input_ids),
+        "labels": [IGNORE_INDEX] * len(prefix_ids) + label_ids + [IGNORE_INDEX] * len(suffix_ids),
+        "token_offsets": [(token["start"], token["end"]) for token in labelled_tokens],
+        "word_ids": [token["word_id"] for token in labelled_tokens],
+    }
+
+
+def build_label_ids(labelled_tokens: list[dict], label2id: dict) -> list[int]:
+    """
+    The label id of each token in a window, `IGNORE_INDEX` where no loss is computed.
+
+    Only a word's first subword carries its label; continuation subwords, tokens that
+    belong to no word and tokens with no `label` key get `IGNORE_INDEX`. Special tokens
+    are not in `labelled_tokens`, so the caller pads for them.
+    """
     label_ids = []
     previous_word_id = None
 
@@ -77,12 +97,4 @@ def build_row(
         else:
             label_ids.append(label2id[token["label"]])
 
-    input_ids = [*prefix_ids, *(token["token_id"] for token in labelled_tokens), *suffix_ids]
-
-    return {
-        "input_ids": input_ids,
-        "attention_mask": [1] * len(input_ids),
-        "labels": [IGNORE_INDEX] * len(prefix_ids) + label_ids + [IGNORE_INDEX] * len(suffix_ids),
-        "token_offsets": [(token["start"], token["end"]) for token in labelled_tokens],
-        "word_ids": [token["word_id"] for token in labelled_tokens],
-    }
+    return label_ids

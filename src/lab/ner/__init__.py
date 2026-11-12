@@ -13,9 +13,12 @@ _EXPORTS: dict[str, str] = {
     "fit_ensemble": "lab.ner.ensemble",
     "predict_ensemble": "lab.ner.ensemble",
     "predict_entities": "lab.ner.inference.predict",
+    "predict_multihead": "lab.ner.multihead",
     "search_hyperparameters": "lab.ner.hpo",
+    "search_multihead": "lab.ner.multihead",
     "train": "lab.ner.training",
     "train_model": "lab.ner.training",
+    "train_multihead": "lab.ner.multihead",
     "training_arguments": "lab.ner.training",
 }
 

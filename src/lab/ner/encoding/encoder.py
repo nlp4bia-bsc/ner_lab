@@ -6,7 +6,7 @@ import json
 from collections.abc import Callable, Iterable, Iterator
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import pandas as pd
 import pyarrow.parquet as pq
@@ -19,7 +19,7 @@ from lab.core.segmentation import (
 from lab.core.sentences import describe_sentence_segmenter, split_into_sentences
 from lab.ner.encoding.overlaps import OverlapPolicy, resolve_entities
 from lab.ner.encoding.rows import build_row, compute_max_content_length, special_token_template
-from lab.ner.encoding.tagging import build_iob2_labels, build_label_vocabulary
+from lab.ner.encoding.tagging import build_label_vocabulary, label_window
 from lab.ner.encoding.windowing import select_context_windows, select_greedy_windows
 
 if TYPE_CHECKING:
@@ -28,6 +28,12 @@ if TYPE_CHECKING:
 WindowStrategy = Callable[[list[dict], list[dict], list[dict], str, int], list[dict]]
 
 BUILTIN_STRATEGIES = ("greedy", "context")
+
+
+class PartitionEncoder(Protocol):
+    """Anything `encode_partition` can encode with: an `Encoder`, or one built like it."""
+
+    def encode_parquet(self, path: str | Path) -> pd.DataFrame: ...
 
 
 class Encoder:
@@ -87,7 +93,9 @@ class Encoder:
         self.label2id = self.vocabulary["label2id"]
         self.id2label = self.vocabulary["id2label"]
 
-        self._select_windows = self._resolve_strategy()
+        self._select_windows = resolve_window_strategy(
+            strategy, context_tokens, min_sentence_tokens
+        )
 
     def encode(self, corpus: pd.DataFrame) -> pd.DataFrame:
         """Encode an in-memory corpus into one row per window."""
@@ -102,20 +110,20 @@ class Encoder:
 
         Documents are read in `documents_per_batch`-sized batches.
         """
-        parquet_file = pq.ParquetFile(path)
-
-        return self._encode(_parquet_documents(parquet_file, self.documents_per_batch))
+        return self._encode(read_parquet_documents(path, self.documents_per_batch))
 
     def encode_document(self, doc_id: str, text: str, entities: list[dict]) -> list[dict]:
         """Encode one document into its window rows."""
         entities = resolve_entities(doc_id, entities, text, self.overlap_policy)
 
-        sentences = split_into_sentences(text, self.language)
-        sentences = merge_sentences_crossing_entities(sentences, entities, text)
-
-        tokens = tokenize_document(text, self.tokenizer)
-        ranges = sentence_token_ranges(sentences, tokens)
-        windows = self._select_windows(ranges, tokens, entities, text, self.max_content_length)
+        tokens, windows = window_document(
+            text=text,
+            entities=entities,
+            tokenizer=self.tokenizer,
+            language=self.language,
+            select_windows=self._select_windows,
+            max_content_length=self.max_content_length,
+        )
 
         return [self._row(tokens, window, entities, doc_id) for window in windows]
 
@@ -136,20 +144,7 @@ class Encoder:
         return pd.DataFrame(rows)
 
     def _row(self, tokens: list[dict], window: dict, entities: list[dict], doc_id: str) -> dict:
-        if "core_token_start" in window:
-            labelled = [
-                *tokens[window["token_start"] : window["core_token_start"]],
-                *build_iob2_labels(
-                    tokens[window["core_token_start"] : window["core_token_end"]],
-                    entities,
-                    self.target_label,
-                ),
-                *tokens[window["core_token_end"] : window["token_end"]],
-            ]
-        else:
-            labelled = build_iob2_labels(
-                tokens[window["token_start"] : window["token_end"]], entities, self.target_label
-            )
+        labelled = label_window(tokens, window, entities, self.target_label)
 
         row = build_row(labelled, self.label2id, self.prefix_ids, self.suffix_ids)
         row["doc_id"] = doc_id
@@ -158,30 +153,63 @@ class Encoder:
 
         return row
 
-    def _resolve_strategy(self) -> WindowStrategy:
-        if callable(self.strategy):
-            return self.strategy
 
-        if self.strategy not in BUILTIN_STRATEGIES:
-            raise ValueError(
-                f"Unknown strategy {self.strategy!r}; expected one of {BUILTIN_STRATEGIES} "
-                "or a callable."
-            )
+def resolve_window_strategy(
+    strategy: str | WindowStrategy,
+    context_tokens: int | None = None,
+    min_sentence_tokens: int = 4,
+) -> WindowStrategy:
+    """
+    The window-selecting callable a strategy name stands for, its settings bound.
 
-        if self.strategy == "greedy":
-            if self.context_tokens is not None:
-                raise ValueError("context_tokens only applies when strategy='context'.")
+    A callable is returned as it is. `context_tokens` is required by the context
+    strategy and refused by the greedy one, so a setting that would do nothing raises.
+    """
+    if callable(strategy):
+        return strategy
 
-            return select_greedy_windows
-
-        if self.context_tokens is None:
-            raise ValueError("context_tokens is required when strategy='context'.")
-
-        return partial(
-            select_context_windows,
-            context_tokens=self.context_tokens,
-            min_sentence_tokens=self.min_sentence_tokens,
+    if strategy not in BUILTIN_STRATEGIES:
+        raise ValueError(
+            f"Unknown strategy {strategy!r}; expected one of {BUILTIN_STRATEGIES} or a callable."
         )
+
+    if strategy == "greedy":
+        if context_tokens is not None:
+            raise ValueError("context_tokens only applies when strategy='context'.")
+
+        return select_greedy_windows
+
+    if context_tokens is None:
+        raise ValueError("context_tokens is required when strategy='context'.")
+
+    return partial(
+        select_context_windows,
+        context_tokens=context_tokens,
+        min_sentence_tokens=min_sentence_tokens,
+    )
+
+
+def window_document(
+    text: str,
+    entities: list[dict],
+    tokenizer: PreTrainedTokenizerBase,
+    language: str,
+    select_windows: WindowStrategy,
+    max_content_length: int,
+) -> tuple[list[dict], list[dict]]:
+    """
+    Tokenize one document and cut it into windows, returning the tokens and the windows.
+
+    Sentences an entity crosses are merged first, so no window boundary falls inside
+    an entity. `entities` are the already-resolved ones the windows must respect.
+    """
+    sentences = split_into_sentences(text, language)
+    sentences = merge_sentences_crossing_entities(sentences, entities, text)
+
+    tokens = tokenize_document(text, tokenizer)
+    ranges = sentence_token_ranges(sentences, tokens)
+
+    return tokens, select_windows(ranges, tokens, entities, text, max_content_length)
 
 
 def describe_encoder(encoder: Encoder) -> dict:
@@ -245,7 +273,7 @@ def strategy_name(strategy: str | WindowStrategy) -> str:
 
 
 def encode_partition(
-    encoder: Encoder,
+    encoder: PartitionEncoder,
     path_or_paths: Path | list[Path],
     cache: dict[str, pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
@@ -275,10 +303,15 @@ def encode_partition(
     return pd.concat(frames, ignore_index=True)
 
 
-def _parquet_documents(
-    parquet_file: pq.ParquetFile, documents_per_batch: int
+def read_parquet_documents(
+    path: str | Path, documents_per_batch: int = 500
 ) -> Iterator[tuple[str, str, list[dict]]]:
-    for batch in parquet_file.iter_batches(
+    """
+    Stream a corpus parquet as `(doc_id, text, entities)` triples.
+
+    Read `documents_per_batch` documents at a time, so a large corpus is never fully loaded.
+    """
+    for batch in pq.ParquetFile(path).iter_batches(
         batch_size=documents_per_batch,
         columns=["doc_id", "text", "entities_json"],
     ):

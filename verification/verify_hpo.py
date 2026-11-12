@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 import tempfile
@@ -379,17 +380,16 @@ def verify_run_trial(checks: Checks) -> None:
         not list((root / "trial").rglob("best_model")),
     )
 
-    def exploding_architecture(base_model, label2id, id2label):
+    def exploding_model():
         import torch
 
         raise torch.cuda.OutOfMemoryError("CUDA out of memory. Tried to allocate everything")
 
     oom_report = run_trial(
         {"variant": key, "learning_rate": 3e-5},
-        variants=encoded,
+        variants={key: dataclasses.replace(encoded[key], build_model=exploding_model)},
         base_arguments=base,
         trial_dir=root / "oom_trial",
-        architecture=exploding_architecture,
         seeds_per_trial=2,
         track_resources=False,
     )
@@ -398,7 +398,7 @@ def verify_run_trial(checks: Checks) -> None:
     checks.equal("an OOM trial scores worst", oom_report["span_strict_f1"], float("-inf"))
     checks.equal("no seed completed", oom_report["n_seeds"], 0)
 
-    def broken_architecture(base_model, label2id, id2label):
+    def broken_model():
         raise ValueError("a real bug")
 
     checks.raises(
@@ -406,10 +406,9 @@ def verify_run_trial(checks: Checks) -> None:
         ValueError,
         run_trial,
         {"variant": key, "learning_rate": 3e-5},
-        variants=encoded,
+        variants={key: dataclasses.replace(encoded[key], build_model=broken_model)},
         base_arguments=base,
         trial_dir=root / "bug_trial",
-        architecture=broken_architecture,
         seeds_per_trial=1,
         track_resources=False,
         match="a real bug",

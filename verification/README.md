@@ -28,12 +28,13 @@ seconds; that one starts a local Ray instance for its mini-sweep and adds a minu
 | `verify_encoding.py` | overlap policies, segmentation, sentence segmenter routing (pysbd, Punkt, ICU), UAX #29 words, windowing, IOB2 tagging, row assembly |
 | `verify_encoder.py` | `Encoder` construction and encoding, custom strategies, NER-API equivalence |
 | `verify_models.py` | BIO constraint masks, the architecture registry, custom factories, the `max_length` forward-pass check |
-| `verify_training.py` | row conversion, `training_arguments`, and linear + CRF training end to end |
+| `verify_training.py` | row conversion, right-padding collation, `training_arguments`, and linear + CRF training end to end |
 | `verify_evaluation.py` | span reconstruction, nervaluate scoring, character metrics, token metrics |
 | `verify_assessment.py` | `train_model`: fold rotation, both split modes, manifests, aggregation |
 | `verify_hpo.py` | search-space forms, variants, trial scoring, OOM handling, a real two-trial Ray sweep, the winner block re-run through `train_model` |
 | `verify_inference.py` | span decoding, `predict_entities` end to end, scoring against gold and against a reference |
 | `verify_ensemble.py` | voting and two-stage decoding, one-member equivalence with `predict_entities`, CRF marginals against brute-force path enumeration, `ensemble.json` and weight digests, `fit_ensemble` and `predict_ensemble` end to end |
+| `verify_multihead.py` | multihead encoding against the single-label encoder head by head, per-head micro and macro scoring, collation, the head-balanced loss, `train_multihead` k-fold, saving and loading under the head catalogue, `predict_multihead`, a two-trial `search_multihead` sweep and its winner re-run |
 | `verify_nel.py` | nlp4bia-linking's own tests, side-by-side equivalence with it, `link_entities` end to end on every method, with a hierarchy, with the reranker |
 
 Everything runs on synthetic fixtures built by `fixtures.py`, so the scripts pass on a

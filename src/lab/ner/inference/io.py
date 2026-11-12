@@ -79,13 +79,13 @@ def read_reference(reference: str | Path, target_label: str | None = None) -> pd
 
 
 def resolve_gold(
-    reference: str | Path | None, corpus: pd.DataFrame, target_label: str
+    reference: str | Path | None, corpus: pd.DataFrame, target_label: str | None
 ) -> pd.DataFrame | None:
     """
     The gold spans to score against: `reference` when given, else the corpus's own.
 
-    Restricted to `target_label`. `None` when neither carries any annotation, which
-    is a run that predicts without scoring.
+    Restricted to `target_label` when one is given, every type otherwise. `None` when
+    neither carries any annotation, which is a run that predicts without scoring.
     """
     if reference is not None:
         return read_reference(reference, target_label)

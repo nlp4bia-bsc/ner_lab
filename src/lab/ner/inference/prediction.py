@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 import torch
 from transformers import (
-    DataCollatorForTokenClassification,
     PreTrainedTokenizerBase,
     Trainer,
     TrainingArguments,
@@ -19,6 +18,7 @@ from lab.ner.evaluation.spans import predicted_spans
 from lab.ner.inference.loading import resolve_device
 from lab.ner.training.arguments import for_inference
 from lab.ner.training.arguments import training_arguments as build_training_arguments
+from lab.ner.training.collation import TokenClassificationCollator
 from lab.ner.training.dataset import to_dataset
 from lab.ner.training.trainer import resolve_trainer_class
 
@@ -49,10 +49,12 @@ def predict_logits(
     Nothing is written: without `training_arguments`, the `output_dir` the
     Trainer insists on is a temporary directory that goes away with the call.
     """
+    collator = TokenClassificationCollator(
+        tokenizer=tokenizer, pad_to_multiple_of=pad_to_multiple_of
+    )
+
     if training_arguments is not None:
-        return _predict(
-            model, tokenizer, rows, training_arguments, pad_to_multiple_of, trainer_class
-        )
+        return _predict(model, tokenizer, rows, training_arguments, trainer_class, collator)
 
     on_cpu = resolve_device(device).type == "cpu"
 
@@ -67,8 +69,8 @@ def predict_logits(
                 use_cpu=on_cpu,
                 fp16=not on_cpu,
             ),
-            pad_to_multiple_of,
             trainer_class,
+            collator,
         )
 
 
@@ -108,14 +110,9 @@ def _predict(
     tokenizer: PreTrainedTokenizerBase,
     rows: pd.DataFrame,
     training_arguments: TrainingArguments,
-    pad_to_multiple_of: int | None,
     trainer_class: type[Trainer] | None,
+    collator: TokenClassificationCollator,
 ) -> np.ndarray:
-    collator = DataCollatorForTokenClassification(
-        tokenizer=tokenizer,
-        label_pad_token_id=IGNORE_INDEX,
-        pad_to_multiple_of=pad_to_multiple_of,
-    )
     arguments = {
         "model": model,
         "args": for_inference(training_arguments),

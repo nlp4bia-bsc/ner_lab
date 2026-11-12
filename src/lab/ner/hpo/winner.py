@@ -47,15 +47,6 @@ def winner_configuration(
     into it directly, so this must name a directory no run owns yet — the sweep
     passes `<its own directory>/final_train`.
     """
-    hyperparameters = {
-        key: value for key, value in sampled.items() if key not in RESERVED_DIMENSIONS
-    }
-    carried = {
-        key: value
-        for key, value in (user_overrides or {}).items()
-        if key not in ("save_strategy", "load_best_model_at_end")
-    }
-
     configuration: dict[str, Any] = {
         "task": "ner.train_model",
         "split_dir": str(split_dir),
@@ -71,19 +62,51 @@ def winner_configuration(
         "min_sentence_tokens": min_sentence_tokens,
         "min_overlap_percentage": min_overlap_percentage,
         "early_stopping_patience": early_stopping_patience,
-        "training_arguments": {
-            **carried,
-            "num_train_epochs": base_arguments.num_train_epochs,
-            **hyperparameters,
-            "per_device_train_batch_size": micro_batch_size,
-            "gradient_accumulation_steps": accumulation_steps,
-        },
+        "training_arguments": winner_training_arguments(
+            sampled=sampled,
+            micro_batch_size=micro_batch_size,
+            accumulation_steps=accumulation_steps,
+            base_arguments=base_arguments,
+            user_overrides=user_overrides,
+        ),
     }
 
     if architecture_kwargs:
         configuration["architecture_kwargs"] = architecture_kwargs
 
     return configuration
+
+
+def winner_training_arguments(
+    sampled: dict[str, Any],
+    micro_batch_size: int | None,
+    accumulation_steps: int | None,
+    base_arguments: TrainingArguments,
+    user_overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    The `training_arguments` block of a winner config, whichever task retrains it.
+
+    The sampled hyperparameters and the batch split the trial ran with, over the
+    sweep's epoch cap and whatever the user overrode for the sweep, minus the
+    sweep-only checkpointing settings.
+    """
+    hyperparameters = {
+        key: value for key, value in sampled.items() if key not in RESERVED_DIMENSIONS
+    }
+    carried = {
+        key: value
+        for key, value in (user_overrides or {}).items()
+        if key not in ("save_strategy", "load_best_model_at_end")
+    }
+
+    return {
+        **carried,
+        "num_train_epochs": base_arguments.num_train_epochs,
+        **hyperparameters,
+        "per_device_train_batch_size": micro_batch_size,
+        "gradient_accumulation_steps": accumulation_steps,
+    }
 
 
 def write_winner_config(configuration: Mapping[str, Any], path: str | Path) -> Path:

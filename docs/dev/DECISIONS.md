@@ -54,7 +54,7 @@ The row is the verdict; the note is the argument.
 | D40 | `compute_metrics` is injected, not built. `trainer_class` defaults to `CRFTrainer` for a model exposing `decode_from_emissions`, `Trainer` otherwise. | Decouples training from evaluation. Duck-typing the CRF trainer means a custom architecture that can Viterbi-decode gets the right Trainer for free. |
 | D41 | Discharged by D47. | |
 | D42 | No `target_label` parameter on `train()`. Provenance goes through `run_metadata: dict`. | Nothing in training needs it once `compute_metrics` is injected and the model carries its own `label2id`. |
-| D43 | **No multi-label.** One `target_label`, three classes, indefinitely. | User decision. Removes the pressure to design `2n+1` seams into evaluation that nothing would use. |
+| D43 | Narrowed by D145. A single-label model keeps one `target_label` and three classes; a model with a head per type is the separate multihead path. | User decision. Removes the pressure to design `2n+1` seams into evaluation that nothing would use. |
 | D44 | **nervaluate/SemEval is the canonical scorer.** ~~The MultiClinNER official scorer stays available as an option.~~ The option is removed by D96. | User decision. `span_strict_f1` is what model selection tracks. |
 | D45 | The legacy word-level scoring path is dropped (~250 lines). | `Encoder` only ever emits token-level rows, so the branch was unreachable. |
 | D46 | `spans_from_corpus` takes labels **verbatim**. Now `lab.core.spans_from_corpus` (D96). | D32 applies: gold is scored as distributed. |
@@ -142,6 +142,13 @@ The row is the verdict; the note is the argument.
 | D129 | **Python floor `>=3.11`.** Supersedes D17. | `icu4py`, the ICU binding D128 uses, requires 3.11. |
 | D130 | **The Punkt models of D128's nine languages ship inside `lab`, under `lab/core/data/punkt_tab`, read with nltk's own decoder. nltk is imported only when a Punkt language is segmented.** | nltk downloads its models at runtime, which offline nodes cannot do, and nltk 3.10 refuses to open model files outside its own data roots. Importing nltk at module load added about a second to every `import lab.core`. |
 | D131 | **Every segmenter's spans take pysbd's shape: contiguous from the first non-whitespace character to the end, trailing whitespace on the sentence before it, none for a document that is whitespace throughout. The segmenter and its version are recorded as `sentence_segmenter` in `encoding.json` and as two `text_stats` columns.** `encoder_from_description` ignores the recorded value and picks again from `language`. | Windowing and the statistics must not depend on which segmenter ran. Which one ran moves every window boundary, so it is recorded; ensemble members need not agree on it, since `word_id` does not depend on sentences (D120). |
+| D145 | **Narrows D43: a multihead model — one shared Transformer, one independent O/B/I head per entity type — lives in its own `lab.ner.multihead` package with its own tasks, `ner.train_multihead`, `ner.search_multihead` and `ner.predict_multihead`.** Single-label tasks and signatures are unchanged, and shared code carries no multihead branch: it is reached through what it already injects (`compute_metrics`, and the trial pieces of D149), and batched by the collator of D151, which pads multihead labels like any others. → notes | Cross-type overlapping annotations need independent decisions a flat softmax cannot make. A mode signalled inside shared orchestrators turns every entry point into a branch list. |
+| D146 | **The head catalogue is `entity_labels`, in head order; left out, it is every type annotated in the split's train and validation partitions, sorted, the same for every fold. A listed type annotated nowhere there raises; a corpus type with no head is left unlabelled and warns with counts. `overlap_policy` resolves overlaps within each type with the single-label policies and default, never across types.** | Folds that train different heads cannot be averaged. Per type, a head keeps exactly the entities a single-label model for that type keeps, so the two are comparable. |
+| D147 | **Each head is scored with nervaluate on its own type's spans, exactly as a single-label model is; micro sums the heads' counts (`sum_span_results`, how nervaluate builds its own overall), macro averages the heads, and keys are `head_<type>_*`, plain (micro) and `span_<scenario>_macro_*`. The loss averages each head's cross-entropy, then the heads with labelled positions; selection defaults to `span_strict_macro_f1`.** | Keeps all four scenarios and `min_overlap_percentage`, and makes per-head numbers directly comparable with specialists. Every type weighs the same in both the loss and selection. |
+| D148 | **A saved multihead model's `encoding.json` records the backbone's full configuration as `backbone_config`; loading builds the backbone from it with no pretrained weights and loads the fine-tuned weights strictly. A digest of the head catalogue travels in the weights and must match.** | The directory rebuilds without the base model it was trained from. A reordered catalogue would otherwise load silently with heads swapped. |
+| D149 | **An `EncodedVariant` carries what its trials need — `build_model` and `compute_metrics` — decided by whoever encodes it; the model-independent sweep (setup, length check, Ray, smoke test, Optuna, summary, winner, report) lives in `lab.ner.hpo.sweep`. `search_multihead`'s winner is a `ner.train_multihead` config, recorded in `hpo_summary.json` under `train_multihead`.** | One sweep machine for every kind of model, with no architecture branch in a trial. Ray starts only after the length check, as before. |
+| D150 | **`train` sets `model_accepts_loss_kwargs = False` on every Trainer it builds, so the loss is always divided by `gradient_accumulation_steps`.** → notes | Under transformers 5, a `forward` taking `**kwargs` — the stock token-classification heads and `CRFForTokenClassification` alike — makes the Trainer skip that division, assuming the model normalises by `num_items_in_batch`; none here does. |
+| D151 | **Every batch is padded on the right by `TokenClassificationCollator`, whatever the tokenizer's `padding_side`, for `train`, `predict_logits` and so every task; it pads labels of one id per position and of one per head alike. It replaces `DataCollatorForTokenClassification`.** → notes | Span reconstruction and token diagnostics read each row's predictions from position 0; a left-padding tokenizer shifted every shorter row's logits past them, silently. |
 
 ## Notes
 
@@ -437,3 +444,56 @@ ICU comes from `icu4py`, not PyICU: its wheels embed ICU 78.3, the version D114 
 `regex` against, so the system-ICU problem that ruled PyICU out does not arise. Its
 `segments()` offsets are UTF-16 code units, which are converted to string indices; a
 character outside the Basic Multilingual Plane would otherwise shift every later offset.
+
+### D145 — multihead as its own path
+
+The first implementation, on Fernando's `work` branch, added multihead inside the
+single-label path: `target_label=None` meant multihead in the encoder and scoring,
+`architecture == "multihead"` in the orchestrators, `hasattr(model, "entity_labels")` in
+the collator and trainer, and `DataFrame.attrs` carried the gold and the catalogue between
+them — about thirty branch points, a hundred by the end of that branch. Every shared entry
+point stopped reading as a list of steps, and `train_model` loosened `target_label` and
+`language` to optional parameters that raised when left out.
+
+Here multihead has its own encoder, model, collator, scoring, orchestrators and loader, and
+reuses the shared pieces unchanged: windowing and tagging (extracted from `Encoder` as
+`window_document`, `label_window`, `build_label_ids`, `resolve_window_strategy`), span
+reconstruction and token diagnostics on a per-head view of the rows, `train`, the run and
+fold helpers, and the sweep. What a multihead run needs that a single-label one does not
+enters as an argument, never as a branch.
+
+### D150 — the loss under gradient accumulation
+
+With accumulation over N micro-batches the Trainer sums their gradients and, to average
+them, divides each loss by N (`Trainer.training_step`); Accelerate is configured with
+`num_steps=1`, so nothing else divides. It skips the division when it believes the model
+normalises its own loss by `num_items_in_batch`, which it infers from a `forward` taking
+`**kwargs` unless the model sets `accepts_loss_kwargs`. Under transformers 5.14 the BERT,
+RoBERTa and DeBERTa-v2 token-classification heads take `**kwargs` and compute a plain mean
+cross-entropy, as does `CRFForTokenClassification`, and none sets the attribute.
+
+The accumulated gradient was therefore N times the average. AdamW's update is nearly
+invariant to a constant gradient scale, but `max_grad_norm=1.0` clips the scaled gradient,
+so clipping fired more often and rescaled each step by a varying factor, and the logged
+`training_loss` was N times too large. Default sweeps (effective batches 16/32/64 under a
+64 micro-batch cap) never accumulate; a lowered `max_micro_batch_size` or an explicit
+`gradient_accumulation_steps` did, and configurations that needed accumulation were then not
+trained like those that did not. The Trainer's own `compute_loss` docstring prescribes this
+override for a loss that ignores `num_items_in_batch`.
+
+### D151 — padding on the right
+
+`DataCollatorForTokenClassification` pads each batch on the tokenizer's `padding_side`, and
+the model's logits come back in that padded layout. `predicted_spans` takes a row's first
+`len(labels)` predictions and reads them against the unpadded offsets and word ids the row
+stores; `token_diagnostics` pads the gold on the right. With `padding_side="left"` every row
+shorter than its batch's longest was compared position by position against padding or
+earlier tokens: wrong spans, wrong metrics, wrong best-epoch selection, wrong ensemble word
+tables, and nothing raised. BERT, RoBERTa, DeBERTa and XLM-R tokenizers pad right by
+default, so no run had hit it; many decoder-family tokenizers pad left.
+
+Padding right in the collator fixes the cause on every path, including a tokenizer handed to
+`train` or `predict_logits` directly, where forcing `padding_side` at load time would not
+reach. Refusing a left-padding tokenizer would leave a YAML user no way to run one. For a
+right-padding tokenizer the batches are what the stock collator built: the same `-100` label
+padding and `pad_to_multiple_of`.

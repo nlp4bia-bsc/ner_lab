@@ -9,7 +9,7 @@ from lab.ner.hpo.arguments import (
 )
 from lab.ner.hpo.progress import SweepProgress
 from lab.ner.hpo.report import summarize_sweep
-from lab.ner.hpo.search import HPOResult, search_hyperparameters
+from lab.ner.hpo.search import search_hyperparameters
 from lab.ner.hpo.space import (
     DEFAULT_SEARCH_SPACE,
     build_domain,
@@ -17,6 +17,15 @@ from lab.ner.hpo.space import (
     describe_search_space,
     resolve_batch_sizes,
     smoke_configuration,
+)
+from lab.ner.hpo.sweep import (
+    HPOResult,
+    SearchSetup,
+    check_variant_lengths,
+    prepare_search,
+    run_search,
+    start_ray,
+    sweep_manifest,
 )
 from lab.ner.hpo.trial import (
     is_oom_error,
@@ -40,22 +49,28 @@ __all__ = [
     "HPO_ARGUMENT_DEFAULTS",
     "EncodedVariant",
     "HPOResult",
+    "SearchSetup",
     "SweepProgress",
     "best_trial",
     "build_domain",
     "build_search_space",
     "build_variants",
+    "check_variant_lengths",
     "describe_search_space",
     "describe_variants",
     "encode_variants",
     "is_oom_error",
     "metric_greater_is_better",
+    "prepare_search",
     "resolve_base_arguments",
     "resolve_batch_sizes",
+    "run_search",
     "run_trial",
     "search_hyperparameters",
     "smoke_configuration",
+    "start_ray",
     "summarize_sweep",
+    "sweep_manifest",
     "top_k_epoch_mean",
     "trial_directory_name",
     "trials_table",
