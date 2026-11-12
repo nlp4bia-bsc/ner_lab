@@ -5,6 +5,7 @@ from __future__ import annotations
 from lab.ner.inference.io import (
     has_gold,
     read_documents,
+    read_predictions,
     read_reference,
     resolve_gold,
     write_gold,
@@ -36,6 +37,7 @@ __all__ = [
     "predict_entities",
     "predict_logits",
     "read_documents",
+    "read_predictions",
     "read_reference",
     "resolve_device",
     "resolve_gold",

@@ -116,6 +116,33 @@ def write_predictions(spans: pd.DataFrame, path: str | Path) -> Path:
     return path
 
 
+def read_predictions(path: str | Path) -> pd.DataFrame:
+    """
+    Read a span table `write_predictions` wrote, from parquet or TSV by its suffix.
+
+    A TSV is read with every surface form kept as written, so an entity reading `NA`
+    stays text; `score` is kept when the file has one.
+    """
+    path = Path(path)
+
+    if not path.is_file():
+        raise FileNotFoundError(f"Predictions file does not exist: {path}")
+
+    if path.suffix == ".parquet":
+        spans = pd.read_parquet(path)
+    else:
+        spans = pd.read_csv(path, sep="\t", dtype={"text": str}, keep_default_na=False)
+        spans["score"] = pd.to_numeric(spans.get("score"), errors="coerce")
+
+    columns = SCORED_SPAN_COLUMNS if "score" in spans.columns else SPAN_COLUMNS
+    missing = [column for column in SPAN_COLUMNS if column not in spans.columns]
+
+    if missing:
+        raise ValueError(f"Predictions file {path} is missing columns {missing}.")
+
+    return spans[columns]
+
+
 def write_gold(spans: pd.DataFrame, path: str | Path) -> Path:
     """Write the gold spans a run was scored against, as a span table TSV."""
     path = Path(path)

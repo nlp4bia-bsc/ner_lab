@@ -6,7 +6,7 @@ They are plain scripts, not a test suite — run them directly, read the output.
 ```bash
 uv venv .venv-verify --python 3.12
 uv pip install --python .venv-verify pandas pyarrow pyyaml pysbd nltk icu4py transformers datasets accelerate pytorch-crf nervaluate "ray[tune]" optuna
-uv pip install --python .venv-verify scikit-learn networkx faiss-cpu sentence-transformers rapidfuzz
+uv pip install --python .venv-verify scikit-learn networkx faiss-cpu sentence-transformers rapidfuzz scipy matplotlib
 uv pip install --python .venv-verify torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
 uv pip install --python .venv-verify --no-deps -e .
 
@@ -34,6 +34,7 @@ seconds; that one starts a local Ray instance for its mini-sweep and adds a minu
 | `verify_hpo.py` | search-space forms, variants, trial scoring, OOM handling, a real two-trial Ray sweep, the winner block re-run through `train_model` |
 | `verify_inference.py` | span decoding, `predict_entities` end to end, scoring against gold and against a reference |
 | `verify_ensemble.py` | voting and two-stage decoding, one-member equivalence with `predict_entities`, CRF marginals against brute-force path enumeration, `ensemble.json` and weight digests, `fit_ensemble` and `predict_ensemble` end to end |
+| `verify_analysis.py` | strict events against `span_metrics`, pairing (uncredited exact, fragmentation, merging, Dice assignment), `target_label`, exposure and UAX #29 word counts, subgroups and the document bootstrap, the oracle budget, `read_predictions`, `analyze_predictions` end to end with its figures and through `lab run` |
 | `verify_nel.py` | nlp4bia-linking's own tests, side-by-side equivalence with it, `link_entities` end to end on every method, with a hierarchy, with the reranker |
 
 Everything runs on synthetic fixtures built by `fixtures.py`, so the scripts pass on a

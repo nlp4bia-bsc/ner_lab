@@ -45,8 +45,10 @@ from lab.core.labels import (
 from lab.core.provenance import file_sha256, read_manifest, write_manifest
 from lab.core.scoring import (
     SCENARIO_PREFIXES,
+    evaluate_spans,
     flatten,
     group_by_document,
+    merge_intervals,
     normalize_spans,
     safe_f1,
     score_characters,
@@ -117,6 +119,7 @@ __all__ = [
     "derive_dataset_name",
     "describe_sentence_segmenter",
     "document_fingerprints",
+    "evaluate_spans",
     "file_sha256",
     "flatten",
     "group_by_document",
@@ -124,6 +127,7 @@ __all__ = [
     "manifest_holdout_index",
     "manifest_partition_names",
     "manifest_ratios",
+    "merge_intervals",
     "merge_ranges",
     "merge_sentences_crossing_entities",
     "merge_short_sentences",

@@ -1,4 +1,4 @@
-"""Clinical Named Entity Recognition: encoding, models, training, search, inference."""
+"""Clinical Named Entity Recognition: encoding, models, training, search, inference, analysis."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from typing import Any
 
 _EXPORTS: dict[str, str] = {
     "Encoder": "lab.ner.encoding",
+    "analyze_predictions": "lab.ner.analysis",
     "build_compute_metrics": "lab.ner.evaluation",
     "build_model": "lab.ner.models",
     "evaluate_predictions": "lab.ner.evaluation",

@@ -8,6 +8,7 @@ TASKS: dict[str, tuple[str, str]] = {
     "predict_entities": ("lab.ner.inference.predict", "predict_entities"),
     "fit_ensemble": ("lab.ner.ensemble.fit", "fit_ensemble"),
     "predict_ensemble": ("lab.ner.ensemble.predict", "predict_ensemble"),
+    "analyze_predictions": ("lab.ner.analysis.analyze", "analyze_predictions"),
 }
 
-REQUIRES = ("torch", "datasets", "ray")
+REQUIRES = ("torch", "datasets", "ray", "rapidfuzz", "scipy", "matplotlib")
