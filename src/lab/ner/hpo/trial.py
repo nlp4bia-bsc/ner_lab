@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 import gc
 import statistics
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
@@ -14,10 +14,8 @@ import pandas as pd
 import torch
 from transformers import TrainingArguments, set_seed
 
-from lab.ner.evaluation.metrics import build_compute_metrics
 from lab.ner.hpo.space import resolve_batch_sizes
 from lab.ner.hpo.variants import EncodedVariant
-from lab.ner.models.registry import Architecture, build_model
 from lab.ner.training.devices import require_single_device
 from lab.ner.training.tracking import ResourceTracker
 from lab.ner.training.trainer import train
@@ -126,12 +124,9 @@ def run_trial(
     variants: dict[str, EncodedVariant],
     base_arguments: TrainingArguments,
     trial_dir: str | Path,
-    architecture: str | Architecture = "linear",
-    architecture_kwargs: dict[str, Any] | None = None,
     max_micro_batch_size: int = 64,
     seeds_per_trial: int = 3,
     top_k_epochs: int = 3,
-    min_overlap_percentage: float = 40.0,
     early_stopping_patience: int | None = 5,
     pad_to_multiple_of: int | None = 8,
     track_resources: bool = True,
@@ -142,7 +137,8 @@ def run_trial(
     The score is the mean across seeds of each seed's mean-of-top-k epochs —
     deliberately not a single run's single best epoch, since epoch-to-epoch
     jitter and run-to-run nondeterminism are each the size of the search-space
-    spread being measured.
+    spread being measured. Each seed trains a fresh model from the sampled variant's
+    `build_model`, scored by its `compute_metrics`.
 
     Only out-of-memory failures are caught — a legitimate, hyperparameter-dependent
     outcome of the sweep. Everything else propagates, so a bug halts the sweep
@@ -183,15 +179,6 @@ def run_trial(
         key: value for key, value in sampled.items() if key not in RESERVED_DIMENSIONS
     }
 
-    compute_metrics = build_compute_metrics(
-        rows=variant.validation_rows,
-        tokenizer=variant.tokenizer,
-        id2label=variant.id2label,
-        min_overlap_percentage=min_overlap_percentage,
-        include_tokens=False,
-        include_by_entity=False,
-    )
-
     scores: list[float] = []
     tracker = ResourceTracker() if track_resources else None
     resources: dict[str, Any] = {}
@@ -216,9 +203,6 @@ def run_trial(
                 _seed_score(
                     variant=variant,
                     arguments=arguments,
-                    architecture=architecture,
-                    architecture_kwargs=architecture_kwargs,
-                    compute_metrics=compute_metrics,
                     early_stopping_patience=early_stopping_patience,
                     pad_to_multiple_of=pad_to_multiple_of,
                     metric=metric,
@@ -263,9 +247,6 @@ def _batch_sizes(
 def _seed_score(
     variant: EncodedVariant,
     arguments: TrainingArguments,
-    architecture: str | Architecture,
-    architecture_kwargs: dict[str, Any] | None,
-    compute_metrics: Callable[[Any], dict],
     early_stopping_patience: int | None,
     pad_to_multiple_of: int | None,
     metric: str,
@@ -274,21 +255,13 @@ def _seed_score(
 ) -> float:
     set_seed(arguments.seed)
 
-    model = build_model(
-        base_model=variant.base_model,
-        label2id=variant.label2id,
-        id2label=variant.id2label,
-        architecture=architecture,
-        **(architecture_kwargs or {}),
-    )
-
     result = train(
-        model=model,
+        model=variant.build_model(),
         tokenizer=variant.tokenizer,
         train_rows=variant.train_rows,
         validation_rows=variant.validation_rows,
         training_arguments=arguments,
-        compute_metrics=compute_metrics,
+        compute_metrics=variant.compute_metrics,
         early_stopping_patience=early_stopping_patience,
         pad_to_multiple_of=pad_to_multiple_of,
         track_resources=False,

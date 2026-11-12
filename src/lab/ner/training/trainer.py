@@ -13,7 +13,6 @@ import pandas as pd
 import torch
 from torch import nn
 from transformers import (
-    DataCollatorForTokenClassification,
     EarlyStoppingCallback,
     PreTrainedTokenizerBase,
     Trainer,
@@ -22,6 +21,7 @@ from transformers import (
 from transformers.trainer_utils import TrainOutput
 
 from lab.ner.encoding.rows import IGNORE_INDEX
+from lab.ner.training.collation import TokenClassificationCollator
 from lab.ner.training.dataset import to_dataset, validate_rows
 from lab.ner.training.tracking import EpochMetricsLogger, ResourceTracker, gpu_hardware_info
 
@@ -126,7 +126,14 @@ def train(
     `trainer_class` defaults to `CRFTrainer` for a CRF model and `Trainer`
     otherwise; pass one to override. `compute_metrics` is handed straight to the
     Trainer, and with `metrics_scope="both"` a second pass over the training set
-    runs each epoch using `train_compute_metrics`.
+    runs each epoch using `train_compute_metrics`. Batches are padded on the right
+    by `TokenClassificationCollator`, labels with `ignore_index`, to a multiple of
+    `pad_to_multiple_of`.
+
+    The loss is divided by `gradient_accumulation_steps` whatever the model's
+    `forward` accepts. A `forward` taking `**kwargs` otherwise tells the Trainer the
+    model normalises its own loss by `num_items_in_batch`, which no model here does,
+    so accumulated gradients came out that many times too large.
 
     Weights are not kept unless `save_model` is set: the checkpoints the Trainer
     writes to select the best epoch are removed afterwards, including when
@@ -372,18 +379,16 @@ def _build_trainer(
     pad_to_multiple_of: int | None,
     ignore_index: int,
 ) -> Trainer:
-    collator = DataCollatorForTokenClassification(
-        tokenizer=tokenizer,
-        label_pad_token_id=ignore_index,
-        pad_to_multiple_of=pad_to_multiple_of,
-    )
-
     arguments = {
         "model": model,
         "args": training_arguments,
         "train_dataset": train_dataset,
         "eval_dataset": validation_dataset,
-        "data_collator": collator,
+        "data_collator": TokenClassificationCollator(
+            tokenizer=tokenizer,
+            pad_to_multiple_of=pad_to_multiple_of,
+            label_pad_token_id=ignore_index,
+        ),
         "compute_metrics": compute_metrics,
     }
 
@@ -391,6 +396,8 @@ def _build_trainer(
         trainer = trainer_class(processing_class=tokenizer, **arguments)
     except TypeError:
         trainer = trainer_class(tokenizer=tokenizer, **arguments)
+
+    trainer.model_accepts_loss_kwargs = False
 
     if early_stopping_patience is not None:
         trainer.add_callback(EarlyStoppingCallback(early_stopping_patience=early_stopping_patience))

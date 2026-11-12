@@ -6,8 +6,11 @@ from typing import Any
 
 import pandas as pd
 from nervaluate import Evaluator
+from nervaluate.entities import EvaluationResult
 
 from lab.core.spans import SPAN_COLUMNS
+
+PARTIAL_CREDIT_SCENARIOS = ("partial", "ent_type")
 
 SCENARIO_PREFIXES = {
     "strict": "span_strict",
@@ -60,6 +63,33 @@ def evaluate_spans(
     )
 
     return {**evaluator.evaluate(), "doc_ids": doc_ids}
+
+
+def sum_span_results(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Add several `score_spans` results into one, scenario by scenario.
+
+    Counts are summed and precision, recall and F1 recomputed from the sums, which is
+    how nervaluate builds its own overall result from its per-tag ones: scoring each
+    type on its own and summing gives what one `score_spans` over all of them would,
+    except that spans of different types are never matched against each other.
+    """
+    summed = {}
+
+    for scenario in SCENARIO_PREFIXES:
+        total = EvaluationResult()
+
+        for result in results:
+            total.correct += result[scenario].correct
+            total.incorrect += result[scenario].incorrect
+            total.partial += result[scenario].partial
+            total.missed += result[scenario].missed
+            total.spurious += result[scenario].spurious
+
+        total.compute_metrics(partial_or_type=scenario in PARTIAL_CREDIT_SCENARIOS)
+        summed[scenario] = total
+
+    return summed
 
 
 def score_characters(gold: pd.DataFrame, predicted: pd.DataFrame) -> dict[str, float | int]:

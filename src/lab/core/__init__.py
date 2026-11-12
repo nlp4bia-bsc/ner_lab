@@ -53,6 +53,7 @@ from lab.core.scoring import (
     safe_f1,
     score_characters,
     score_spans,
+    sum_span_results,
 )
 from lab.core.segmentation import (
     merge_ranges,
@@ -153,6 +154,7 @@ __all__ = [
     "safe_f1",
     "score_characters",
     "score_spans",
+    "sum_span_results",
     "sentence_segmenter",
     "sentence_token_ranges",
     "span_dataframe",

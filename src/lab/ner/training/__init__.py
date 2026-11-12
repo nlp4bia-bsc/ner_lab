@@ -15,6 +15,7 @@ from lab.ner.training.assessment import (
     resolve_training_arguments,
     train_model,
 )
+from lab.ner.training.collation import TokenClassificationCollator
 from lab.ner.training.dataset import ensure_int_list, is_encoded, to_dataset, validate_rows
 from lab.ner.training.devices import (
     DevicePolicy,
@@ -50,6 +51,7 @@ __all__ = [
     "DevicePolicy",
     "EpochMetricsLogger",
     "ResourceTracker",
+    "TokenClassificationCollator",
     "TrainingResult",
     "aggregate_metrics",
     "apply_device_policy",

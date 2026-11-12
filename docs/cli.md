@@ -34,6 +34,9 @@ clinical NER, `nel.` for entity linking.
 | `ner.predict_entities` | `lab.ner.predict_entities` | [predict-entities.md](ner/predict-entities.md) |
 | `ner.fit_ensemble` | `lab.ner.fit_ensemble` | [ensemble.md](ner/ensemble.md) |
 | `ner.predict_ensemble` | `lab.ner.predict_ensemble` | [ensemble.md](ner/ensemble.md) |
+| `ner.train_multihead` | `lab.ner.train_multihead` | [multihead.md](ner/multihead.md) |
+| `ner.search_multihead` | `lab.ner.search_multihead` | [multihead.md](ner/multihead.md) |
+| `ner.predict_multihead` | `lab.ner.predict_multihead` | [multihead.md](ner/multihead.md) |
 | `ner.analyze_predictions` | `lab.ner.analyze_predictions` | [analyze-predictions.md](ner/analyze-predictions.md) |
 | `nel.link_entities` | `lab.nel.link_entities` | [link-entities.md](nel/link-entities.md) |
 

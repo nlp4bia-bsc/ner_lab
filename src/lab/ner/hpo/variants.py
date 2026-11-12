@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from functools import partial
 from itertools import product
 from pathlib import Path
 from typing import Any
@@ -13,21 +14,29 @@ from transformers import AutoTokenizer
 
 from lab.ner.encoding.encoder import Encoder, WindowStrategy, encode_partition, strategy_name
 from lab.ner.encoding.overlaps import OverlapPolicy
+from lab.ner.evaluation.metrics import build_compute_metrics
+from lab.ner.models.registry import Architecture, build_model
 
 
 @dataclass(frozen=True)
 class EncodedVariant:
-    """One variant's windowed rows, plus everything a trial needs to train on them."""
+    """
+    One variant's windowed rows, plus everything a trial needs to train and score on them.
+
+    `build_model` takes no arguments and returns a freshly initialised model, once per
+    seed, and `compute_metrics` scores `validation_rows`. Whoever encodes the variant
+    decides both, so a trial runs any kind of model the same way.
+    """
 
     base_model: str
     strategy: str | WindowStrategy
     context_tokens: int | None
     max_length: int
     tokenizer: Any
-    label2id: dict[str, int]
-    id2label: dict[int, str]
     train_rows: pd.DataFrame
     validation_rows: pd.DataFrame
+    build_model: Callable[[], Any]
+    compute_metrics: Callable[[Any], dict[str, Any]]
 
 
 def variant_key(
@@ -103,6 +112,9 @@ def encode_variants(
     language: str,
     overlap_policy: OverlapPolicy = "merge_same_label_then_keep_longest",
     min_sentence_tokens: int = 4,
+    architecture: str | Architecture = "linear",
+    architecture_kwargs: dict[str, Any] | None = None,
+    min_overlap_percentage: float = 40.0,
 ) -> dict[str, EncodedVariant]:
     """
     Window the train and validation partitions once per variant, before any trial.
@@ -110,6 +122,8 @@ def encode_variants(
     Every trial that samples a variant reuses these frames, so the corpus is
     windowed `len(variants)` times per sweep rather than once per trial.
     Tokenizers are loaded once per base model and shared across its variants.
+    Each variant builds its model with `build_model` from `architecture` and scores
+    with span metrics only, the token diagnostics being of no use to a trial.
     """
     tokenizers: dict[str, Any] = {}
     encoded: dict[str, EncodedVariant] = {}
@@ -131,16 +145,32 @@ def encode_variants(
             min_sentence_tokens=min_sentence_tokens,
         )
 
+        validation_rows = encode_partition(encoder, partitions["validation"])
+
         encoded[key] = EncodedVariant(
             base_model=base_model,
             strategy=specification["strategy"],
             context_tokens=specification["context_tokens"],
             max_length=specification["max_length"],
             tokenizer=tokenizers[base_model],
-            label2id=encoder.label2id,
-            id2label=encoder.id2label,
             train_rows=encode_partition(encoder, partitions["train"]),
-            validation_rows=encode_partition(encoder, partitions["validation"]),
+            validation_rows=validation_rows,
+            build_model=partial(
+                build_model,
+                base_model=base_model,
+                label2id=encoder.label2id,
+                id2label=encoder.id2label,
+                architecture=architecture,
+                **(architecture_kwargs or {}),
+            ),
+            compute_metrics=build_compute_metrics(
+                rows=validation_rows,
+                tokenizer=tokenizers[base_model],
+                id2label=encoder.id2label,
+                min_overlap_percentage=min_overlap_percentage,
+                include_tokens=False,
+                include_by_entity=False,
+            ),
         )
 
     return encoded

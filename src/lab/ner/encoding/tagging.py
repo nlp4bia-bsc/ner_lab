@@ -62,3 +62,23 @@ def build_label_vocabulary(target_label: str) -> dict:
         "label2id": {label: index for index, label in enumerate(labels)},
         "id2label": dict(enumerate(labels)),
     }
+
+
+def label_window(
+    tokens: list[dict], window: dict, entities: list[dict], target_label: str
+) -> list[dict]:
+    """
+    One window's tokens, tagged against `target_label` where the window is labelled.
+
+    A window carrying `core_token_start`/`core_token_end` has only that core tagged;
+    the flanks come back without a `label` key, as unlabelled context.
+    """
+    start, end = window["token_start"], window["token_end"]
+    core_start = window.get("core_token_start", start)
+    core_end = window.get("core_token_end", end)
+
+    return [
+        *tokens[start:core_start],
+        *build_iob2_labels(tokens[core_start:core_end], entities, target_label),
+        *tokens[core_end:end],
+    ]
