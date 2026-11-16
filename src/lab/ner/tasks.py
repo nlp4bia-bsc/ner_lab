@@ -11,6 +11,7 @@ TASKS: dict[str, tuple[str, str]] = {
     "train_multihead": ("lab.ner.multihead.training", "train_multihead"),
     "predict_multihead": ("lab.ner.multihead.predict", "predict_multihead"),
     "search_multihead": ("lab.ner.multihead.search", "search_multihead"),
+    "analyze_predictions": ("lab.ner.analysis.analyze", "analyze_predictions"),
 }
 
-REQUIRES = ("torch", "datasets", "ray")
+REQUIRES = ("torch", "datasets", "ray", "rapidfuzz", "scipy", "matplotlib")

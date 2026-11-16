@@ -32,6 +32,23 @@ def score_spans(
     Returns nervaluate's overall result across the strict, exact, partial and
     ent_type scenarios. Both frames use the canonical span columns.
     """
+    return evaluate_spans(gold, predicted, tags, min_overlap_percentage)["overall"]
+
+
+def evaluate_spans(
+    gold: pd.DataFrame,
+    predicted: pd.DataFrame,
+    tags: list[str],
+    min_overlap_percentage: float = 40.0,
+) -> dict[str, Any]:
+    """
+    Run nervaluate over two span tables and return its whole result.
+
+    Beside the `overall` scores of `score_spans`, the result holds
+    `overall_indices`: per scenario, which predictions and gold spans each outcome
+    took, as `(document_index, row_index)` pairs. Documents are in the returned
+    `doc_ids` order, and rows within a document in the order the frame lists them.
+    """
     gold_documents = group_by_document(normalize_spans(gold))
     predicted_documents = group_by_document(normalize_spans(predicted))
 
@@ -45,7 +62,7 @@ def score_spans(
         min_overlap_percentage=min_overlap_percentage,
     )
 
-    return evaluator.evaluate()["overall"]
+    return {**evaluator.evaluate(), "doc_ids": doc_ids}
 
 
 def sum_span_results(results: list[dict[str, Any]]) -> dict[str, Any]:
@@ -207,10 +224,11 @@ def _character_coverage(rows: list[dict[str, Any]]) -> dict[str, list[tuple[int,
     for row in rows:
         by_label.setdefault(row["label"], []).append((row["off0"], row["off1"]))
 
-    return {label: _merge(ranges) for label, ranges in by_label.items()}
+    return {label: merge_intervals(ranges) for label, ranges in by_label.items()}
 
 
-def _merge(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
+def merge_intervals(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Merge half-open `(start, end)` ranges into sorted, disjoint ones covering the same characters."""
     merged: list[tuple[int, int]] = []
 
     for start, end in sorted(ranges):

@@ -12,6 +12,7 @@ by `lab[ner]`.
 | [predict-entities.md](predict-entities.md) | `predict_entities`: inference with a saved model, and scoring it |
 | [multihead.md](multihead.md) | `train_multihead`, `search_multihead` and `predict_multihead`: one Transformer with a head per entity type |
 | [ensemble.md](ensemble.md) | `fit_ensemble` and `predict_ensemble`: combining saved models by word-level voting |
+| [analyze-predictions.md](analyze-predictions.md) | `analyze_predictions`: what a model's errors are, where they fall against training exposure, with intervals and figures |
 | [library.md](library.md) | The pieces the orchestrators are built from: `Encoder`, `build_model`, `training_arguments`, `train`, the metrics builders |
 
 | CLI task | Function |
@@ -24,6 +25,7 @@ by `lab[ner]`.
 | `ner.train_multihead` | `lab.ner.train_multihead` |
 | `ner.search_multihead` | `lab.ner.search_multihead` |
 | `ner.predict_multihead` | `lab.ner.predict_multihead` |
+| `ner.analyze_predictions` | `lab.ner.analyze_predictions` |
 
 The stages feed each other through `lab.core`'s tables: `train_model` takes a split
 directory from [`prepare_dataset`](../core/prepare-dataset.md), `predict_entities` writes a
@@ -31,7 +33,7 @@ span table, and [`link_entities`](../nel/link-entities.md) takes that table as i
 
 ## Importing
 
-The fourteen functions that start a stage — or that you build to start one — are importable
+The fifteen functions that start a stage — or that you build to start one — are importable
 directly from `lab.ner`:
 
 ```python
@@ -50,10 +52,11 @@ from lab.ner import (
     train_multihead,        # train a model with a head per entity type
     search_multihead,       # HPO sweep for a multihead model
     predict_multihead,      # inference with a saved multihead model
+    analyze_predictions,    # error analysis of predictions against gold
 )
 ```
 
 Everything else keeps its subpackage path — `lab.ner.encoding`, `lab.ner.models`,
-`lab.ner.training`, `lab.ner.evaluation`, `lab.ner.hpo`, `lab.ner.ensemble`, `lab.ner.multihead` — and so do the fourteen above, so
+`lab.ner.training`, `lab.ner.evaluation`, `lab.ner.hpo`, `lab.ner.ensemble`, `lab.ner.multihead`, `lab.ner.analysis` — and so do the fifteen above, so
 `from lab.ner.training import train_model` remains correct. Names on `lab.ner` resolve on
 first use, so `import lab.ner` loads nothing.

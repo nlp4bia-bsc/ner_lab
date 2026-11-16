@@ -54,7 +54,7 @@ The row is the verdict; the note is the argument.
 | D40 | `compute_metrics` is injected, not built. `trainer_class` defaults to `CRFTrainer` for a model exposing `decode_from_emissions`, `Trainer` otherwise. | Decouples training from evaluation. Duck-typing the CRF trainer means a custom architecture that can Viterbi-decode gets the right Trainer for free. |
 | D41 | Discharged by D47. | |
 | D42 | No `target_label` parameter on `train()`. Provenance goes through `run_metadata: dict`. | Nothing in training needs it once `compute_metrics` is injected and the model carries its own `label2id`. |
-| D43 | Narrowed by D145. A single-label model keeps one `target_label` and three classes; a model with a head per type is the separate multihead path. | User decision. Removes the pressure to design `2n+1` seams into evaluation that nothing would use. |
+| D43 | Narrowed by D145. A single-label model keeps one `target_label` and three classes; a model with a head per type is the separate multihead path. D127 keeps the NER error analysis to one `target_label`. | User decision. Removes the pressure to design `2n+1` seams into evaluation that nothing would use. |
 | D44 | **nervaluate/SemEval is the canonical scorer.** ~~The MultiClinNER official scorer stays available as an option.~~ The option is removed by D96. | User decision. `span_strict_f1` is what model selection tracks. |
 | D45 | The legacy word-level scoring path is dropped (~250 lines). | `Encoder` only ever emits token-level rows, so the branch was unreachable. |
 | D46 | `spans_from_corpus` takes labels **verbatim**. Now `lab.core.spans_from_corpus` (D96). | D32 applies: gold is scored as distributed. |
@@ -138,10 +138,24 @@ The row is the verdict; the note is the argument.
 | D124 | **Tuning is Optuna TPE: one raw weight per member in [0, 1], normalised, and τ in [0.05, 0.95] (τ alone for `soft`), `n_trials=200`, maximising `metric="span_strict_f1"` — any `span_metrics` key — with `random_state` seeding the sampler.** Ties go to the first best trial. | One evaluation is a weighted sum, a decode and a score on CPU, so hundreds of trials are cheap; a grid explodes with members (about 19,000 points at five, step 0.1). `span_strict_f1` is what model selection already tracks (D44). |
 | D125 | **No per-member calibration in the first version.** | Tuned weights and τ absorb most of it; it would make plain `soft` need validation, and a CRF needs its emissions and transitions scaled, not its marginals. It can be added later as a per-member field of `ensemble.json`. |
 | D126 | **A member trained with a callable window strategy is refused by `fit_ensemble`, naming it.** | `encoding.json` cannot name a callable, and one `strategy` argument cannot say which member it is for. |
+| D127 | **NER error analysis is of one `target_label`: gold and training are restricted to it, and predictions carrying another label raise.** Its error taxonomy is `CORRECT`, `MISSED`, `SPURIOUS` and `BOUNDARY_ERROR`; the label errors, confusion matrices and label-shift tables of the analysis branch are not ported. Pairing an error stays label-blind, so label errors return with multi-label models in the one function that names a pair. Extended by D141 with `UNCREDITED_EXACT`. | Inferring multi-label from the labels present switched it on whenever a single-label model was scored against a multi-label corpus, counting every entity of the other labels as missed. Nothing produces multi-label predictions yet to build or verify the machinery against. |
 | D128 | **`split_into_sentences` uses pysbd for the 23 languages pysbd has, Punkt for the nine European ones it lacks (cs, et, fi, ml, no, pt, sl, sv, tr), and ICU's sentence break rules for every other ISO 639-1 code. Any other `language` raises.** The table is fixed in `core.sentences`, never read from what is installed. Words stay UAX #29 (D114). | Each language gets the most specific segmenter available, and ICU leaves no ISO 639-1 language without one: Catalan, Basque and Galician are in neither pysbd nor Punkt. Without the ISO 639-1 list a typo such as `"sp"` would reach ICU's root rules without error, the silent guess D33 rules out. → notes |
 | D129 | **Python floor `>=3.11`.** Supersedes D17. | `icu4py`, the ICU binding D128 uses, requires 3.11. |
 | D130 | **The Punkt models of D128's nine languages ship inside `lab`, under `lab/core/data/punkt_tab`, read with nltk's own decoder. nltk is imported only when a Punkt language is segmented.** | nltk downloads its models at runtime, which offline nodes cannot do, and nltk 3.10 refuses to open model files outside its own data roots. Importing nltk at module load added about a second to every `import lab.core`. |
 | D131 | **Every segmenter's spans take pysbd's shape: contiguous from the first non-whitespace character to the end, trailing whitespace on the sentence before it, none for a document that is whitespace throughout. The segmenter and its version are recorded as `sentence_segmenter` in `encoding.json` and as two `text_stats` columns.** `encoder_from_description` ignores the recorded value and picks again from `language`. | Windowing and the statistics must not depend on which segmenter ran. Which one ran moves every window boundary, so it is recorded; ensemble members need not agree on it, since `word_id` does not depend on sentences (D120). |
+| D132 | **NER error analysis does not audit its inputs.** The analysis branch's per-span annotation audit, its tables and event columns, and the document-text parameters it needed are not ported; the manifest records the input counts, duplicate gold and prediction rows included. A paired boundary error keeps its whitespace and punctuation flags. | Span text from a corpus or a prediction is the document's own slice, and a disagreeing source is settled at corpus build (D79, D80), so the surface checks cannot fire on the library's own inputs. What can — duplicated or whitespace-edged gold — describes the corpus, the same for every model analysed against it. |
+| D133 | **Lexical similarity in the NER error analysis is normalized Levenshtein, `1 − edits / max(len)`, on NFKC-normalized, casefolded, whitespace-collapsed text; `similarity_threshold=0.80` separates `LEXICALLY_SIMILAR` from `NOVEL`.** The branch's `hybrid` mode, `min(Levenshtein, Jaro–Winkler)`, is not ported. | On 3,440 clinical-style pairs the minimum changed the class at 0.80 for 11 (0.3%): Jaro–Winkler rewards a shared prefix and is almost always the higher of the two. One measure states in one clause, and the threshold is named for what it thresholds. |
+| D134 | **The NER error analysis measures variability two ways: a document bootstrap (`bootstrap_samples=2000`, `confidence=0.95`, percentile intervals) for uncertainty, and per-document scores for heterogeneity.** The branch's non-overlapping document partitions are not ported. Amended by D142. | A partition's spread is a subsample's, set mostly by the chosen `partition_size` and drawn from one shuffle, so it restates the bootstrap with a knob that moves the answer; whether a few documents dominate shows directly, and by name, in the per-document table. |
+| D135 | **The NER error analysis reads predictions with a new `ner.inference.io.read_predictions`, the inverse of `write_predictions`, or takes the span frame itself; gold is `reference` and training is read the same way, a corpus or an annotation TSV, through `read_reference`/`resolve_gold` restricted to `target_label`.** The branch's `core.read_spans`, `validate_spans` and `SPAN_ALIASES` are not ported. | Predictions were the one thing the library wrote and never read back. An alias table for no particular source format gives the boundary two names for each column (D27); `CODE_SPAN_ALIASES` exists for one external format. |
+| D136 | **NER error analysis is `ner/analysis`'s `analyze_predictions`, task `ner.analyze_predictions`, run through `lab run` like every task; it returns an `ErrorAnalysis` holding the metrics, the event table and every table in memory, and writes `events.parquet`, `tables/`, `figures/` (`figures=True`) and `analysis_manifest.json` into `output_dir`.** `target_label` is required; `output_dir` is created and rewritten without a guard, as inference's is. `write_figures(output_dir)` redraws the figures from the written tables. The manifest holds inputs, parameters, metrics and timing only. | The branch's per-feature Typer commands reopen the flag surface D11 and D86 closed. A rerun costs minutes, not GPU-hours, so `claim_run_dir` is not needed. Definitions and citations are documentation, and plot styling belongs to the plotting code; neither describes a run. → notes |
+| D137 | **The NER error analysis is part of `lab[ner]`: `rapidfuzz`, `scipy` and `matplotlib` join the `ner` extra and `ner/tasks.py`'s `REQUIRES`.** No `lab[analysis]` extra; the span-table readers stay in `ner/inference/io.py`, whose package imports torch. | Predictions to analyse come from `predict_entities` or `predict_ensemble`, so the NER environment is already there. A torch-free analysis would move the readers for a use nobody has yet (D84). |
+| D138 | **A mention's length in the NER error analysis is its count of UAX #29 words, `len(split_into_words(text))`, punctuation included.** | D114's word is what the encoder labels, so the count is the number of tagging decisions a strict match needs; the branch's whitespace count called `anti-TNF` one word where the model tags three. |
+| D139 | **NER error analysis reports a subgroup on the side that defines it: gold mentions by their own class, with support, strict and character recall and the outcome mix; predictions by their own surface's class, with strict and character precision. No per-class F1.** Overlap and nesting are gold properties only. Per-class recall is counted from the event table, not by re-scoring filtered frames; overall P/R/F1 is `predict_entities`' own, and the bootstrap covers it and per-class recall. | Filtering gold and predictions each by its own class and scoring the pair mixed two populations: a prediction one word too long on a seen mention counted against `SEEN` recall and `NOVEL` precision at once, and prediction-side overlap meant one prediction overlapping another. Whether a model generalises is a question about gold mentions. → notes |
+| D140 | **A mention is `SEEN` when its normalized form (D133) occurs among the training mentions of `target_label`; training frequency counts normalized forms too, so `SEEN` holds exactly when similarity is 1.0.** A `seen_verbatim` flag keeps the case-sensitive view. | The branch took `SEEN` from the raw string and similarity from the normalized one, so `hta` against a training `HTA` was `LEXICALLY_SIMILAR` in the `EXACT` bin with frequency 0. Raw similarity is no fix: case-sensitive Levenshtein puts `HTA` and `hta` at 0. |
+| D141 | **After strict matching, the NER error analysis pairs each document's leftover gold spans and predictions in three steps: identical spans become `UNCREDITED_EXACT`; two or more predictions each inside one gold span (fragmentation), or two or more gold spans inside one prediction (merging), whose union reaches `overlap_threshold` in character Dice, become one `BOUNDARY_ERROR` unit; the rest are assigned one to one by `scipy.optimize.linear_sum_assignment` maximising Dice, pairs below the threshold dropped.** `overlap_threshold=0.60`, with sensitivity over 0.40–0.80. Strict counts are never changed. Extended by D144. | nervaluate credits a gold span to the first overlapping prediction in a document, so an exact prediction listed after one is spurious; the branch filed that as a miss and a spurious prediction. Its weight's other terms were dead under D127 or a function of Dice, and its fragmentation needed every fragment below the threshold, so `anti` + `TNF` against `anti-TNF` was a boundary error plus a stray. → notes |
+| D142 | **The document bootstrap gives an interval for every gold-subgroup recall and every prediction-subgroup precision, not only overall P/R/F1 and per-class recall.** Amends D134. | One documents × counts array per subgroup value costs almost nothing, and an interval shows a thin bin for what it is, where the branch's hollow marker below n = 10 was an arbitrary cut. |
+| D143 | **The NER error analysis draws 14 figures, each answering one question, from `ner/analysis/figures/`, with matplotlib's object-oriented API: `error_taxonomy`, `exposure`, `predicted_exposure`, `mention_properties`, `mention_traits`, `boundary_kinds`, `boundary_offsets`, `overlap_sensitivity`, `oracle_error_budget`, `error_surfaces`, `documents`, `confidence_by_outcome`, `calibration`, `confidence_sweep`.** A figure with nothing to show is skipped; the manifest lists those written. `figure_format` is `"svg"` (default), `"pdf"` or `"png"`. Okabe–Ito colours are fixed per outcome. No plot manifest, caption file or prose inside a figure. Amended by D144. | The branch's figures mostly drew tables D127, D134 and D139 removed, so the set was redesigned from the questions a reader asks rather than ported. Reading guidance belongs in the documentation and a paper's caption; `matplotlib.use` at import changed global state for every importer. → notes |
+| D144 | **A one-to-one boundary error also records its `matched_edge`, the edge it got right: `START`, `END` or `NEITHER` (shifted errors are always `NEITHER`; fragmentations and merges have none). `boundary_summary` has a row per kind and matched edge; `boundary_kinds` draws one bar per pair, grouped by kind; `boundary_offsets` is a 2D grid of start against end offset instead of two histograms.** Extends D141, amends D143. | `TOO_LONG` and `TOO_SHORT` each held three different errors (one edge wrong at either side, or both), and the edge a model gets wrong points at different causes: trailing modifiers and prepositional phrases at the end, determiners and preceding adjectives at the start. Two separate offset histograms could not show that a correct start goes with a wrong end. → notes |
 | D145 | **Narrows D43: a multihead model — one shared Transformer, one independent O/B/I head per entity type — lives in its own `lab.ner.multihead` package with its own tasks, `ner.train_multihead`, `ner.search_multihead` and `ner.predict_multihead`.** Single-label tasks and signatures are unchanged, and shared code carries no multihead branch: it is reached through what it already injects (`compute_metrics`, and the trial pieces of D149), and batched by the collator of D151, which pads multihead labels like any others. → notes | Cross-type overlapping annotations need independent decisions a flat softmax cannot make. A mode signalled inside shared orchestrators turns every entry point into a branch list. |
 | D146 | **The head catalogue is `entity_labels`, in head order; left out, it is every type annotated in the split's train and validation partitions, sorted, the same for every fold. A listed type annotated nowhere there raises; a corpus type with no head is left unlabelled and warns with counts. `overlap_policy` resolves overlaps within each type with the single-label policies and default, never across types.** | Folds that train different heads cannot be averaged. Per type, a head keeps exactly the entities a single-label model for that type keeps, so the two are comparable. |
 | D147 | **Each head is scored with nervaluate on its own type's spans, exactly as a single-label model is; micro sums the heads' counts (`sum_span_results`, how nervaluate builds its own overall), macro averages the heads, and keys are `head_<type>_*`, plain (micro) and `span_<scenario>_macro_*`. The loss averages each head's cross-entropy, then the heads with labelled positions; selection defaults to `span_strict_macro_f1`.** | Keeps all four scenarios and `min_overlap_percentage`, and makes per-head numbers directly comparable with specialists. Every type weighs the same in both the loss and selection. |
@@ -444,6 +458,102 @@ ICU comes from `icu4py`, not PyICU: its wheels embed ICU 78.3, the version D114 
 `regex` against, so the system-ICU problem that ruled PyICU out does not arise. Its
 `segments()` offsets are UTF-16 code units, which are converted to string indices; a
 character outside the Basic Multilingual Plane would otherwise shift every later offset.
+
+### D139 — subgroups on the side that defines them
+
+The branch scored a class by filtering gold to gold mentions of that class, predictions to
+predictions whose own surface fell in it, and running nervaluate on the pair. Recall then
+counted gold of the class and precision counted predictions of the class, so the F1 joined
+two populations, and an error whose two sides fell in different classes was charged to both:
+gold `insuficiencia cardiaca` (seen) predicted as `insuficiencia cardiaca aguda` (novel) is a
+miss in `SEEN` and a false positive in `NOVEL`. Structural features changed meaning between
+the sides — computed on the predictions, "overlapping" meant one prediction overlapping
+another.
+
+Precision by predicted surface is kept because it answers a question of its own: when the
+model predicts a surface it saw in training, how often is it right. It is reported beside
+recall, never combined with it.
+
+### D141 — pairing leftover spans
+
+Checked against nervaluate 1.2.1: with gold `[0, 8)` and predictions `[0, 3)` then `[0, 8)` in
+that order, strict is one incorrect and one spurious, no correct; reversed, one correct.
+`span_dataframe` sorts by `(start, end)`, so a shorter overlapping prediction always comes
+first. Strict counts must equal `predict_entities`' (D97), so the analysis names the artifact
+`UNCREDITED_EXACT` rather than correcting it.
+
+The branch's assignment weight was `1e6·same_boundary + 1e5·Dice + 1e4·IoU + 1e3·same_label +
+100/(1+distance) + confidence`. Under one label a same-boundary pair is a strict match (or the
+artifact above), the label term is constant, and IoU is `D/(2−D)`; summed over a matching,
+the magnitudes did not keep the terms ranked anyway.
+
+Containment is what makes fragmentation and merging unambiguous: the model found the entity
+and split it, or found several and joined them. A prediction reaching outside its gold span
+is an ordinary boundary error. Fixing a fragmentation in the oracle budget removes its k
+false positives and adds one true positive; fixing a merge removes one false positive and
+adds k true positives.
+
+### D136 — the analysis package
+
+Layout: `analysis/events.py` (strict events from nervaluate's indices, checked against
+`span_metrics`), `pairing.py` (D141), `exposure.py` (D133, D140), `features.py` (a mention's
+surface features and D138's word count; overlap and nesting among gold), `subgroups.py`
+(D139), `errors.py` (taxonomy, boundary details and summary, threshold sensitivity, oracle
+budget, recurrent error surfaces), `variability.py` (D134), `confidence.py`, `figures/`, and
+`analyze.py` (the task, `ErrorAnalysis`, `write_figures`).
+
+Tables: `gold_mentions`, `predicted_mentions` and `units`, the row-level tables the others
+summarise; `gold_subgroups` and `predicted_subgroups`, one row per family and value, replacing
+the branch's seven `metrics_by_*` tables and its two gold-conditioned exposure tables; then
+`error_taxonomy`, `boundary_errors`, `boundary_summary`, `overlap_sensitivity`,
+`oracle_error_budget`, `error_surfaces`, `documents`, `bootstrap_intervals`, and with a varying
+score `confidence_by_outcome`, `calibration` and `confidence_sweep`. Overall metrics are in the manifest and the
+result, as for `predict_entities`. `confidence_summary` and `error_intersections` are not
+ported: the first only told plotting whether scores vary, and two of the second's five flags
+are gone (D132, D139).
+
+### D143 — the figures
+
+Each figure, the question it answers and its form: `error_taxonomy` (what errors: sorted
+bars of diagnostic units), `exposure` (does it find unseen mentions: recall with interval
+beside the 100% outcome mix per class), `predicted_exposure` (precision by predicted-surface
+class), `mention_properties` (small multiples of recall over training frequency, similarity
+bin, word count and casing), `mention_traits` (dumbbells of recall without and with each
+trait: acronym-like, digit, punctuation, parentheses, hyphen, slash, Greek letter,
+overlapping, nested), `boundary_kinds` (too long, too short, shifted, fragmented, merged,
+split by matched edge since D144), `boundary_offsets` (start against end offset, tails folded
+at ±10, a 2D grid since D144), `overlap_sensitivity`
+(unit counts across Dice thresholds, the chosen one marked), `oracle_error_budget` (observed
+to oracle F1 per scenario), `error_surfaces` (top 15 surfaces stacked by error type),
+`documents` (empirical CDF of per-document strict and character F1), `confidence_by_outcome`
+(score CDF per outcome), `calibration` (reliability diagram), `confidence_sweep` (P/R/F1 and
+retained share against threshold, two panels). The confidence figures need a varying `score`;
+`documents` needs two documents; the boundary figures need a boundary error.
+
+Okabe–Ito passed the categorical checks (CVD and normal-vision separation of adjacent
+colours); its lighter colours fall under 3:1 against white, which direct labels and the
+parquet tables relieve. Text stays text in SVG (`svg.fonttype: none`) so it can be edited;
+widths are 3.5 in and 7.2 in, for one and two paper columns. Every trait is kept even where
+a corpus gives it little support: the interval says so, and the user drops what they do not
+need.
+
+### D144 — the matched edge
+
+`matched_edge` is orthogonal to `boundary_kind`: the kind says the direction (the prediction
+contains the gold, lies inside it, or is displaced), the edge says which side went wrong.
+Kept as two columns rather than eight kinds so a table can group by either. Both edges
+cannot match, since that pair is exact.
+
+`boundary_kinds` gives each kind and edge its own bar in the one boundary-error orange, the
+meaning in the labels ("too long, past the end", "too short, starts late"). Stacking the
+edges within a kind's bar needed three colours: tints of the orange failed the categorical
+palette checks (the lightest read as grey and sat too close to the mid tint), and other hues
+would collide with the outcome colours every figure shares.
+
+`boundary_offsets` bins start offset (x) against end offset (y), both folded at ±10, coloured
+on a log scale in one orange ramp. The vertical line through zero holds the errors that got
+the start right, the horizontal one those that got the end right, and the four quadrants
+are too long, too short, shifted left and shifted right.
 
 ### D145 — multihead as its own path
 

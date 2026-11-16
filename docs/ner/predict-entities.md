@@ -69,6 +69,9 @@ A span two overlapping windows both predict is kept once, at its higher score; `
 drops predictions below a mean token probability. A score is the mean softmax probability of
 the tokens the span was decoded from.
 
+`lab.ner.inference.read_predictions(path)` reads either file back, keeping a surface such as
+`NA` as text; [`analyze_predictions`](analyze-predictions.md) takes either path directly.
+
 ## From YAML
 
 ```yaml

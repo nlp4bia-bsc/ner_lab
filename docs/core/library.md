@@ -235,6 +235,13 @@ step, so overlapping spans on either side and the order predictions arrive in ca
 the result. Keys are `char_precision`, `char_recall`, `char_f1`, `char_correct`,
 `char_missed`, `char_spurious`.
 
+`evaluate_spans` runs the same scoring and returns nervaluate's whole result: beside `overall`,
+`overall_indices` says which prediction and gold span each outcome took, as
+`(document_index, row_index)` pairs over the returned `doc_ids`. It is what an analysis reads
+when it needs to know *which* spans matched, not only how many. `merge_intervals(ranges)`
+merges half-open `(start, end)` ranges into sorted, disjoint ones — the character coverage
+`score_characters` counts.
+
 `span_dataframe(spans, scored=None)` builds a span table from a list of dicts, dropping
 duplicate spans and keeping the highest-scoring copy when they carry a `score`.
 `spans_from_corpus(corpus, label=None)` goes the other way — a corpus frame or parquet to

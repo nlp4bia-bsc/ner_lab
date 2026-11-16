@@ -37,6 +37,7 @@ clinical NER, `nel.` for entity linking.
 | `ner.train_multihead` | `lab.ner.train_multihead` | [multihead.md](ner/multihead.md) |
 | `ner.search_multihead` | `lab.ner.search_multihead` | [multihead.md](ner/multihead.md) |
 | `ner.predict_multihead` | `lab.ner.predict_multihead` | [multihead.md](ner/multihead.md) |
+| `ner.analyze_predictions` | `lab.ner.analyze_predictions` | [analyze-predictions.md](ner/analyze-predictions.md) |
 | `nel.link_entities` | `lab.nel.link_entities` | [link-entities.md](nel/link-entities.md) |
 
 `lab tasks` prints the same list, and marks any task whose extra is not installed in the
