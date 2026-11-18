@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from lab.core.scoring import flatten, score_characters, score_dice, score_spans
+from lab.core.scoring import flatten, score_characters, score_entity_characters, score_spans
 from lab.ner.evaluation.spans import entity_tags
 
 
@@ -19,7 +19,7 @@ def span_metrics(
     Span metrics in the four nervaluate scenarios plus character metrics, as one flat dict.
 
     Two character metrics: `char_*` counts characters, so a long entity weighs by its
-    length, and `dice_*` averages per entity, as the MultiClinAI shared task scores.
+    length, and `entity_char_*` averages per entity, as the MultiClinAI shared task scores.
     """
     if tags is None:
         if id2label is None:
@@ -30,5 +30,5 @@ def span_metrics(
     return {
         **flatten(score_spans(gold, predicted, tags, min_overlap_percentage)),
         **score_characters(gold, predicted),
-        **score_dice(gold, predicted),
+        **score_entity_characters(gold, predicted),
     }

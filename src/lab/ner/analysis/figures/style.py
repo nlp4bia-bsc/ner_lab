@@ -37,7 +37,7 @@ OUTCOME_LABELS = {
     "UNCREDITED_EXACT": "Uncredited exact",
 }
 METRIC_COLORS = {"precision": BLUE, "recall": ORANGE, "f1": GREEN}
-LEVEL_COLORS = {"strict": BLUE, "char": ORANGE, "dice": GREEN}
+LEVEL_COLORS = {"strict": BLUE, "char": ORANGE, "entity_char": GREEN}
 
 SINGLE_COLUMN = 3.5
 DOUBLE_COLUMN = 7.2

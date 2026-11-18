@@ -275,7 +275,7 @@ Span metrics are the canonical result and are always computed, in four scenarios
 `metric_for_best_model` defaults to. Character metrics come with them: `char_precision`,
 `char_recall`, `char_f1` and the counts `char_correct` / `char_missed` / `char_spurious`,
 the character being the unit, so a boundary that is nearly right scores nearly full marks
-instead of zero. So do entity-weighted character metrics, `dice_precision`, `dice_recall`,
-`dice_f1`, where each entity weighs the same whatever its length. The three families are `lab.core.score_spans`, `score_characters` and `score_dice`
+instead of zero. So do entity-weighted character metrics, `entity_char_precision`, `entity_char_recall`,
+`entity_char_f1`, where each entity weighs the same whatever its length. The three families are `lab.core.score_spans`, `score_characters` and `score_entity_characters`
 applied to the spans reconstructed from the rows; `lab.ner.evaluation.span_metrics` is the
 call that joins them, and `token_diagnostics` the call that adds the token half.

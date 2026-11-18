@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from lab.core.scoring import evaluate_spans, flatten, score_characters, score_dice
+from lab.core.scoring import evaluate_spans, flatten, score_characters, score_entity_characters
 
 STRICT_OUTCOMES = ("TP", "FN", "FP")
 EVENT_COLUMNS = [
@@ -51,7 +51,7 @@ def strict_events(
     metrics = {
         **flatten(result["overall"]),
         **score_characters(gold, predicted),
-        **score_dice(gold, predicted),
+        **score_entity_characters(gold, predicted),
     }
 
     matches = strict_matches(gold, predicted, result)

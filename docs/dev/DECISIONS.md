@@ -164,7 +164,7 @@ The row is the verdict; the note is the argument.
 | D150 | **`train` sets `model_accepts_loss_kwargs = False` on every Trainer it builds, so the loss is always divided by `gradient_accumulation_steps`.** → notes | Under transformers 5, a `forward` taking `**kwargs` — the stock token-classification heads and `CRFForTokenClassification` alike — makes the Trainer skip that division, assuming the model normalises by `num_items_in_batch`; none here does. |
 | D151 | **Every batch is padded on the right by `TokenClassificationCollator`, whatever the tokenizer's `padding_side`, for `train`, `predict_logits` and so every task; it pads labels of one id per position and of one per head alike. It replaces `DataCollatorForTokenClassification`.** → notes | Span reconstruction and token diagnostics read each row's predictions from position 0; a left-padding tokenizer shifted every shorter row's logits past them, silently. |
 | D152 | **A CRF's span `score` in `predict_entities` is the mean of its tokens' forward-backward marginals for the tags they took, its tags still the Viterbi path; `predict_tag_probabilities` gives both, for inference and the ensemble alike, and `MarginalCRFTrainer` moves to `ner/training/` beside `CRFTrainer`.** Extends D121 to inference. | Scores came from the softmax of the one-hot Viterbi logits, so every CRF span scored 1.0: `min_score` did nothing and the analysis skipped its confidence tables. The mean token marginal is the linear models' rule with a CRF's probabilities, so the two stay comparable; the span's own probability by constrained forward-backward was weighed and left for later. |
-| D153 | **`lab.core.score_dice` adds the MultiClinAI shared task's character F1 beside `char_*`, reproduced exactly, as `dice_precision`, `dice_recall`, `dice_f1` with the credits and counts behind them; it reaches every consumer `char_*` reaches, the analysis's documents, bootstrap intervals and subgroups included.** Amends D96, which it does not reverse. → notes | `char_*` counts characters, so a long entity outweighs a short one by its length; Dice weighs every entity the same, and is the metric the shared task ranks by. |
+| D153 | **`lab.core.score_entity_characters` adds the MultiClinAI shared task's character F1 beside `char_*`, reproduced exactly, as `entity_char_precision`, `entity_char_recall`, `entity_char_f1` with the credits and counts behind them; it reaches every consumer `char_*` reaches, the analysis's documents, bootstrap intervals and subgroups included.** Amends D96, which it does not reverse. → notes | `char_*` counts characters, so a long entity outweighs a short one by its length; Dice weighs every entity the same, and is the metric the shared task ranks by. |
 
 ## Notes
 
@@ -611,7 +611,7 @@ reach. Refusing a left-padding tokenizer would leave a YAML user no way to run o
 right-padding tokenizer the batches are what the stock collator built: the same `-100` label
 padding and `pad_to_multiple_of`.
 
-### D153 — Dice metrics beside character metrics
+### D153 — entity-weighted character metrics beside character metrics
 
 D96 replaced the MultiClinNER scorer's mean best-overlap score with counted characters, which
 are order- and overlap-independent and give counts the bootstrap can add. The cost is that
@@ -622,7 +622,7 @@ entity with its best character F1 against the other side — which is character 
 averages over entities, so both cases are recall 0.5.
 
 Both are kept, as their own families, because they answer different questions and the
-analysis's character columns rest on counts. `score_dice` reproduces the official scorer
+analysis's character columns rest on counts. `score_entity_characters` reproduces the official scorer
 rather than improving it, so numbers match the leaderboard: matching is not one to one, and
 exact duplicate predictions are dropped. It was checked against the official script on its
 own sample files and on 300 random cases with overlaps, nesting, duplicates, two labels and
@@ -633,5 +633,6 @@ Dice credits depend only on their own document, so per-document credits and coun
 overall ones and Dice precision and recall bootstrap as ratios of totals. Dice F1 is the
 harmonic mean of two such ratios, not one, so it is computed from each resample's precision
 and recall. `span_dice` moved from `ner/analysis/pairing.py` to `lab.core.scoring`, where
-pairing and `score_dice` share it. The name is `dice_*`, not the shared task's `char_f1`,
+pairing and `score_entity_characters` share it. The name is `entity_char_*` — entity-weighted
+character metrics — not the shared task's `char_f1`,
 which this library already uses for counted characters.

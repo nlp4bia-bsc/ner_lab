@@ -62,7 +62,7 @@ other. The metrics carry three views:
 | `span_<scenario>_macro_<precision\|recall\|f1>` | Macro: the mean over heads, each type weighing the same. |
 
 Character metrics (`char_*`) score every type together, a character counting as correct
-when a gold and a predicted span of the same type both cover it; entity-weighted character metrics (`dice_*`)
+when a gold and a predicted span of the same type both cover it; entity-weighted character metrics (`entity_char_*`)
 score every type together too, a span credited only by spans of its own type. At inference, gold of a
 type with no head is left out, as `predict_entities` restricts gold to its `target_label`.
 

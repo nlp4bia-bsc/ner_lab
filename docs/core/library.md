@@ -6,7 +6,7 @@ public, works on DataFrames and mappings as readily as on paths, and applies no 
 orchestrator adds behind your back. Use them directly when the orchestrator's directory
 layout, dataset naming or manifests are in the way.
 
-None of this imports `torch`. The same module holds `score_spans`, `score_characters` and `score_dice`,
+None of this imports `torch`. The same module holds `score_spans`, `score_characters` and `score_entity_characters`,
 the scorers every task's evaluation is built on, so a span table from any system can be
 scored without the NER stack installed.
 
@@ -204,15 +204,15 @@ so they are not the counts any particular training run sees.
 
 ---
 
-## `score_spans`, `score_characters` and `score_dice`
+## `score_spans`, `score_characters` and `score_entity_characters`
 
 ```python
-from lab.core import score_spans, score_characters, score_dice, flatten
+from lab.core import score_spans, score_characters, score_entity_characters, flatten
 
 results = score_spans(gold, predicted, tags, min_overlap_percentage=40.0)
 flatten(results)                    # {"span_strict_f1": ..., "span_partial_recall": ..., ...}
 score_characters(gold, predicted)   # {"char_precision": ..., "char_recall": ..., "char_f1": ..., ...}
-score_dice(gold, predicted)         # {"dice_precision": ..., "dice_recall": ..., "dice_f1": ..., ...}
+score_entity_characters(gold, predicted)         # {"entity_char_precision": ..., "entity_char_recall": ..., "entity_char_f1": ..., ...}
 ```
 
 | Parameter | Default | Meaning |
@@ -237,7 +237,7 @@ the result. Keys are `char_precision`, `char_recall`, `char_f1`, `char_correct`,
 `char_missed`, `char_spurious`. Because it counts characters, a long entity weighs by its
 length: with gold `HTA` and a 33-character diagnosis, finding only `HTA` is recall 0.08.
 
-`score_dice` gives entity-weighted character metrics: the entity is the unit instead of the
+`score_entity_characters` gives entity-weighted character metrics: the entity is the unit instead of the
 character. Each gold span is credited with its best character Dice —
 `2·overlap / (length_gold + length_predicted)`, the F1 of the pair's character precision and
 recall — against a prediction of the same label in its document, 0 when none overlaps; each
@@ -245,9 +245,9 @@ prediction likewise against the gold. Recall is the mean credit over gold spans,
 the mean over predictions, F1 their harmonic mean, so in the example above recall is 0.5
 whichever of the two is found. Matching is not one to one — a
 prediction spanning two gold entities is credited by both — and exact duplicate predictions
-are dropped first. Keys are `dice_precision`, `dice_recall`, `dice_f1`, and the sums and
-counts behind the means: `dice_gold_credit`, `dice_gold`, `dice_predicted_credit`,
-`dice_predicted`. `best_dice(spans, other)` gives each span's credit, and `span_dice` the
+are dropped first. Keys are `entity_char_precision`, `entity_char_recall`, `entity_char_f1`, and the sums and
+counts behind the means: `entity_char_gold_credit`, `entity_char_gold`, `entity_char_predicted_credit`,
+`entity_char_predicted`. `entity_char_credits(spans, other)` gives each span's credit, and `span_dice` the
 Dice of one pair.
 
 `evaluate_spans` runs the same scoring and returns nervaluate's whole result: beside `overall`,

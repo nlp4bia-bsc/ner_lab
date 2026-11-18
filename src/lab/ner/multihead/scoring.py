@@ -13,7 +13,7 @@ from lab.core.scoring import (
     SCENARIO_PREFIXES,
     flatten,
     score_characters,
-    score_dice,
+    score_entity_characters,
     score_spans,
     sum_span_results,
 )
@@ -143,7 +143,7 @@ def score_heads(
         metrics.update({f"head_{label}_{key}": value for key, value in flatten(result).items()})
 
     metrics.update(score_characters(gold, predicted))
-    metrics.update(score_dice(gold, predicted))
+    metrics.update(score_entity_characters(gold, predicted))
 
     return metrics
 

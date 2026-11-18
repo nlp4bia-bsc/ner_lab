@@ -235,24 +235,24 @@ def check_subgroups_and_bootstrap(checks: Checks, root: Path) -> None:
     documents = result.tables["documents"]
     checks.equal("per-document TP sum to the strict total", int(documents["strict_tp"].sum()), result.metrics["span_strict_correct"])
     checks.check(
-        "per-document Dice credits sum to the overall Dice recall",
-        abs(documents["dice_gold_credit"].sum() / documents["dice_gold"].sum() - result.metrics["dice_recall"]) < 1e-4,
+        "per-document entity-weighted credits sum to the overall entity-weighted recall",
+        abs(documents["entity_char_gold_credit"].sum() / documents["entity_char_gold"].sum() - result.metrics["entity_char_recall"]) < 1e-4,
     )
     checks.check(
-        "a gold mention's best Dice averages to the overall Dice recall",
-        abs(gold["best_dice"].mean() - result.metrics["dice_recall"]) < 1e-4,
+        "a gold mention's entity-weighted credit averages to the overall recall",
+        abs(gold["entity_char_credit"].mean() - result.metrics["entity_char_recall"]) < 1e-4,
     )
     checks.check(
-        "SEEN Dice recall is the mean best Dice of its gold mentions",
-        abs(exposure.loc["SEEN", "dice_recall"] - gold.loc[gold["exposure"] == "SEEN", "best_dice"].mean()) < 1e-12,
+        "SEEN entity-weighted recall is the mean credit of its gold mentions",
+        abs(exposure.loc["SEEN", "entity_char_recall"] - gold.loc[gold["exposure"] == "SEEN", "entity_char_credit"].mean()) < 1e-12,
     )
 
     intervals = result.tables["bootstrap_intervals"]
     checks.frames_equal("the bootstrap is identical at one random_state", intervals, again.tables["bootstrap_intervals"])
     checks.check("every interval holds its estimate", ((intervals["low"] <= intervals["estimate"]) & (intervals["estimate"] <= intervals["high"])).all())
     checks.check(
-        "the Dice F1 estimate is the overall Dice F1",
-        abs(intervals.set_index("metric").loc["dice_f1", "estimate"] - result.metrics["dice_f1"]) < 1e-4,
+        "the entity-weighted F1 estimate is the overall entity-weighted F1",
+        abs(intervals.set_index("metric").loc["entity_char_f1", "estimate"] - result.metrics["entity_char_f1"]) < 1e-4,
     )
     checks.check(
         "the estimate is the overall strict F1",

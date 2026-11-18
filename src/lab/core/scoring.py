@@ -131,7 +131,7 @@ def score_characters(gold: pd.DataFrame, predicted: pd.DataFrame) -> dict[str, f
     }
 
 
-def score_dice(gold: pd.DataFrame, predicted: pd.DataFrame) -> dict[str, float | int]:
+def score_entity_characters(gold: pd.DataFrame, predicted: pd.DataFrame) -> dict[str, float | int]:
     """
     Entity-level character F1, as the MultiClinAI shared task scores it: every entity weighs the same.
 
@@ -144,36 +144,36 @@ def score_dice(gold: pd.DataFrame, predicted: pd.DataFrame) -> dict[str, float |
 
     It reproduces the official scorer, quirks included: matching is not one to
     one, so a prediction spanning two gold entities earns credit from both, and
-    exact duplicate predictions are dropped first. Keys are `dice_precision`,
-    `dice_recall`, `dice_f1`, and the sums and counts the means come from:
-    `dice_gold_credit`, `dice_gold`, `dice_predicted_credit`, `dice_predicted`.
+    exact duplicate predictions are dropped first. Keys are `entity_char_precision`,
+    `entity_char_recall`, `entity_char_f1`, and the sums and counts the means come from:
+    `entity_char_gold_credit`, `entity_char_gold`, `entity_char_predicted_credit`, `entity_char_predicted`.
     """
     duplicated = normalize_spans(predicted).duplicated(subset=["filename", "label", "off0", "off1"])
     predicted = predicted[~duplicated.to_numpy()]
 
-    gold_credit = float(best_dice(gold, predicted).sum())
-    predicted_credit = float(best_dice(predicted, gold).sum())
+    gold_credit = float(entity_char_credits(gold, predicted).sum())
+    predicted_credit = float(entity_char_credits(predicted, gold).sum())
     recall = gold_credit / len(gold) if len(gold) else 0.0
     precision = predicted_credit / len(predicted) if len(predicted) else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
 
     return {
-        "dice_precision": round(precision, 4),
-        "dice_recall": round(recall, 4),
-        "dice_f1": round(f1, 4),
-        "dice_gold_credit": gold_credit,
-        "dice_gold": len(gold),
-        "dice_predicted_credit": predicted_credit,
-        "dice_predicted": len(predicted),
+        "entity_char_precision": round(precision, 4),
+        "entity_char_recall": round(recall, 4),
+        "entity_char_f1": round(f1, 4),
+        "entity_char_gold_credit": gold_credit,
+        "entity_char_gold": len(gold),
+        "entity_char_predicted_credit": predicted_credit,
+        "entity_char_predicted": len(predicted),
     }
 
 
-def best_dice(spans: pd.DataFrame, other: pd.DataFrame) -> np.ndarray:
+def entity_char_credits(spans: pd.DataFrame, other: pd.DataFrame) -> np.ndarray:
     """
     Each span's best `span_dice` against a span of `other` with its document and label.
 
     Aligned to `spans`' rows, 0 where nothing of `other` overlaps a span. Its mean
-    over gold spans is `score_dice`'s recall, over predictions its precision.
+    over gold spans is `score_entity_characters`'s recall, over predictions its precision.
     """
     candidates = {
         key: list(zip(group["off0"], group["off1"]))

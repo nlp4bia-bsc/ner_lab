@@ -29,7 +29,7 @@ def documents_figure(tables: dict[str, pd.DataFrame]) -> Figure | None:
     for level, column, label in (
         ("strict", "strict_f1", "Strict F1"),
         ("char", "char_f1", "Character F1"),
-        ("dice", "dice_f1", "Entity-weighted character F1"),
+        ("entity_char", "entity_char_f1", "Entity-weighted character F1"),
     ):
         values = np.sort(documents[column].to_numpy(dtype=float))
         shares = np.arange(1, len(values) + 1) / len(values)

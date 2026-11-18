@@ -100,7 +100,7 @@ the same normalized form, and `seen_verbatim` keeps the case-sensitive view for 
 A subgroup is reported on the side that defines it. Gold mentions are grouped by their own
 exposure, similarity bin, training frequency, word count, casing and traits, and each group
 reports its support, strict recall (the share `CORRECT`), character recall, entity-weighted
-character recall (the mean of its mentions' `best_dice`), and how its other mentions failed.
+character recall (the mean of its mentions' `entity_char_credit`), and how its other mentions failed.
 Predictions are grouped by the same properties of their own surface and report strict,
 character and entity-weighted character precision. There is no per-group F1: it would join recall over
 one population to precision over another, and a prediction one word too long on a seen

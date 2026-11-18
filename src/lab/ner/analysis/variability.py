@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from lab.core.scoring import safe_f1, score_characters, score_dice
+from lab.core.scoring import safe_f1, score_characters, score_entity_characters
 
 DOCUMENT_COUNTS = (
     "strict_tp",
@@ -16,10 +16,10 @@ DOCUMENT_COUNTS = (
     "char_correct",
     "char_spurious",
     "char_missed",
-    "dice_gold_credit",
-    "dice_gold",
-    "dice_predicted_credit",
-    "dice_predicted",
+    "entity_char_gold_credit",
+    "entity_char_gold",
+    "entity_char_predicted_credit",
+    "entity_char_predicted",
 )
 INTERVAL_METRICS = {
     "span_strict_precision": ("strict_tp", ("strict_tp", "strict_fp")),
@@ -28,8 +28,8 @@ INTERVAL_METRICS = {
     "char_precision": ("char_correct", ("char_correct", "char_spurious")),
     "char_recall": ("char_correct", ("char_correct", "char_missed")),
     "char_f1": ("char_correct", ("char_correct", "char_spurious", "char_missed")),
-    "dice_precision": ("dice_predicted_credit", ("dice_predicted",)),
-    "dice_recall": ("dice_gold_credit", ("dice_gold",)),
+    "entity_char_precision": ("entity_char_predicted_credit", ("entity_char_predicted",)),
+    "entity_char_recall": ("entity_char_gold_credit", ("entity_char_gold",)),
 }
 
 
@@ -37,12 +37,14 @@ def document_scores(
     events: pd.DataFrame, gold: pd.DataFrame, predicted: pd.DataFrame
 ) -> pd.DataFrame:
     """
-    Strict, character and Dice scores per document, one row per document with a gold span or prediction.
+    Strict, character and entity-weighted character scores per document, one row each.
 
-    Strict counts are read off the events, so they sum to the overall strict counts;
-    character and Dice scores are `score_characters` and `score_dice` on the document
-    alone. A span's Dice credit depends only on its own document, so Dice credits and
-    counts sum to the overall ones too.
+    One row per document with a gold span or prediction. Strict counts are read off
+    the events, so they sum to the overall strict counts; character and
+    entity-weighted character scores are `score_characters` and
+    `score_entity_characters` on the document alone. A span's entity-weighted credit
+    depends only on its own document, so those credits and counts sum to the overall
+    ones too.
     """
     strict = (
         events.groupby(["filename", "strict_outcome"])
@@ -60,7 +62,7 @@ def document_scores(
         document_gold = gold_by_document.get(filename, empty)
         document_predicted = predicted_by_document.get(filename, empty)
         characters = score_characters(document_gold, document_predicted)
-        dice = score_dice(document_gold, document_predicted)
+        entity_char = score_entity_characters(document_gold, document_predicted)
         strict_scores = safe_f1(int(tp), int(fp), int(fn))
 
         rows.append(
@@ -75,7 +77,7 @@ def document_scores(
                 "strict_recall": strict_scores["recall"],
                 "strict_f1": strict_scores["f1"],
                 **characters,
-                **dice,
+                **entity_char,
             }
         )
 
@@ -135,12 +137,12 @@ def bootstrap_intervals(
     documents: pd.DataFrame, draws: np.ndarray, confidence: float
 ) -> pd.DataFrame:
     """
-    Percentile intervals for the overall strict, character and Dice precision, recall and F1.
+    Intervals for the overall strict, character and entity-weighted character P, R and F1.
 
     Strict and character F1 is `2·TP / (2·TP + FP + FN)`, a ratio of totals, so it is
     resampled the same way as precision and recall: its numerator counts true
-    positives twice. Dice F1 is the harmonic mean of two ratios, not one, so it is
-    computed from each resample's Dice precision and recall. The estimate is the
+    positives twice. Entity-weighted F1 is the harmonic mean of two ratios, not one,
+    so it is computed from each resample's entity-weighted precision and recall. The estimate is the
     value on all documents.
     """
     rows = []
@@ -162,23 +164,25 @@ def bootstrap_intervals(
             }
         )
 
-    rows.append(_dice_f1_interval(documents, draws, confidence))
+    rows.append(_entity_char_f1_interval(documents, draws, confidence))
 
     return pd.DataFrame(rows)
 
 
-def _dice_f1_interval(
+def _entity_char_f1_interval(
     documents: pd.DataFrame, draws: np.ndarray, confidence: float
 ) -> dict[str, Any]:
     all_documents = np.ones((1, len(documents)), dtype=int)
     resamples = np.vstack([draws, all_documents])
     precision = resampled_ratios(
-        documents["dice_predicted_credit"].to_numpy(),
-        documents["dice_predicted"].to_numpy(),
+        documents["entity_char_predicted_credit"].to_numpy(),
+        documents["entity_char_predicted"].to_numpy(),
         resamples,
     )
     recall = resampled_ratios(
-        documents["dice_gold_credit"].to_numpy(), documents["dice_gold"].to_numpy(), resamples
+        documents["entity_char_gold_credit"].to_numpy(),
+        documents["entity_char_gold"].to_numpy(),
+        resamples,
     )
     summed = precision + recall
 
@@ -187,4 +191,4 @@ def _dice_f1_interval(
 
     low, high = percentile_interval(f1[:-1], confidence)
 
-    return {"metric": "dice_f1", "estimate": float(f1[-1]), "low": low, "high": high}
+    return {"metric": "entity_char_f1", "estimate": float(f1[-1]), "low": low, "high": high}
