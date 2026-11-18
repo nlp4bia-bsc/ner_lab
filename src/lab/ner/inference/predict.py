@@ -20,7 +20,7 @@ from lab.ner.inference.io import (
     write_predictions,
 )
 from lab.ner.inference.loading import load_model
-from lab.ner.inference.prediction import decode_spans, predict_logits
+from lab.ner.inference.prediction import decode_spans, predict_tag_probabilities
 
 PREDICTIONS_FILENAME = "predictions.tsv"
 PREDICTIONS_PARQUET_FILENAME = "predictions.parquet"
@@ -89,7 +89,8 @@ def predict_entities(
     need the encoded rows, so they are added only when `documents` itself
     carries the gold.
 
-    `min_score` drops predicted entities below a mean token probability. Where
+    `min_score` drops predicted entities below a mean token probability — for a
+    CRF, the mean of its tokens' forward-backward marginals. Where
     two overlapping windows predict the same span, the higher-scoring copy is
     kept.
     """
@@ -109,7 +110,7 @@ def predict_entities(
             f"No windows were produced from {len(corpus)} document(s) — nothing to predict on."
         )
 
-    predictions = predict_logits(
+    predictions, probabilities = predict_tag_probabilities(
         model=model,
         tokenizer=tokenizer,
         rows=rows,
@@ -121,6 +122,7 @@ def predict_entities(
     spans = decode_spans(
         rows=rows,
         predictions=predictions,
+        probabilities=probabilities,
         tokenizer=tokenizer,
         id2label=encoder.id2label,
         texts=dict(zip(corpus["doc_id"], corpus["text"])),

@@ -92,6 +92,56 @@ class CRFTrainer(Trainer):
         return loss, logits.detach(), labels.detach() if labels is not None else None
 
 
+class MarginalCRFTrainer(CRFTrainer):
+    """
+    A `CRFTrainer` whose predictions carry the CRF's marginals beside its Viterbi path.
+
+    Each position's prediction is its log-marginals followed by the Viterbi path's
+    one-hot logits, concatenated on the last axis, so one forward pass gives both
+    what the model believes and what it decides.
+    """
+
+    def prediction_step(
+        self,
+        model: nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
+        prediction_loss_only: bool,
+        ignore_keys: list[str] | None = None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+        from lab.ner.models.crf import decoded_paths_to_logits
+
+        has_labels = "labels" in inputs
+        inputs = self._prepare_inputs(inputs)
+        labels = inputs.get("labels")
+
+        with torch.no_grad():
+            outputs = model(**inputs)
+            loss = outputs.loss.detach() if has_labels and outputs.loss is not None else None
+
+            if prediction_loss_only:
+                return loss, None, None
+
+            emissions = outputs.logits
+            attention_mask = inputs.get("attention_mask")
+            decoder = model.module if hasattr(model, "module") else model
+
+            log_marginals = decoder.marginals_from_emissions(
+                emissions=emissions, attention_mask=attention_mask
+            )
+            viterbi = decoded_paths_to_logits(
+                decoded_paths=decoder.decode_from_emissions(
+                    emissions=emissions, attention_mask=attention_mask
+                ),
+                sequence_length=emissions.shape[1],
+                num_labels=emissions.shape[2],
+                device=emissions.device,
+            )
+
+        predictions = torch.cat([log_marginals, viterbi], dim=-1)
+
+        return loss, predictions.detach(), labels.detach() if labels is not None else None
+
+
 def resolve_trainer_class(model: nn.Module) -> type[Trainer]:
     """Pick `CRFTrainer` for a model that can Viterbi-decode, `Trainer` otherwise."""
     return CRFTrainer if hasattr(model, "decode_from_emissions") else Trainer

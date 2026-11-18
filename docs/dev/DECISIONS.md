@@ -163,6 +163,7 @@ The row is the verdict; the note is the argument.
 | D149 | **An `EncodedVariant` carries what its trials need — `build_model` and `compute_metrics` — decided by whoever encodes it; the model-independent sweep (setup, length check, Ray, smoke test, Optuna, summary, winner, report) lives in `lab.ner.hpo.sweep`. `search_multihead`'s winner is a `ner.train_multihead` config, recorded in `hpo_summary.json` under `train_multihead`.** | One sweep machine for every kind of model, with no architecture branch in a trial. Ray starts only after the length check, as before. |
 | D150 | **`train` sets `model_accepts_loss_kwargs = False` on every Trainer it builds, so the loss is always divided by `gradient_accumulation_steps`.** → notes | Under transformers 5, a `forward` taking `**kwargs` — the stock token-classification heads and `CRFForTokenClassification` alike — makes the Trainer skip that division, assuming the model normalises by `num_items_in_batch`; none here does. |
 | D151 | **Every batch is padded on the right by `TokenClassificationCollator`, whatever the tokenizer's `padding_side`, for `train`, `predict_logits` and so every task; it pads labels of one id per position and of one per head alike. It replaces `DataCollatorForTokenClassification`.** → notes | Span reconstruction and token diagnostics read each row's predictions from position 0; a left-padding tokenizer shifted every shorter row's logits past them, silently. |
+| D152 | **A CRF's span `score` in `predict_entities` is the mean of its tokens' forward-backward marginals for the tags they took, its tags still the Viterbi path; `predict_tag_probabilities` gives both, for inference and the ensemble alike, and `MarginalCRFTrainer` moves to `ner/training/` beside `CRFTrainer`.** Extends D121 to inference. | Scores came from the softmax of the one-hot Viterbi logits, so every CRF span scored 1.0: `min_score` did nothing and the analysis skipped its confidence tables. The mean token marginal is the linear models' rule with a CRF's probabilities, so the two stay comparable; the span's own probability by constrained forward-backward was weighed and left for later. |
 
 ## Notes
 
@@ -417,10 +418,11 @@ nothing groups members or averages within one. The flow is `fit_ensemble` on a v
 set, then `predict_ensemble` on the documents to score or label; `predict_ensemble` writes
 what `predict_entities` writes, plus the ensemble and each member's hash in its manifest.
 
-Layout: `ensemble/tables.py` (a member's word table, the CRF marginals path included),
+Layout: `ensemble/tables.py` (a member's word table),
 `ensemble/voting.py` (weighted combination and decoding), `ensemble/search.py` (the Optuna
 fit), `ensemble/io.py` (`ensemble.json`, hash checks), `ensemble/fit.py` and
-`ensemble/predict.py` (the tasks). `marginals_from_emissions` lives in `models/crf.py`.
+`ensemble/predict.py` (the tasks). `marginals_from_emissions` lives in `models/crf.py`; the
+CRF marginals path is `inference.predict_tag_probabilities`, shared with `predict_entities` (D152).
 
 ### D120 / D122 — word tables and decoding
 

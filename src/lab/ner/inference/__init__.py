@@ -21,7 +21,11 @@ from lab.ner.inference.predict import (
     InferenceResult,
     predict_entities,
 )
-from lab.ner.inference.prediction import decode_spans, predict_logits
+from lab.ner.inference.prediction import (
+    decode_spans,
+    predict_logits,
+    predict_tag_probabilities,
+)
 
 __all__ = [
     "GOLD_FILENAME",
@@ -36,6 +40,7 @@ __all__ = [
     "load_state_dict",
     "predict_entities",
     "predict_logits",
+    "predict_tag_probabilities",
     "read_documents",
     "read_predictions",
     "read_reference",

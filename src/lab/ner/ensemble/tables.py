@@ -8,69 +8,18 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import torch
-from torch import nn
 from transformers import PreTrainedTokenizerBase
 
 from lab.ner.encoding.encoder import encoder_from_description
 from lab.ner.encoding.rows import IGNORE_INDEX, special_token_template
-from lab.ner.evaluation.spans import content_positions, ensure_int_list, ensure_word_ids, softmax
+from lab.ner.evaluation.spans import content_positions, ensure_int_list, ensure_word_ids
 from lab.ner.inference.loading import load_model
-from lab.ner.inference.prediction import predict_logits
-from lab.ner.models.crf import decoded_paths_to_logits
+from lab.ner.inference.prediction import predict_tag_probabilities
 from lab.ner.training.assessment import release_accelerator_memory
-from lab.ner.training.trainer import CRFTrainer
 
 TAGS = ("O", "B", "I")
 PROBABILITY_COLUMNS = [f"p_{tag}" for tag in TAGS]
 WORD_TABLE_COLUMNS = ["doc_id", "word_id", "tag", *PROBABILITY_COLUMNS]
-
-
-class MarginalCRFTrainer(CRFTrainer):
-    """
-    A `CRFTrainer` whose predictions carry the CRF's marginals beside its Viterbi path.
-
-    Each position's prediction is its log-marginals followed by the Viterbi path's
-    one-hot logits, concatenated on the last axis, so one forward pass gives an
-    ensemble both what the member believes and what it decides.
-    """
-
-    def prediction_step(
-        self,
-        model: nn.Module,
-        inputs: dict[str, torch.Tensor | Any],
-        prediction_loss_only: bool,
-        ignore_keys: list[str] | None = None,
-    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
-        inputs = self._prepare_inputs(inputs)
-        labels = inputs.get("labels")
-
-        with torch.no_grad():
-            outputs = model(**inputs)
-            loss = outputs.loss.detach() if outputs.loss is not None else None
-
-            if prediction_loss_only:
-                return loss, None, None
-
-            emissions = outputs.logits
-            attention_mask = inputs.get("attention_mask")
-            decoder = model.module if hasattr(model, "module") else model
-
-            log_marginals = decoder.marginals_from_emissions(
-                emissions=emissions, attention_mask=attention_mask
-            )
-            viterbi = decoded_paths_to_logits(
-                decoded_paths=decoder.decode_from_emissions(
-                    emissions=emissions, attention_mask=attention_mask
-                ),
-                sequence_length=emissions.shape[1],
-                num_labels=emissions.shape[2],
-                device=emissions.device,
-            )
-
-        predictions = torch.cat([log_marginals, viterbi], dim=-1)
-
-        return loss, predictions.detach(), labels.detach() if labels is not None else None
 
 
 def predict_word_tables(
@@ -114,10 +63,9 @@ def predict_word_table(
     """
     One saved model's word table over `corpus`.
 
-    A linear model's probabilities are the softmax of its logits and its tag their
-    argmax. A model exposing `marginals_from_emissions` — the CRF — gives its
-    forward-backward marginals as probabilities and its Viterbi path as its tag,
-    which is not always the per-word argmax of those marginals.
+    Tags and probabilities come from `predict_tag_probabilities`: a linear model's
+    argmax and softmax, a CRF's Viterbi path and forward-backward marginals — and
+    that path is not always the per-word argmax of those marginals.
     """
     model, tokenizer, description = load_model(model_dir, device=device)
     encoder = encoder_from_description(
@@ -131,27 +79,19 @@ def predict_word_table(
             "nothing to predict on."
         )
 
-    has_marginals = hasattr(model, "marginals_from_emissions")
-    predictions = predict_logits(
+    decisions, probabilities = predict_tag_probabilities(
         model=model,
         tokenizer=tokenizer,
         rows=rows,
         batch_size=batch_size,
         device=device,
         pad_to_multiple_of=pad_to_multiple_of,
-        trainer_class=MarginalCRFTrainer if has_marginals else None,
-    ).astype(np.float32)
-
-    if has_marginals:
-        log_marginals, viterbi = np.split(predictions, 2, axis=-1)
-        probabilities, tag_ids = softmax(log_marginals), viterbi.argmax(axis=-1)
-    else:
-        probabilities, tag_ids = softmax(predictions), predictions.argmax(axis=-1)
+    )
 
     return word_table(
         rows=rows,
         probabilities=probabilities,
-        tag_ids=tag_ids,
+        tag_ids=decisions.argmax(axis=-1),
         tokenizer=tokenizer,
         id2label=encoder.id2label,
     )

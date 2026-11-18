@@ -14,13 +14,13 @@ from transformers import (
 )
 
 from lab.ner.encoding.rows import IGNORE_INDEX
-from lab.ner.evaluation.spans import predicted_spans
+from lab.ner.evaluation.spans import predicted_spans, softmax
 from lab.ner.inference.loading import resolve_device
 from lab.ner.training.arguments import for_inference
 from lab.ner.training.arguments import training_arguments as build_training_arguments
 from lab.ner.training.collation import TokenClassificationCollator
 from lab.ner.training.dataset import to_dataset
-from lab.ner.training.trainer import resolve_trainer_class
+from lab.ner.training.trainer import MarginalCRFTrainer, resolve_trainer_class
 
 
 def predict_logits(
@@ -74,6 +74,44 @@ def predict_logits(
         )
 
 
+def predict_tag_probabilities(
+    model: torch.nn.Module,
+    tokenizer: PreTrainedTokenizerBase,
+    rows: pd.DataFrame,
+    batch_size: int = 16,
+    device: str = "auto",
+    pad_to_multiple_of: int | None = 8,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Run `model` over encoded rows and return its decisions and its tag probabilities.
+
+    The decisions are logits whose argmax is the predicted tag, the shape
+    `predict_logits` returns. A linear model's are its logits and its
+    probabilities their softmax. A model exposing `marginals_from_emissions` —
+    the CRF — decides by its Viterbi path, as one-hot logits, and its
+    probabilities are its forward-backward marginals, each tag's probability
+    given the whole window. The softmax of those one-hot logits is 1.0 on every
+    chosen tag, which is why they cannot stand in for the probabilities.
+    """
+    has_marginals = hasattr(model, "marginals_from_emissions")
+    predictions = predict_logits(
+        model=model,
+        tokenizer=tokenizer,
+        rows=rows,
+        batch_size=batch_size,
+        device=device,
+        pad_to_multiple_of=pad_to_multiple_of,
+        trainer_class=MarginalCRFTrainer if has_marginals else None,
+    ).astype(np.float32)
+
+    if not has_marginals:
+        return predictions, softmax(predictions)
+
+    log_marginals, viterbi = np.split(predictions, 2, axis=-1)
+
+    return viterbi, softmax(log_marginals)
+
+
 def decode_spans(
     rows: pd.DataFrame,
     predictions: np.ndarray,
@@ -82,12 +120,15 @@ def decode_spans(
     texts: dict[str, str] | None = None,
     min_score: float = 0.0,
     ignore_index: int = IGNORE_INDEX,
+    probabilities: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """
     Decode predictions into scored entity spans, dropping those below `min_score`.
 
     The same span reconstruction evaluation scores with, asked for the surface
     form and the confidence a prediction file needs and a metric does not.
+    Scores are read from `probabilities` when given — a CRF's marginals, from
+    `predict_tag_probabilities` — and from the softmax of `predictions` otherwise.
     """
     spans = predicted_spans(
         rows=rows,
@@ -97,6 +138,7 @@ def decode_spans(
         ignore_index=ignore_index,
         texts=texts or {},
         include_scores=True,
+        probabilities=probabilities,
     )
 
     if min_score > 0:

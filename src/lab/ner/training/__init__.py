@@ -34,6 +34,7 @@ from lab.ner.training.runs import (
 from lab.ner.training.tracking import EpochMetricsLogger, ResourceTracker, gpu_hardware_info
 from lab.ner.training.trainer import (
     CRFTrainer,
+    MarginalCRFTrainer,
     TrainingResult,
     build_summary,
     dataset_summary,
@@ -50,6 +51,7 @@ __all__ = [
     "CRFTrainer",
     "DevicePolicy",
     "EpochMetricsLogger",
+    "MarginalCRFTrainer",
     "ResourceTracker",
     "TokenClassificationCollator",
     "TrainingResult",

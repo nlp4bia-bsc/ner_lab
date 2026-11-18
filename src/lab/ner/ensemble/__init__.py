@@ -22,7 +22,6 @@ from lab.ner.ensemble.predict import EnsembleInference, predict_ensemble
 from lab.ner.ensemble.search import SearchResult, search_ensemble
 from lab.ner.ensemble.tables import (
     WORD_TABLE_COLUMNS,
-    MarginalCRFTrainer,
     predict_word_table,
     predict_word_tables,
     word_table,
@@ -49,7 +48,6 @@ __all__ = [
     "CombinedWords",
     "EnsembleFit",
     "EnsembleInference",
-    "MarginalCRFTrainer",
     "SearchResult",
     "WordVotes",
     "align_votes",

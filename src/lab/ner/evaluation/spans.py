@@ -56,6 +56,7 @@ def predicted_spans(
     ignore_index: int = IGNORE_INDEX,
     texts: dict[str, str] | None = None,
     include_scores: bool = False,
+    probabilities: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """
     Rebuild the spans a model predicted.
@@ -67,7 +68,10 @@ def predicted_spans(
     Scoring reads offsets alone, so `texts` and `include_scores` are off by
     default and exist for inference, which reports spans rather than scores them:
     `texts` fills each span's surface form from `{doc_id: text}`, and
-    `include_scores` adds the mean softmax probability of the tokens behind it.
+    `include_scores` adds the mean probability of the tokens behind it, read from
+    `probabilities` when given and from the softmax of `predictions` otherwise —
+    a CRF's predictions are one-hot Viterbi logits, so its probabilities are
+    passed as its marginals.
     """
     _require_columns(rows)
 
@@ -80,7 +84,10 @@ def predicted_spans(
         )
 
     id2label = _normalize_id2label(id2label)
-    probabilities = softmax(predictions) if include_scores else None
+    if not include_scores:
+        probabilities = None
+    elif probabilities is None:
+        probabilities = softmax(predictions)
     prefix_ids, suffix_ids = special_token_template(tokenizer)
     spans: list[dict[str, Any]] = []
 
