@@ -120,7 +120,7 @@ happens inside a sentence too long for one window.
     predictions.tsv            the span table plus a score column
     predictions.parquet        the same table
     gold.tsv                   the gold spans scored against, when there were any
-    prediction_metrics.json    span and character metrics, when there was gold
+    prediction_metrics.json    span, character and entity-weighted character metrics, when there was gold
     inference_manifest.json    the ensemble and what was predicted on
 ```
 

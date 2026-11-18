@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from _harness import Checks, run
 from fixtures import samples_root, synthetic_corpus
 
-from lab.core import safe_f1, score_characters, spans_from_corpus
+from lab.core import safe_f1, score_characters, score_dice, spans_from_corpus
 from lab.ner.evaluation import (
     bio_to_spans,
     entity_tags,
@@ -290,6 +290,37 @@ def verify_token_metrics(checks: Checks) -> None:
     checks.equal("all-masked input gives zeros", empty["token_micro_f1"], 0.0)
 
 
+def verify_dice_metrics(checks: Checks) -> None:
+    def span(filename, label, start, end):
+        return {"filename": filename, "label": label, "start_span": start, "end_span": end, "text": "x"}
+
+    gold = pd.DataFrame([span("d1", "DISEASE", 0, 3), span("d1", "DISEASE", 10, 40)])
+    checks.equal("identical input scores 1.0 on Dice", score_dice(gold, gold)["dice_f1"], 1.0)
+
+    short_only = score_dice(gold, gold.iloc[[0]])
+    checks.equal("finding only the short entity is half the entities", short_only["dice_recall"], 0.5)
+    checks.equal("where characters count it as a tenth", score_characters(gold, gold.iloc[[0]])["char_recall"], 0.0909)
+    checks.equal("finding only the long entity weighs the same", score_dice(gold, gold.iloc[[1]])["dice_recall"], 0.5)
+
+    halves = pd.DataFrame([span("d1", "DISEASE", 0, 10), span("d1", "DISEASE", 10, 20)])
+    merged = score_dice(halves, pd.DataFrame([span("d1", "DISEASE", 0, 20)]))
+    checks.equal("a merged prediction credits each gold span with its Dice", merged["dice_recall"], 0.6667)
+    checks.equal("and is itself credited once, with its best", merged["dice_precision"], 0.6667)
+
+    duplicated = score_dice(gold, pd.concat([gold, gold.iloc[[0]]]))
+    checks.equal("an exact duplicate prediction is dropped", duplicated["dice_predicted"], 2)
+    checks.equal("so it does not lower precision", duplicated["dice_precision"], 1.0)
+
+    checks.equal("a different label earns no Dice", score_dice(gold, gold.assign(label="SYMPTOM"))["dice_f1"], 0.0)
+
+    elsewhere = score_dice(gold, pd.concat([gold, pd.DataFrame([span("d2", "DISEASE", 0, 5)])]))
+    checks.equal("a prediction in a document without gold is scored 0", elsewhere["dice_precision"], 0.6667)
+
+    empty = pd.DataFrame(columns=list(gold.columns))
+    checks.equal("predicting nothing scores zero on Dice", score_dice(gold, empty)["dice_f1"], 0.0)
+    checks.equal("scoring against no gold scores zero on Dice", score_dice(empty, gold)["dice_f1"], 0.0)
+
+
 def verify_character_metrics(checks: Checks) -> None:
     def span(filename, label, start, end):
         return {"filename": filename, "label": label, "start_span": start, "end_span": end, "text": "x"}
@@ -468,6 +499,7 @@ def main() -> int:
 
     verify_token_metrics(checks)
     verify_character_metrics(checks)
+    verify_dice_metrics(checks)
     verify_against_ner_api(checks, tokenizer)
 
     return checks.report()

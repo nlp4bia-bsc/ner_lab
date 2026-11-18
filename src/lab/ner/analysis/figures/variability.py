@@ -13,7 +13,7 @@ MIN_DOCUMENTS = 2
 
 def documents_figure(tables: dict[str, pd.DataFrame]) -> Figure | None:
     """
-    The empirical distribution of per-document strict and character F1.
+    The empirical distribution of per-document strict, character and entity-weighted character F1.
 
     A step at x reads as the share of documents scoring x or less, so a long flat
     start shows a block of documents the model fails on.
@@ -29,6 +29,7 @@ def documents_figure(tables: dict[str, pd.DataFrame]) -> Figure | None:
     for level, column, label in (
         ("strict", "strict_f1", "Strict F1"),
         ("char", "char_f1", "Character F1"),
+        ("dice", "dice_f1", "Entity-weighted character F1"),
     ):
         values = np.sort(documents[column].to_numpy(dtype=float))
         shares = np.arange(1, len(values) + 1) / len(values)

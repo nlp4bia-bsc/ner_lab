@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from nervaluate import Evaluator
 from nervaluate.entities import EvaluationResult
@@ -128,6 +129,75 @@ def score_characters(gold: pd.DataFrame, predicted: pd.DataFrame) -> dict[str, f
         "char_missed": scores["fn"],
         "char_spurious": scores["fp"],
     }
+
+
+def score_dice(gold: pd.DataFrame, predicted: pd.DataFrame) -> dict[str, float | int]:
+    """
+    Entity-level character F1, as the MultiClinAI shared task scores it: every entity weighs the same.
+
+    Each gold span is credited with its best `span_dice` against a prediction of
+    the same label in its document, 0 when none overlaps, and each prediction
+    likewise against the gold. Recall is the mean credit over gold spans,
+    precision the mean over predictions, and F1 their harmonic mean. Where
+    `score_characters` lets a long entity outweigh a short one by its length,
+    here a 3-character entity counts as much as a 30-character one.
+
+    It reproduces the official scorer, quirks included: matching is not one to
+    one, so a prediction spanning two gold entities earns credit from both, and
+    exact duplicate predictions are dropped first. Keys are `dice_precision`,
+    `dice_recall`, `dice_f1`, and the sums and counts the means come from:
+    `dice_gold_credit`, `dice_gold`, `dice_predicted_credit`, `dice_predicted`.
+    """
+    duplicated = normalize_spans(predicted).duplicated(subset=["filename", "label", "off0", "off1"])
+    predicted = predicted[~duplicated.to_numpy()]
+
+    gold_credit = float(best_dice(gold, predicted).sum())
+    predicted_credit = float(best_dice(predicted, gold).sum())
+    recall = gold_credit / len(gold) if len(gold) else 0.0
+    precision = predicted_credit / len(predicted) if len(predicted) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+
+    return {
+        "dice_precision": round(precision, 4),
+        "dice_recall": round(recall, 4),
+        "dice_f1": round(f1, 4),
+        "dice_gold_credit": gold_credit,
+        "dice_gold": len(gold),
+        "dice_predicted_credit": predicted_credit,
+        "dice_predicted": len(predicted),
+    }
+
+
+def best_dice(spans: pd.DataFrame, other: pd.DataFrame) -> np.ndarray:
+    """
+    Each span's best `span_dice` against a span of `other` with its document and label.
+
+    Aligned to `spans`' rows, 0 where nothing of `other` overlaps a span. Its mean
+    over gold spans is `score_dice`'s recall, over predictions its precision.
+    """
+    candidates = {
+        key: list(zip(group["off0"], group["off1"]))
+        for key, group in normalize_spans(other).groupby(["filename", "label"])
+    }
+    scores = []
+
+    for row in normalize_spans(spans).itertuples(index=False):
+        ranges = candidates.get((row.filename, row.label), [])
+        scores.append(max((span_dice(row.off0, row.off1, *other) for other in ranges), default=0.0))
+
+    return np.array(scores, dtype=float)
+
+
+def span_dice(start: int, end: int, other_start: int, other_end: int) -> float:
+    """
+    Character Dice of two spans: twice their overlap over their summed lengths.
+
+    It equals the F1 of the pair's character precision and recall, which is how the
+    MultiClinAI scorer states it.
+    """
+    overlap = max(0, min(end, other_end) - max(start, other_start))
+
+    return 2 * overlap / ((end - start) + (other_end - other_start))
 
 
 def flatten(results: dict[str, Any]) -> dict[str, float | int]:

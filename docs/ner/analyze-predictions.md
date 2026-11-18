@@ -11,7 +11,7 @@ result = analyze_predictions(
     output_dir="assets/analysis/disease",
 )
 
-result.metrics                     # the strict and character metrics predict_entities reports
+result.metrics                     # the strict, character and entity-weighted character metrics predict_entities reports
 result.tables["gold_subgroups"]    # recall by exposure, frequency, length, casing, traits
 result.events                      # one row per gold span or prediction the scorer judged
 result.summary()                   # "strict F1 = 0.7912 [0.7731, 0.8084] | 41 boundary, 52 missed, 38 spurious, 2 uncredited exact"
@@ -99,9 +99,10 @@ the same normalized form, and `seen_verbatim` keeps the case-sensitive view for 
 
 A subgroup is reported on the side that defines it. Gold mentions are grouped by their own
 exposure, similarity bin, training frequency, word count, casing and traits, and each group
-reports its support, strict recall (the share `CORRECT`), character recall, and how its other
-mentions failed. Predictions are grouped by the same properties of their own surface and
-report strict and character precision. There is no per-group F1: it would join recall over
+reports its support, strict recall (the share `CORRECT`), character recall, entity-weighted
+character recall (the mean of its mentions' `best_dice`), and how its other mentions failed.
+Predictions are grouped by the same properties of their own surface and report strict,
+character and entity-weighted character precision. There is no per-group F1: it would join recall over
 one population to precision over another, and a prediction one word too long on a seen
 mention would count against seen recall and novel precision at once.
 
@@ -144,8 +145,8 @@ afresh, since dropping a prediction can change which one nervaluate credits.
         overlap_sensitivity.parquet  units per type at each Dice threshold
         oracle_error_budget.parquet  strict F1 with each kind of error fixed
         error_surfaces.parquet    errors per normalized surface and type
-        documents.parquet         strict and character scores per document
-        bootstrap_intervals.parquet  intervals for overall strict and character P/R/F1
+        documents.parquet         strict, character and entity-weighted character scores per document
+        bootstrap_intervals.parquet  intervals for overall strict, character and entity-weighted character P/R/F1
         confidence_by_outcome.parquet, calibration.parquet, confidence_sweep.parquet   with a varying score
     figures/                      the figures below, as figure_format
     analysis_manifest.json        inputs (path, sha256, rows), counts, parameters, metrics, outputs, duration
@@ -175,7 +176,7 @@ can be edited for a paper.
 | `overlap_sensitivity` | Does the taxonomy depend on the Dice threshold? | Units per type across thresholds, the chosen one marked. Flat lines mean the threshold matters little. |
 | `oracle_error_budget` | What would fixing each kind of error gain? | Observed strict F1 to the F1 with that kind fixed, largest gain first. Ceilings, not forecasts; they do not add up. |
 | `error_surfaces` | Do a few surfaces cause many errors? | The 15 normalized surfaces most often in an error, stacked by type. |
-| `documents` | Is performance uniform across documents? | The share of documents scoring at or below each F1, strict and character. A long flat start is a block of documents the model fails on. |
+| `documents` | Is performance uniform across documents? | The share of documents scoring at or below each F1, strict, character and entity-weighted character. A long flat start is a block of documents the model fails on. |
 | `confidence_by_outcome` | Do errors carry lower scores? | The score distribution of each outcome. Curves far apart mean the score separates good predictions from bad. |
 | `calibration` | Does a score of 0.9 mean 90% right? | The share of strict matches against the mean score, per equal-count bin; the diagonal is perfect calibration. |
 | `confidence_sweep` | What does filtering by score cost? | Strict precision, recall and F1, and the share of predictions kept, against the threshold. |

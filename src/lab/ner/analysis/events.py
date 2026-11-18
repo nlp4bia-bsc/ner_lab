@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from lab.core.scoring import evaluate_spans, flatten, score_characters
+from lab.core.scoring import evaluate_spans, flatten, score_characters, score_dice
 
 STRICT_OUTCOMES = ("TP", "FN", "FP")
 EVENT_COLUMNS = [
@@ -48,7 +48,11 @@ def strict_events(
         tags=[target_label],
         min_overlap_percentage=min_overlap_percentage,
     )
-    metrics = {**flatten(result["overall"]), **score_characters(gold, predicted)}
+    metrics = {
+        **flatten(result["overall"]),
+        **score_characters(gold, predicted),
+        **score_dice(gold, predicted),
+    }
 
     matches = strict_matches(gold, predicted, result)
     events = _event_rows(gold, predicted, matches)

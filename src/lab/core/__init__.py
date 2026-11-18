@@ -45,6 +45,7 @@ from lab.core.labels import (
 from lab.core.provenance import file_sha256, read_manifest, write_manifest
 from lab.core.scoring import (
     SCENARIO_PREFIXES,
+    best_dice,
     evaluate_spans,
     flatten,
     group_by_document,
@@ -52,7 +53,9 @@ from lab.core.scoring import (
     normalize_spans,
     safe_f1,
     score_characters,
+    score_dice,
     score_spans,
+    span_dice,
     sum_span_results,
 )
 from lab.core.segmentation import (
@@ -93,6 +96,7 @@ from lab.core.stratification import parse_document_label_counts
 from lab.core.tasks import resolve_task
 
 __all__ = [
+    "best_dice",
     "CANONICAL_LABELS",
     "CodeMismatchPolicy",
     "CodeResolution",
@@ -153,7 +157,9 @@ __all__ = [
     "resolve_task",
     "safe_f1",
     "score_characters",
+    "score_dice",
     "score_spans",
+    "span_dice",
     "sum_span_results",
     "sentence_segmenter",
     "sentence_token_ranges",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 import pandas as pd
 
@@ -65,12 +67,13 @@ def gold_subgroups(
     gold_mentions: pd.DataFrame, documents: pd.Index, draws: np.ndarray, confidence: float
 ) -> pd.DataFrame:
     """
-    Strict and character recall of gold mentions per subgroup, and how the rest failed.
+    Strict, character and Dice recall of gold mentions per subgroup, and how the rest failed.
 
     One row per family and value of `GOLD_FAMILIES` with any support: the count of
     each gold outcome, strict recall as the share `CORRECT`, character recall as the
-    share of the subgroup's characters some prediction covers, and a bootstrap
-    interval for each over `documents`.
+    share of the subgroup's characters some prediction covers, Dice recall as the
+    mean of its mentions' `best_dice`, and a bootstrap interval for each over
+    `documents`.
     """
     return _subgroups(
         gold_mentions,
@@ -87,11 +90,12 @@ def predicted_subgroups(
     predicted_mentions: pd.DataFrame, documents: pd.Index, draws: np.ndarray, confidence: float
 ) -> pd.DataFrame:
     """
-    Strict and character precision of predictions per subgroup of their own surface.
+    Strict, character and Dice precision of predictions per subgroup of their own surface.
 
     The mirror of `gold_subgroups` over `PREDICTED_FAMILIES`: strict precision is the
     share of the subgroup's predictions that are strict matches, character precision
-    the share of their characters some gold span covers.
+    the share of their characters some gold span covers, Dice precision the mean of
+    their `best_dice`.
     """
     return _subgroups(
         predicted_mentions,
@@ -141,12 +145,9 @@ def _subgroups(
                         outcome.lower(): int((members["outcome"] == outcome).sum())
                         for outcome in outcomes
                     },
-                    **_measure(
-                        members, f"strict_{measure}", documents, draws, confidence, strict=True
-                    ),
-                    **_measure(
-                        members, f"char_{measure}", documents, draws, confidence, strict=False
-                    ),
+                    **_measure(members, "strict", measure, documents, draws, confidence),
+                    **_measure(members, "char", measure, documents, draws, confidence),
+                    **_measure(members, "dice", measure, documents, draws, confidence),
                 }
             )
 
@@ -155,18 +156,24 @@ def _subgroups(
 
 def _measure(
     members: pd.DataFrame,
-    name: str,
+    level: Literal["strict", "char", "dice"],
+    measure: str,
     documents: pd.Index,
     draws: np.ndarray,
     confidence: float,
-    strict: bool,
 ) -> dict[str, float]:
-    if strict:
+    name = f"{level}_{measure}"
+    one_per_mention = pd.Series(1, index=members.index)
+
+    if level == "strict":
         numerator = (members["outcome"] == "CORRECT").astype(int)
-        denominator = pd.Series(1, index=members.index)
-    else:
+        denominator = one_per_mention
+    elif level == "char":
         numerator = members["covered_characters"]
         denominator = members["characters"]
+    else:
+        numerator = members["best_dice"]
+        denominator = one_per_mention
 
     numerators = numerator.groupby(members["filename"]).sum().reindex(documents, fill_value=0)
     denominators = denominator.groupby(members["filename"]).sum().reindex(documents, fill_value=0)

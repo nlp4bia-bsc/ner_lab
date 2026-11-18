@@ -29,7 +29,7 @@ seconds; that one starts a local Ray instance for its mini-sweep and adds a minu
 | `verify_encoder.py` | `Encoder` construction and encoding, custom strategies, NER-API equivalence |
 | `verify_models.py` | BIO constraint masks, the architecture registry, custom factories, the `max_length` forward-pass check |
 | `verify_training.py` | row conversion, right-padding collation, `training_arguments`, and linear + CRF training end to end |
-| `verify_evaluation.py` | span reconstruction, nervaluate scoring, character metrics, token metrics |
+| `verify_evaluation.py` | span reconstruction, nervaluate scoring, character metrics, entity-weighted character metrics (Dice), token metrics |
 | `verify_assessment.py` | `train_model`: fold rotation, both split modes, manifests, aggregation |
 | `verify_hpo.py` | search-space forms, variants, trial scoring, OOM handling, a real two-trial Ray sweep, the winner block re-run through `train_model` |
 | `verify_inference.py` | span decoding, `predict_entities` end to end, scoring against gold and against a reference |

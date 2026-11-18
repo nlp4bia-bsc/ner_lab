@@ -13,6 +13,7 @@ import pandas as pd
 from lab.core.corpus import DOCUMENT_COLUMNS
 from lab.core.io import DEFAULT_PARQUET_COMPRESSION
 from lab.core.provenance import file_sha256, write_manifest
+from lab.core.scoring import best_dice
 from lab.core.spans import SPAN_COLUMNS, spans_from_corpus
 from lab.core.stratification import DEFAULT_RANDOM_STATE
 from lab.ner.analysis.confidence import (
@@ -297,7 +298,8 @@ def describe_mentions(
 
     `outcome` is the error type of the unit holding the span. `characters` and
     `covered_characters` give its length and how much of it `other` covers, the
-    character-level counterpart of the outcome. Gold spans also say whether they
+    character-level counterpart of the outcome, and `best_dice` its best character
+    Dice against a span of `other`, its share of `score_dice`. Gold spans also say whether they
     overlap or nest with another gold span.
     """
     holding = events[events[f"{side}_id"].notna()]
@@ -309,6 +311,7 @@ def describe_mentions(
     mentions["outcome"] = outcome.reindex(mentions.index).to_numpy()
     mentions["characters"] = (mentions["end_span"] - mentions["start_span"]).astype(int)
     mentions["covered_characters"] = covered_characters(mentions, other)
+    mentions["best_dice"] = best_dice(mentions, other)
 
     parts = [
         mentions,

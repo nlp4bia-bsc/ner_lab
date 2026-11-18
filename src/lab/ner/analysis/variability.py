@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 
-from lab.core.scoring import safe_f1, score_characters
+from lab.core.scoring import safe_f1, score_characters, score_dice
 
 DOCUMENT_COUNTS = (
     "strict_tp",
@@ -14,6 +16,10 @@ DOCUMENT_COUNTS = (
     "char_correct",
     "char_spurious",
     "char_missed",
+    "dice_gold_credit",
+    "dice_gold",
+    "dice_predicted_credit",
+    "dice_predicted",
 )
 INTERVAL_METRICS = {
     "span_strict_precision": ("strict_tp", ("strict_tp", "strict_fp")),
@@ -22,6 +28,8 @@ INTERVAL_METRICS = {
     "char_precision": ("char_correct", ("char_correct", "char_spurious")),
     "char_recall": ("char_correct", ("char_correct", "char_missed")),
     "char_f1": ("char_correct", ("char_correct", "char_spurious", "char_missed")),
+    "dice_precision": ("dice_predicted_credit", ("dice_predicted",)),
+    "dice_recall": ("dice_gold_credit", ("dice_gold",)),
 }
 
 
@@ -29,10 +37,12 @@ def document_scores(
     events: pd.DataFrame, gold: pd.DataFrame, predicted: pd.DataFrame
 ) -> pd.DataFrame:
     """
-    Strict and character scores per document, one row per document with a gold span or prediction.
+    Strict, character and Dice scores per document, one row per document with a gold span or prediction.
 
     Strict counts are read off the events, so they sum to the overall strict counts;
-    character counts are `score_characters` on the document alone.
+    character and Dice scores are `score_characters` and `score_dice` on the document
+    alone. A span's Dice credit depends only on its own document, so Dice credits and
+    counts sum to the overall ones too.
     """
     strict = (
         events.groupby(["filename", "strict_outcome"])
@@ -50,6 +60,7 @@ def document_scores(
         document_gold = gold_by_document.get(filename, empty)
         document_predicted = predicted_by_document.get(filename, empty)
         characters = score_characters(document_gold, document_predicted)
+        dice = score_dice(document_gold, document_predicted)
         strict_scores = safe_f1(int(tp), int(fp), int(fn))
 
         rows.append(
@@ -64,6 +75,7 @@ def document_scores(
                 "strict_recall": strict_scores["recall"],
                 "strict_f1": strict_scores["f1"],
                 **characters,
+                **dice,
             }
         )
 
@@ -92,31 +104,44 @@ def ratio_interval(
     A resample whose denominator is zero has no value and is left out; with none
     left the interval is NaN.
     """
+    return percentile_interval(resampled_ratios(numerators, denominators, draws), confidence)
+
+
+def resampled_ratios(
+    numerators: np.ndarray, denominators: np.ndarray, draws: np.ndarray
+) -> np.ndarray:
+    """`Σ numerator / Σ denominator` in each resample, NaN where the denominator is zero."""
     totals = draws @ np.asarray(denominators, dtype=float)
-    ratios = np.divide(
+
+    return np.divide(
         draws @ np.asarray(numerators, dtype=float),
         totals,
         out=np.full(len(draws), np.nan),
         where=totals > 0,
     )
 
-    if np.isnan(ratios).all():
+
+def percentile_interval(values: np.ndarray, confidence: float) -> tuple[float, float]:
+    """The central `confidence` interval of `values`, NaN ones left out; NaN when none are left."""
+    if np.isnan(values).all():
         return float("nan"), float("nan")
 
     tail = (1 - confidence) / 2
 
-    return float(np.nanquantile(ratios, tail)), float(np.nanquantile(ratios, 1 - tail))
+    return float(np.nanquantile(values, tail)), float(np.nanquantile(values, 1 - tail))
 
 
 def bootstrap_intervals(
     documents: pd.DataFrame, draws: np.ndarray, confidence: float
 ) -> pd.DataFrame:
     """
-    Percentile intervals for the overall strict and character precision, recall and F1.
+    Percentile intervals for the overall strict, character and Dice precision, recall and F1.
 
-    F1 is `2·TP / (2·TP + FP + FN)`, a ratio of totals, so it is resampled the same way
-    as precision and recall: its numerator counts true positives twice. The estimate
-    is the value on all documents.
+    Strict and character F1 is `2·TP / (2·TP + FP + FN)`, a ratio of totals, so it is
+    resampled the same way as precision and recall: its numerator counts true
+    positives twice. Dice F1 is the harmonic mean of two ratios, not one, so it is
+    computed from each resample's Dice precision and recall. The estimate is the
+    value on all documents.
     """
     rows = []
 
@@ -137,4 +162,29 @@ def bootstrap_intervals(
             }
         )
 
+    rows.append(_dice_f1_interval(documents, draws, confidence))
+
     return pd.DataFrame(rows)
+
+
+def _dice_f1_interval(
+    documents: pd.DataFrame, draws: np.ndarray, confidence: float
+) -> dict[str, Any]:
+    all_documents = np.ones((1, len(documents)), dtype=int)
+    resamples = np.vstack([draws, all_documents])
+    precision = resampled_ratios(
+        documents["dice_predicted_credit"].to_numpy(),
+        documents["dice_predicted"].to_numpy(),
+        resamples,
+    )
+    recall = resampled_ratios(
+        documents["dice_gold_credit"].to_numpy(), documents["dice_gold"].to_numpy(), resamples
+    )
+    summed = precision + recall
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        f1 = np.where(summed == 0, 0.0, 2 * precision * recall / summed)
+
+    low, high = percentile_interval(f1[:-1], confidence)
+
+    return {"metric": "dice_f1", "estimate": float(f1[-1]), "low": low, "high": high}

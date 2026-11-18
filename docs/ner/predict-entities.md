@@ -10,7 +10,7 @@ result = predict_entities(
 )
 
 result.spans        # DataFrame: filename | label | start_span | end_span | text | score
-result.metrics      # span, character and token metrics, when there was gold to score against
+result.metrics      # span, character, entity-weighted character and token metrics, when there was gold to score against
 result.summary()    # "412 entities from 96 windows | strict P/R/F1 = 0.81/0.78/0.79 | char F1 = 0.86"
 ```
 
@@ -61,7 +61,7 @@ gets span and character metrics alone.
     predictions.tsv            the span table plus a score column
     predictions.parquet        the same table, with dtypes and surface forms kept exactly
     gold.tsv                   the gold spans scored against, when there were any
-    prediction_metrics.json    span, character and token metrics, when there was gold
+    prediction_metrics.json    span, character, entity-weighted character and token metrics, when there was gold
     inference_manifest.json    the model, its encoding, and what was predicted on
 ```
 

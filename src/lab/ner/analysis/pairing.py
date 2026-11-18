@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import linear_sum_assignment
 
-from lab.core.scoring import merge_intervals
+from lab.core.scoring import merge_intervals, span_dice
 
 ERROR_TYPES = ("CORRECT", "BOUNDARY_ERROR", "MISSED", "SPURIOUS", "UNCREDITED_EXACT")
 BOUNDARY_KINDS = ("TOO_LONG", "TOO_SHORT", "SHIFTED_LEFT", "SHIFTED_RIGHT", "FRAGMENTED", "MERGED")
@@ -89,13 +89,6 @@ def attach_units(events: pd.DataFrame, units: pd.DataFrame) -> pd.DataFrame:
     attached["error_type"] = [error_type for _, error_type in assigned]
 
     return attached
-
-
-def span_dice(start: int, end: int, other_start: int, other_end: int) -> float:
-    """Character Dice of two spans: twice their overlap over their summed lengths."""
-    overlap = max(0, min(end, other_end) - max(start, other_start))
-
-    return 2 * overlap / ((end - start) + (other_end - other_start))
 
 
 def boundary_kind(start_offset: int, end_offset: int) -> str:
