@@ -16,7 +16,15 @@ The encoder methods of `link_entities` keep the gazetteer's embeddings on disk s
 Words became Unicode UAX #29 words for every tokenizer on 2026-10-09 (D114).
 Sentences are split by pysbd, Punkt or ICU according to `language` since 2026-10-22
 (D128–D131).
-Verification stands at 1,036 checks across eleven scripts, all passing, plus one deliberate
+The CRF became word-level on 2026-11-26 (D154–D162), ported from `work`'s word CRF onto
+main's design: its chain runs over each labelled word's first subword, read from `labels`; the
+chain is the library's own `ConstrainedChain`, with `-inf` constraints and the loss per
+labelled word, so `pytorch-crf` is no longer a dependency; a word is labelled by its first
+token inside an entity, so an entity starting mid-word keeps its `B`; and
+`ner.train_multihead` / `ner.search_multihead` take `architecture: crf`, a chain per head,
+saved as `multihead_crf`. `work`'s sigmoid multilabel, unified ensembles and device/batch
+decoding commits are still to port, one stage each.
+Verification stands at 1,414 checks across fifteen scripts, all passing, plus one deliberate
 skip — the NER-API equivalence no longer applies to byte-level tokenizers, whose token
 offsets `tokenize_document` trims and NER-API's `DataLoader` does not, and for the others it
 no longer compares the word-dependent `labels` and `word_ids` (D114); see

@@ -68,8 +68,8 @@ gets span and character metrics alone.
 A span two overlapping windows both predict is kept once, at its higher score; `min_score`
 drops predictions below a mean token probability. A score is the mean probability of the tags
 the span's tokens took: the softmax of a linear model's logits, or a CRF's forward-backward
-marginals — the probability of each tag given the whole window — while its tags still come
-from the Viterbi path.
+marginals — the probability of each tag given the window's labelled words, the words its
+chain runs over — while its tags still come from the Viterbi path.
 
 `lab.ner.inference.read_predictions(path)` reads either file back, keeping a surface such as
 `NA` as text; [`analyze_predictions`](analyze-predictions.md) takes either path directly.

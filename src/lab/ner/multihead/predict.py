@@ -24,7 +24,7 @@ from lab.ner.inference.predict import (
     PREDICTIONS_PARQUET_FILENAME,
     InferenceResult,
 )
-from lab.ner.inference.prediction import predict_logits
+from lab.ner.inference.prediction import predict_tag_probabilities
 from lab.ner.multihead.encoding import multihead_encoder_from_description
 from lab.ner.multihead.loading import load_multihead_model
 from lab.ner.multihead.scoring import (
@@ -59,7 +59,9 @@ def predict_multihead(
     Gold, from `reference` or the documents themselves, is scored per head, micro
     and macro (see `score_heads`), restricted to the types the model has heads for;
     token diagnostics are added per head when `documents` itself carries the gold.
-    `min_score` drops predicted entities below a mean token probability.
+    `min_score` drops predicted entities below a mean token probability: the softmax of
+    the heads' logits, or for a multihead CRF its forward-backward marginals, each head's
+    tags then being its Viterbi path (D161).
     """
     output_dir = Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -78,7 +80,7 @@ def predict_multihead(
             f"No windows were produced from {len(corpus)} document(s) — nothing to predict on."
         )
 
-    predictions = predict_logits(
+    predictions, probabilities = predict_tag_probabilities(
         model=model,
         tokenizer=tokenizer,
         rows=rows,
@@ -94,6 +96,7 @@ def predict_multihead(
         entity_labels=entity_labels,
         texts=dict(zip(corpus["doc_id"], corpus["text"], strict=True)),
         include_scores=True,
+        probabilities=probabilities,
     )
 
     if min_score > 0:

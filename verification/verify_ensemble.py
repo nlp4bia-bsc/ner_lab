@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import itertools
 import json
 import shutil
 import sys
@@ -237,63 +236,66 @@ def verify_single_member_equivalence(checks: Checks) -> None:
     compare("no I tags", without_inside)
 
 
-def brute_force_marginals(crf, emissions, length: int) -> np.ndarray:
-    import torch
-
-    start = crf.start_transitions.detach().numpy()
-    end = crf.end_transitions.detach().numpy()
-    transitions = crf.transitions.detach().numpy()
-    scores = emissions[:length]
-    marginals = np.zeros((length, scores.shape[1]))
-    total = 0.0
-
-    for path in itertools.product(range(scores.shape[1]), repeat=length):
-        score = start[path[0]] + end[path[-1]] + sum(scores[t, tag] for t, tag in enumerate(path))
-        score += sum(transitions[path[t - 1], path[t]] for t in range(1, length))
-        weight = float(torch.tensor(score, dtype=torch.float64).exp())
-        total += weight
-
-        for t, tag in enumerate(path):
-            marginals[t, tag] += weight
-
-    return marginals / total
-
-
 def verify_crf_marginals(checks: Checks) -> None:
     import torch
-    from torchcrf import CRF
 
+    from lab.ner.models.chain import ConstrainedChain
     from lab.ner.models.crf import CRFForTokenClassification
 
     torch.manual_seed(0)
 
-    class Stub:
-        constrain_transitions = False
-        crf = CRF(num_tags=3, batch_first=True)
+    crf = CRFForTokenClassification.__new__(CRFForTokenClassification)
+    torch.nn.Module.__init__(crf)
+    crf.ignore_index = -100
+    crf.chain = ConstrainedChain({0: "O", 1: "B-D", 2: "I-D"})
 
-    for parameter in (Stub.crf.start_transitions, Stub.crf.end_transitions, Stub.crf.transitions):
-        torch.nn.init.normal_(parameter)
+    emissions = torch.randn(2, 6, 3)
+    labels = torch.tensor([[-100, 1, -100, 2, 0, -100], [-100, 0, 1, -100, -100, -100]])
+    chain_positions = [[1, 3, 4], [1, 2]]
 
-    emissions = torch.randn(2, 5, 3)
-    mask = torch.tensor([[1, 1, 1, 1, 1], [1, 1, 1, 0, 0]])
+    log_marginals = crf.marginals_from_emissions(emissions, labels)
+    tags = crf.decode_from_emissions(emissions, labels)
 
-    log_marginals = CRFForTokenClassification.marginals_from_emissions(Stub(), emissions, mask)
-
-    checks.equal("marginals keep the emissions' shape", tuple(log_marginals.shape), (2, 5, 3))
+    checks.equal("marginals keep the emissions' shape", tuple(log_marginals.shape), (2, 6, 3))
     checks.equal("and are float32", log_marginals.dtype, torch.float32)
 
-    for row, length in enumerate((5, 3)):
-        expected = brute_force_marginals(Stub.crf, emissions[row].numpy(), length)
-        actual = log_marginals[row, :length].detach().exp().numpy()
+    for row, positions in enumerate(chain_positions):
+        compact = emissions[row, positions][None, :, None]
+        mask = torch.ones(1, len(positions), 1, dtype=torch.bool)
+        expected = crf.chain.log_marginals(compact, mask)[0, :, 0]
 
         checks.check(
-            f"forward-backward matches enumerating every path (length {length})",
-            np.allclose(actual, expected, atol=1e-5),
+            f"row {row}: a word's marginals are its chain step's, over the labelled words only",
+            torch.allclose(log_marginals[row, positions], expected),
+        )
+        checks.equal(
+            f"row {row}: Viterbi tags sit on the labelled words, -100 elsewhere",
+            [int(tag) for tag in tags[row]],
+            [
+                int(crf.chain.viterbi(compact, mask)[0, positions.index(index), 0])
+                if index in positions
+                else -100
+                for index in range(6)
+            ],
         )
 
-    half = CRFForTokenClassification.marginals_from_emissions(Stub(), emissions.half(), mask)
+    off_chain = labels == -100
+    checks.check(
+        "positions off the chain carry a finite zero filler",
+        bool((log_marginals[off_chain] == 0).all()),
+    )
+
+    half = crf.marginals_from_emissions(emissions.half(), labels)
 
     checks.equal("fp16 emissions still give float32 marginals", half.dtype, torch.float32)
+    checks.raises(
+        "decoding without labels raises, saying what to pass",
+        ValueError,
+        crf.decode_from_emissions,
+        emissions,
+        None,
+        match="pass the rows' labels",
+    )
 
 
 def verify_io(checks: Checks) -> None:

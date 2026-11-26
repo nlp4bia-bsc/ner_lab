@@ -31,7 +31,7 @@ assessment.run_dir                         # where everything was written
 | `target_label` | *required* | The entity type to tag. One label, three classes (D43). |
 | `language` | *required* | Sentence-segmentation language, an ISO 639-1 code: it picks pysbd, Punkt or ICU (D128). Never guessed (D33). |
 | `architecture` | `"linear"` | `"linear"`, `"crf"`, or your own `(base_model, label2id, id2label, **kwargs) -> model`. |
-| `architecture_kwargs` | `None` | Extra keywords for the chosen architecture, e.g. `{"dropout": 0.2}`. |
+| `architecture_kwargs` | `None` | Extra keywords for the chosen architecture, e.g. `{"dropout": 0.2}`. A CRF takes `dropout` and `constrain_transitions` (see [the library reference](library.md)). |
 | `training_arguments` | `None` | A `TrainingArguments`, or a mapping of overrides applied to `lab.ner.training.DEFAULTS`. The YAML path uses the mapping. |
 | `max_length` | `256` | Token budget per window, including special tokens. Each fold's model runs one CPU forward pass at it before training and prints `[check] <model>: a forward pass at max_length=N passed`; a length past the model's positions raises naming it (D115). |
 | `strategy` | `"greedy"` | Window strategy, or your own callable. |

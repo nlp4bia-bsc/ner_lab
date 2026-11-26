@@ -432,6 +432,44 @@ def verify_words(checks: Checks, tokenizers: dict) -> None:
         ],
     )
 
+    def word_labels(text: str, entities: list[dict]) -> list[tuple[str, str]]:
+        tokens = tokenize_document(text, tokenizers["bert"])
+        labelled = build_iob2_labels(tokens, entities, "DISEASE")
+        labels = build_row(labelled, vocabulary["label2id"], [], [])["labels"]
+
+        return [
+            (token["token"], "IGNORED" if label == IGNORE_INDEX else id2label[label])
+            for token, label in zip(tokens, labels)
+        ]
+
+    checks.equal(
+        "an entity starting inside a word labels that word B, so the next is no orphan I",
+        word_labels(
+            "l'hipertensio arterial",
+            [{"start": 2, "end": 22, "label": "DISEASE", "text": "hipertensio arterial"}],
+        ),
+        [
+            ("l", "B-DISEASE"), ("'", "IGNORED"), ("hip", "IGNORED"), ("##ert", "IGNORED"),
+            ("##ens", "IGNORED"), ("##io", "IGNORED"), ("arterial", "I-DISEASE"),
+        ],
+    )
+    checks.equal(
+        "an entity inside one word labels that word instead of vanishing",
+        word_labels("3mg diario", [{"start": 1, "end": 3, "label": "DISEASE", "text": "mg"}]),
+        [("3", "B-DISEASE"), ("##mg", "IGNORED"), ("dia", "O"), ("##rio", "IGNORED")],
+    )
+    checks.equal(
+        "an entity ending inside a word still labels only the words it overlaps",
+        word_labels(
+            "fiebre alta3 hoy",
+            [{"start": 0, "end": 11, "label": "DISEASE", "text": "fiebre alta"}],
+        ),
+        [
+            ("fi", "B-DISEASE"), ("##eb", "IGNORED"), ("##re", "IGNORED"),
+            ("alta", "I-DISEASE"), ("##3", "IGNORED"), ("ho", "O"), ("##y", "IGNORED"),
+        ],
+    )
+
 
 def verify_windowing(checks: Checks, tokenizer) -> None:
     sentences = split_into_sentences(TEXT, "es")

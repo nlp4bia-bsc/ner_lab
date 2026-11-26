@@ -382,6 +382,166 @@ def verify_training_and_inference(checks: Checks, root: Path, base_model: Path) 
     checks.check("plain documents predict without scoring", unscored.metrics is None)
 
 
+def verify_crf_model(checks: Checks, base_model: Path) -> None:
+    import torch
+
+    from lab.ner.models.packing import pack_chains
+    from lab.ner.multihead import MultiHeadCRFForTokenClassification
+    from lab.ner.training import CRFTrainer, resolve_trainer_class
+
+    torch.manual_seed(0)
+    model = MultiHeadCRFForTokenClassification(str(base_model), LABELS)
+    input_ids = torch.randint(100, 1000, (2, 8))
+    labels = torch.full((2, 8, 2), -100)
+    labels[0, [1, 2, 4], 0] = torch.tensor([1, 2, 0])
+    labels[0, [1, 2, 4], 1] = torch.tensor([0, 1, 2])
+    labels[1, [1, 3], :] = 0
+
+    output = model(input_ids=input_ids, attention_mask=torch.ones_like(input_ids), labels=labels)
+    packed = pack_chains(output.logits, labels)
+
+    checks.equal("CRF logits are [batch, length, heads, 3]", tuple(output.logits.shape), (2, 8, 2, 3))
+    checks.check(
+        "the loss is the chain's per-word NLL over every head's chain",
+        torch.isclose(output.loss, model.chain.loss(packed.emissions, packed.tags, packed.mask)).item(),
+    )
+    checks.equal(
+        "each head has its own transition scores",
+        tuple(model.chain.transitions.shape),
+        (2, 3, 3),
+    )
+
+    tags = model.decode_from_emissions(output.logits, labels)
+    marginals = model.marginals_from_emissions(output.logits, labels)
+    off_chain = labels == -100
+
+    checks.equal("tags are [batch, length, heads]", tuple(tags.shape), (2, 8, 2))
+    checks.check("tags are -100 off every chain", bool((tags[off_chain] == -100).all()))
+    checks.check(
+        "and a legal BIO tag on it",
+        bool(((tags[~off_chain] >= 0) & (tags[~off_chain] <= 2)).all()),
+    )
+    checks.check(
+        "marginals sum to one on the chain",
+        torch.allclose(marginals[~off_chain].exp().sum(-1), torch.ones(int((~off_chain).sum()))),
+    )
+    checks.check(
+        "the constraint masks are not saved",
+        not any("invalid" in key for key in model.state_dict()),
+    )
+    checks.equal("a multihead CRF gets the CRF Trainer", resolve_trainer_class(model), CRFTrainer)
+
+
+def verify_crf_training_and_inference(checks: Checks, root: Path, base_model: Path) -> None:
+    from fixtures import multitype_corpus
+
+    from lab.core import prepare_dataset, write_corpus
+    from lab.ner.inference.prediction import predict_tag_probabilities
+    from lab.ner.multihead import (
+        MultiHeadCRFForTokenClassification,
+        load_multihead_model,
+        multihead_encoder_from_description,
+        predict_multihead,
+        train_multihead,
+    )
+
+    source = write_corpus(multitype_corpus(24), root / "source" / "documents.parquet")
+    split_dir = prepare_dataset(
+        output_dir=root / "datasets", source_parquet=source, dataset_name="multi"
+    ).split_dir
+
+    checks.raises(
+        "an unknown multihead architecture raises before training",
+        ValueError,
+        train_multihead,
+        split_dir=split_dir,
+        output_dir=root / "runs" / "typo",
+        base_model=str(base_model),
+        language="es",
+        architecture="cfr",
+        match="'cfr'",
+    )
+
+    result = train_multihead(
+        split_dir=split_dir,
+        output_dir=root / "runs" / "crf",
+        base_model=str(base_model),
+        language="es",
+        architecture="crf",
+        training_arguments=ARGUMENTS,
+        max_length=64,
+        early_stopping_patience=None,
+        save_model=True,
+        track_resources=False,
+    )
+
+    checks.equal("the run records multihead_crf", result.manifest["model"]["architecture"], "multihead_crf")
+    checks.check(
+        "the CRF heads train to a finite per-word loss",
+        np.isfinite(result.summaries[0]["train_output"]["training_loss"]),
+    )
+
+    model_dir = result.run_dir / "best_model"
+    model, tokenizer, description = load_multihead_model(model_dir, device="cpu")
+
+    checks.equal(
+        "encoding.json names the architecture in one field",
+        description["model"]["architecture"],
+        "multihead_crf",
+    )
+    checks.check("it loads back as a multihead CRF", isinstance(model, MultiHeadCRFForTokenClassification))
+    checks.equal(
+        "constraints are on by default and recorded",
+        (description["model"]["constrain_transitions"], model.chain.constrain_transitions),
+        (True, True),
+    )
+    checks.raises(
+        "constrain_transitions with linear heads raises",
+        ValueError,
+        train_multihead,
+        split_dir=split_dir,
+        output_dir=root / "runs" / "linear_constrained",
+        base_model=str(base_model),
+        language="es",
+        constrain_transitions=False,
+        match="multihead CRF only",
+    )
+
+    unconstrained = MultiHeadCRFForTokenClassification(
+        str(base_model), LABELS, constrain_transitions=False
+    )
+    checks.check(
+        "constrain_transitions=False reaches every head's chain",
+        not unconstrained.chain.invalid_transitions.any(),
+    )
+
+    corpus = multitype_corpus(6)
+    encoder = multihead_encoder_from_description(description["encoding"], tokenizer)
+    rows = encoder.encode(corpus)
+    decisions, probabilities = predict_tag_probabilities(
+        model=model, tokenizer=tokenizer, rows=rows, device="cpu"
+    )
+    on_chain = np.stack(
+        [np.pad(np.asarray(list(cell)), ((0, decisions.shape[1] - len(cell)), (0, 0)), constant_values=-100) for cell in rows["labels"]]
+    ) != -100
+
+    checks.equal("decisions and probabilities are per head", probabilities.shape, decisions.shape)
+    checks.check(
+        "span scores come from marginals, not one-hot logits",
+        bool((probabilities[on_chain].max(axis=-1) < 0.999).any()),
+    )
+    checks.check(
+        "marginals on each chain sum to one",
+        np.allclose(probabilities[on_chain].sum(axis=-1), 1.0, atol=1e-4),
+    )
+
+    predicted = predict_multihead(
+        model_dir=model_dir, documents=corpus, output_dir=root / "inference", device="cpu"
+    )
+
+    checks.check("a multihead CRF predicts and is scored", predicted.metrics is not None)
+
+
 def verify_search(checks: Checks, root: Path, base_model: Path) -> None:
     from fixtures import multitype_corpus
 
@@ -425,6 +585,7 @@ def verify_search(checks: Checks, root: Path, base_model: Path) -> None:
         "the winner retrains with train_multihead", result.best["task"], "ner.train_multihead"
     )
     checks.equal("the winner lists the catalogue", result.best["entity_labels"], LABELS)
+    checks.equal("the winner names its architecture", result.best["architecture"], "linear")
     checks.check("the summary names the retraining task", "train_multihead" in result.summary)
     checks.equal(
         "the winner config is the winner block", read_config(result.paths["winner"]), result.best
@@ -484,6 +645,8 @@ def main() -> int:
 
     verify_model(checks, base_model)
     verify_training_and_inference(checks, root / "training", base_model)
+    verify_crf_model(checks, base_model)
+    verify_crf_training_and_inference(checks, root / "crf", base_model)
     verify_search(checks, root / "search", base_model)
 
     shared.cleanup()

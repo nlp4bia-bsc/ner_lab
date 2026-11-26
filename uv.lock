@@ -1494,7 +1494,6 @@ all = [
     { name = "networkx" },
     { name = "nvidia-ml-py" },
     { name = "optuna" },
-    { name = "pytorch-crf" },
     { name = "rapidfuzz" },
     { name = "ray", extra = ["tune"] },
     { name = "scikit-learn" },
@@ -1520,7 +1519,6 @@ ner = [
     { name = "matplotlib" },
     { name = "nvidia-ml-py" },
     { name = "optuna" },
-    { name = "pytorch-crf" },
     { name = "rapidfuzz" },
     { name = "ray", extra = ["tune"] },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -1552,7 +1550,6 @@ requires-dist = [
     { name = "pandas" },
     { name = "pyarrow", specifier = ">=24.0.0" },
     { name = "pysbd", specifier = ">=0.3.4" },
-    { name = "pytorch-crf", marker = "extra == 'ner'", specifier = ">=0.7.2" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rapidfuzz", marker = "extra == 'ner'", specifier = ">=3.0" },
     { name = "ray", extras = ["tune"], marker = "extra == 'ner'", specifier = ">=2.56.1" },
@@ -2855,15 +2852,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/66/c0/0c8b6ad9f17a802ee498c46e004a0eb49bc148f2fd230864601a86dcf6db/python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3", size = 342432, upload-time = "2024-03-01T18:36:20.211Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427", size = 229892, upload-time = "2024-03-01T18:36:18.57Z" },
-]
-
-[[package]]
-name = "pytorch-crf"
-version = "0.7.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/e2/8c/aa58618f8c9cc8b2ddd22d4e700028101ec331d4c65c8cca663844a9dc24/pytorch-crf-0.7.2.tar.gz", hash = "sha256:e6456e22ccfc99a3d4fe1e03e996103b1b39e9830bf3c7e12e7a9077d3be866d", size = 5996, upload-time = "2019-02-04T01:44:15.85Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/96/7d/4c4688e26ea015fc118a0327e5726e6596836abce9182d3738be8ec2e32a/pytorch_crf-0.7.2-py3-none-any.whl", hash = "sha256:1b2d7d5eea3255f6e0cac09ab8b645472e76ff70d9333bc88762cf7317a4992d", size = 9501, upload-time = "2019-02-04T01:44:14.387Z" },
 ]
 
 [[package]]

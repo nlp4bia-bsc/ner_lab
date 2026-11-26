@@ -53,7 +53,9 @@ class CRFTrainer(Trainer):
     A Trainer that predicts by Viterbi decoding rather than emission argmax.
 
     The decoded path is re-encoded as one-hot logits so a CRF model and a linear
-    one reach the evaluation stack in the same shape.
+    one reach the evaluation stack in the same shape. Decoding reads the batch's
+    `labels` for where each chain runs (D156) — prediction rows carry them too — and
+    serves a multihead CRF's `[batch, length, heads]` tags as it does a single chain's.
     """
 
     def prediction_step(
@@ -63,7 +65,7 @@ class CRFTrainer(Trainer):
         prediction_loss_only: bool,
         ignore_keys: list[str] | None = None,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
-        from lab.ner.models.crf import decoded_paths_to_logits
+        from lab.ner.models.crf import tags_to_logits
 
         has_labels = "labels" in inputs
         inputs = self._prepare_inputs(inputs)
@@ -79,14 +81,9 @@ class CRFTrainer(Trainer):
             emissions = outputs.logits
             decoder = model.module if hasattr(model, "module") else model
 
-            decoded = decoder.decode_from_emissions(
-                emissions=emissions, attention_mask=inputs.get("attention_mask")
-            )
-            logits = decoded_paths_to_logits(
-                decoded_paths=decoded,
-                sequence_length=emissions.shape[1],
-                num_labels=emissions.shape[2],
-                device=emissions.device,
+            logits = tags_to_logits(
+                tags=decoder.decode_from_emissions(emissions=emissions, labels=labels),
+                num_labels=emissions.shape[-1],
             )
 
         return loss, logits.detach(), labels.detach() if labels is not None else None
@@ -108,7 +105,7 @@ class MarginalCRFTrainer(CRFTrainer):
         prediction_loss_only: bool,
         ignore_keys: list[str] | None = None,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
-        from lab.ner.models.crf import decoded_paths_to_logits
+        from lab.ner.models.crf import tags_to_logits
 
         has_labels = "labels" in inputs
         inputs = self._prepare_inputs(inputs)
@@ -122,19 +119,12 @@ class MarginalCRFTrainer(CRFTrainer):
                 return loss, None, None
 
             emissions = outputs.logits
-            attention_mask = inputs.get("attention_mask")
             decoder = model.module if hasattr(model, "module") else model
 
-            log_marginals = decoder.marginals_from_emissions(
-                emissions=emissions, attention_mask=attention_mask
-            )
-            viterbi = decoded_paths_to_logits(
-                decoded_paths=decoder.decode_from_emissions(
-                    emissions=emissions, attention_mask=attention_mask
-                ),
-                sequence_length=emissions.shape[1],
-                num_labels=emissions.shape[2],
-                device=emissions.device,
+            log_marginals = decoder.marginals_from_emissions(emissions=emissions, labels=labels)
+            viterbi = tags_to_logits(
+                tags=decoder.decode_from_emissions(emissions=emissions, labels=labels),
+                num_labels=emissions.shape[-1],
             )
 
         predictions = torch.cat([log_marginals, viterbi], dim=-1)

@@ -1,4 +1,4 @@
-"""Transformer encoder with a CRF token-classification head."""
+"""Transformer encoder with a CRF over the BIO tags of a window's labelled words."""
 
 from __future__ import annotations
 
@@ -7,30 +7,30 @@ import torch.nn as nn
 from transformers import AutoConfig, AutoModel
 from transformers.modeling_outputs import TokenClassifierOutput
 
-from lab.ner.models.bio import bio_constraint_masks, normalize_id2label, normalize_label2id
+from lab.ner.encoding.rows import IGNORE_INDEX
+from lab.ner.models.bio import normalize_id2label, normalize_label2id
+from lab.ner.models.chain import ConstrainedChain
+from lab.ner.models.packing import pack_chains, unpack_chains
 
-try:
-    from torchcrf import CRF
-except ImportError as error:
-    raise ImportError(
-        "pytorch-crf is required for the CRF architecture. Install it with: pip install pytorch-crf"
-    ) from error
-
-CONSTRAINT_VALUE = -10000.0
+DECISION_LOGIT = 10000.0
 
 
 class CRFForTokenClassification(nn.Module):
     """
     A pretrained encoder, a linear emission layer, and a CRF over BIO tags.
 
-    `forward` returns emissions as `logits` and the negative CRF log-likelihood as
-    `loss`, so a standard `Trainer` drives it unchanged; `decode` runs Viterbi.
-    With `constrain_transitions`, structurally impossible BIO transitions are
-    pinned to a large negative score and held there — gradient hooks zero their
-    updates, and the pin is reapplied before every loss and decode, since
-    `load_state_dict` would otherwise restore learned values over them. The
-    backbone loads in float32 whatever its checkpoint's dtype, as `build_linear_model`
-    explains.
+    The chain runs over the window's labelled words — the positions whose label is not
+    `ignore_index`, each word's first subword — not over its tokens (D154, D156): the
+    encoder still reads every token, so each word's emission carries its subwords'
+    context, but transitions link one word to the next. `forward` returns the emissions
+    as `logits` and, given `labels`, the chain's negative log-likelihood per labelled
+    word as `loss` (D158), so a standard `Trainer` drives it unchanged.
+
+    `decode_from_emissions` and `marginals_from_emissions` take `labels` too, for where
+    the chain runs; prediction rows carry them like training rows, `O` where the gold is
+    unknown. With `constrain_transitions` the BIO transitions no well-formed sequence
+    takes are excluded outright (D155). The backbone loads in float32 whatever its
+    checkpoint's dtype, as `build_linear_model` explains.
     """
 
     def __init__(
@@ -39,9 +39,8 @@ class CRFForTokenClassification(nn.Module):
         label2id: dict,
         id2label: dict,
         dropout: float = 0.1,
-        ignore_index: int = -100,
+        ignore_index: int = IGNORE_INDEX,
         constrain_transitions: bool = True,
-        constraint_value: float = CONSTRAINT_VALUE,
     ) -> None:
         super().__init__()
 
@@ -50,7 +49,6 @@ class CRFForTokenClassification(nn.Module):
         self.num_labels = len(self.id2label)
         self.ignore_index = ignore_index
         self.constrain_transitions = constrain_transitions
-        self.constraint_value = constraint_value
 
         self.config = AutoConfig.from_pretrained(
             base_model,
@@ -64,18 +62,9 @@ class CRFForTokenClassification(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
         self.classifier = nn.Linear(self.config.hidden_size, self.num_labels)
-        self.crf = CRF(num_tags=self.num_labels, batch_first=True)
-
-        self.outside_label_id = self.label2id.get("O", 0)
-
-        invalid_start, invalid_transitions = bio_constraint_masks(self.id2label)
-
-        self.register_buffer("invalid_start_transitions", torch.tensor(invalid_start))
-        self.register_buffer("invalid_transitions", torch.tensor(invalid_transitions))
-
-        if self.constrain_transitions:
-            self._register_transition_gradient_hooks()
-            self.apply_transition_constraints()
+        self.chain = ConstrainedChain(
+            self.id2label, num_heads=1, constrain_transitions=constrain_transitions
+        )
 
     def forward(
         self,
@@ -96,18 +85,8 @@ class CRFForTokenClassification(nn.Module):
         loss = None
 
         if labels is not None:
-            mask = (
-                torch.ones_like(labels, dtype=torch.bool)
-                if attention_mask is None
-                else attention_mask.bool()
-            )
-
-            crf_labels = labels.masked_fill(labels == self.ignore_index, self.outside_label_id)
-
-            if self.constrain_transitions:
-                self.apply_transition_constraints()
-
-            loss = -self.crf(emissions=emissions, tags=crf_labels, mask=mask, reduction="mean")
+            packed = self._pack(emissions, labels)
+            loss = self.chain.loss(packed.emissions, packed.tags, packed.mask)
 
         return TokenClassifierOutput(
             loss=loss,
@@ -121,134 +100,65 @@ class CRFForTokenClassification(nn.Module):
         input_ids=None,
         attention_mask=None,
         token_type_ids=None,
+        labels=None,
         **kwargs,
-    ) -> list[list[int]]:
-        """Viterbi-decode the best tag path for a batch of inputs."""
+    ) -> torch.Tensor:
+        """Viterbi-decode the best tag path for a batch of inputs, as `decode_from_emissions`."""
         outputs = self.forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
-            labels=None,
             **kwargs,
         )
 
-        return self.decode_from_emissions(outputs.logits, attention_mask)
+        return self.decode_from_emissions(outputs.logits, labels)
 
     def decode_from_emissions(
-        self,
-        emissions: torch.Tensor,
-        attention_mask: torch.Tensor | None = None,
-    ) -> list[list[int]]:
-        """Viterbi-decode emissions that have already been computed."""
-        if attention_mask is None:
-            mask = torch.ones(emissions.shape[:2], dtype=torch.bool, device=emissions.device)
-        else:
-            mask = attention_mask.bool()
-
-        if self.constrain_transitions:
-            self.apply_transition_constraints()
-
-        return self.crf.decode(emissions=emissions, mask=mask)
-
-    def marginals_from_emissions(
-        self,
-        emissions: torch.Tensor,
-        attention_mask: torch.Tensor | None = None,
+        self, emissions: torch.Tensor, labels: torch.Tensor | None
     ) -> torch.Tensor:
         """
-        Each position's log-probability of each tag given the whole sequence.
-
-        Forward-backward over the emissions and the learned start, transition and
-        end scores, in log space and float32 whatever the emissions' dtype. Log
-        rather than plain probabilities, so a softmax over the result returns the
-        marginals unchanged and they can stand where logits are expected. Positions
-        the mask leaves out carry no meaningful value.
+        The Viterbi tag of every position, `[batch, length]`, `ignore_index` off the chain.
         """
-        if attention_mask is None:
-            mask = torch.ones(emissions.shape[:2], dtype=torch.bool, device=emissions.device)
-        else:
-            mask = attention_mask.bool()
+        packed = self._pack(emissions, labels)
+        tags = self.chain.viterbi(packed.emissions, packed.mask)
 
-        if self.constrain_transitions:
-            self.apply_transition_constraints()
+        return unpack_chains(tags, packed, fill=self.ignore_index).squeeze(2)
 
-        emissions = emissions.float()
-        start = self.crf.start_transitions.float()
-        end = self.crf.end_transitions.float()
-        transitions = self.crf.transitions.float()
-        sequence_length = emissions.shape[1]
+    def marginals_from_emissions(
+        self, emissions: torch.Tensor, labels: torch.Tensor | None
+    ) -> torch.Tensor:
+        """
+        Each position's log-probability of each tag given the whole chain, `[batch, length, tags]`.
 
-        alpha = start + emissions[:, 0]
-        alphas = [alpha]
+        Forward-backward over the emissions and the learned start, transition and end
+        scores, in float32. Log rather than plain probabilities, so a softmax over the
+        result returns the marginals unchanged and they can stand where logits are
+        expected. A position off the chain is zero throughout, a filler no reader uses
+        (D161).
+        """
+        packed = self._pack(emissions, labels)
+        log_marginals = self.chain.log_marginals(packed.emissions, packed.mask)
 
-        for position in range(1, sequence_length):
-            stepped = torch.logsumexp(alpha.unsqueeze(2) + transitions, dim=1)
-            stepped = stepped + emissions[:, position]
-            alpha = torch.where(mask[:, position].unsqueeze(1), stepped, alpha)
-            alphas.append(alpha)
+        return unpack_chains(log_marginals, packed, fill=0.0).squeeze(2)
 
-        log_partition = torch.logsumexp(alpha + end, dim=1)
+    def _pack(self, emissions: torch.Tensor, labels: torch.Tensor | None):
+        if labels is not None:
+            labels = labels.masked_fill(labels == self.ignore_index, IGNORE_INDEX).unsqueeze(2)
 
-        beta = end.expand_as(alpha)
-        betas = [beta]
-
-        for position in range(sequence_length - 2, -1, -1):
-            following = emissions[:, position + 1] + beta
-            stepped = torch.logsumexp(transitions + following.unsqueeze(1), dim=2)
-            beta = torch.where(mask[:, position + 1].unsqueeze(1), stepped, end.expand_as(beta))
-            betas.append(beta)
-
-        betas.reverse()
-
-        return torch.stack(alphas, dim=1) + torch.stack(betas, dim=1) - log_partition[:, None, None]
-
-    def apply_transition_constraints(self) -> None:
-        """Pin structurally invalid transition scores to `constraint_value`."""
-        with torch.no_grad():
-            self.crf.start_transitions.data = self.crf.start_transitions.data.masked_fill(
-                self.invalid_start_transitions, self.constraint_value
-            )
-            self.crf.transitions.data = self.crf.transitions.data.masked_fill(
-                self.invalid_transitions, self.constraint_value
-            )
-
-    def _register_transition_gradient_hooks(self) -> None:
-        def zero_invalid_start(gradient: torch.Tensor) -> torch.Tensor:
-            return gradient.masked_fill(self.invalid_start_transitions, 0.0)
-
-        def zero_invalid_transitions(gradient: torch.Tensor) -> torch.Tensor:
-            return gradient.masked_fill(self.invalid_transitions, 0.0)
-
-        self.crf.start_transitions.register_hook(zero_invalid_start)
-        self.crf.transitions.register_hook(zero_invalid_transitions)
+        return pack_chains(emissions.unsqueeze(2), labels)
 
 
-def decoded_paths_to_logits(
-    decoded_paths: list[list[int]],
-    sequence_length: int,
-    num_labels: int,
-    device: torch.device,
-) -> torch.Tensor:
+def tags_to_logits(tags: torch.Tensor, num_labels: int) -> torch.Tensor:
     """
-    Re-encode Viterbi paths as one-hot-ish logits.
+    Re-encode decoded tags as one-hot logits over a last axis of `num_labels`.
 
-    Decoding returns tag ids, but the evaluation stack reads `argmax` over a
-    logit tensor. Rebuilding that shape here keeps CRF and non-CRF models on one
-    metrics path instead of forking it.
+    Decoding returns tag ids, but the evaluation stack reads `argmax` over logits.
+    Rebuilding that shape here keeps CRF and non-CRF models on one metrics path. Any
+    shape of `tags` works — `[batch, length]`, or `[batch, length, heads]` for a
+    multihead CRF; a position off the chain reads as tag 0, and no reader uses it.
     """
-    decoded_ids = torch.zeros(
-        (len(decoded_paths), sequence_length), dtype=torch.long, device=device
-    )
-
-    for row, path in enumerate(decoded_paths):
-        length = min(len(path), sequence_length)
-        decoded_ids[row, :length] = torch.tensor(path[:length], dtype=torch.long, device=device)
-
     logits = torch.full(
-        (len(decoded_paths), sequence_length, num_labels),
-        fill_value=CONSTRAINT_VALUE,
-        dtype=torch.float32,
-        device=device,
+        (*tags.shape, num_labels), -DECISION_LOGIT, dtype=torch.float32, device=tags.device
     )
 
-    return logits.scatter_(dim=-1, index=decoded_ids.unsqueeze(-1), value=-CONSTRAINT_VALUE)
+    return logits.scatter_(-1, tags.clamp_min(0).unsqueeze(-1), DECISION_LOGIT)
