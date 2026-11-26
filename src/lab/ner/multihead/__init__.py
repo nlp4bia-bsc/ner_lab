@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from lab.ner.multihead.crf import MultiHeadCRFForTokenClassification
 from lab.ner.multihead.encoding import (
     MultiHeadEncoder,
     describe_multihead_encoder,
@@ -26,6 +27,7 @@ from lab.ner.multihead.search import encode_multihead_variants, search_multihead
 from lab.ner.multihead.training import train_multihead
 
 __all__ = [
+    "MultiHeadCRFForTokenClassification",
     "MultiHeadEncoder",
     "MultiHeadForTokenClassification",
     "build_multihead_compute_metrics",

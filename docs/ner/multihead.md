@@ -27,6 +27,7 @@ output_dir: assets/runs/multihead
 base_model: assets/base-model
 language: es
 entity_labels: [DISEASE, SYMPTOM]   # optional: every annotated type when left out
+architecture: linear                # or crf: a CRF chain per head
 dropout: 0.1
 max_length: 256
 training_arguments:
@@ -38,14 +39,18 @@ save_model: true
 | Parameter | Default | Meaning |
 |---|---|---|
 | `entity_labels` | `None` | The heads, in order. Left out, every type annotated in the split's train and validation partitions, sorted, so every fold trains the same heads. A listed type annotated nowhere there raises. |
-| `dropout` | `0.1` | Dropout before the heads. Replaces `architecture` and `architecture_kwargs`. |
+| `architecture` | `"linear"` | `"linear"`, a cross-entropy O/B/I head per type, or `"crf"`, the same heads each with its own CRF chain over the window's labelled words. Recorded in `encoding.json` as `multihead` or `multihead_crf`. |
+| `constrain_transitions` | `None` | A CRF's BIO constraints, on when left out, as the single-label CRF's. Passing it with `architecture: linear` raises. |
+| `dropout` | `0.1` | Dropout before the heads. With `architecture` and `constrain_transitions`, replaces `architecture_kwargs`. |
 | `overlap_policy` | `"merge_same_label_then_keep_longest"` | Resolves overlapping annotations **within each type**, as a single-label model for that type would. Different types are never resolved against each other. |
 
 There is no `target_label`. Entities of a type with no head are left unlabelled, with a
 warning that counts them.
 
 The loss is each head's cross-entropy over its labelled positions, averaged over the heads
-that have any in the batch, so every type weighs the same however frequent it is. Model
+that have any in the batch, so every type weighs the same however frequent it is. A
+multihead CRF's loss is each head's chain negative log-likelihood per labelled word, averaged
+over the heads the same way (D158), so the two weigh types alike. Model
 selection defaults to `span_strict_macro_f1` for the same reason; name another metric in
 `training_arguments` to change it.
 
@@ -69,16 +74,18 @@ type with no head is left out, as `predict_entities` restricts gold to its `targ
 ## Search
 
 `search_multihead` sweeps the same search space, variants, seeds and top-k epochs as
-`search_hyperparameters`, with `entity_labels` and `dropout` in place of `target_label`,
-`architecture` and `architecture_kwargs`. Its objective defaults to `span_strict_macro_f1`,
+`search_hyperparameters`, with `entity_labels`, `architecture`, `constrain_transitions` and
+`dropout` in place of `target_label`, `architecture` and `architecture_kwargs`, the
+architecture fixed for the sweep. Its objective defaults to `span_strict_macro_f1`,
 and its `winner.yaml` is a ready-to-run `ner.train_multihead` config with the head
 catalogue written out in full.
 
 ## The saved model
 
 `save_model=True` writes the weights, the tokenizer and an `encoding.json` holding the head
-catalogue in order, the windowing, the dropout, and the backbone's full configuration
-under `backbone_config`. The saved directory therefore rebuilds the model without the base
+catalogue in order, the windowing, the architecture (`multihead` or `multihead_crf`, with a
+CRF's `constrain_transitions`), the dropout, and the backbone's full configuration under
+`backbone_config`; `load_multihead_model` builds the class the architecture names. The saved directory therefore rebuilds the model without the base
 model it was trained from: the backbone is built from that configuration with no
 pretrained weights and the fine-tuned weights are loaded over it. A digest of the head
 catalogue travels in the weights, so a directory whose `encoding.json` lists the heads in a
@@ -90,6 +97,7 @@ different order than the weights were trained under refuses to load.
 from lab.ner.multihead import (
     MultiHeadEncoder,                  # corpus -> rows labelled [position][head]
     MultiHeadForTokenClassification,   # the model
+    MultiHeadCRFForTokenClassification,  # the model with a CRF chain per head
     build_multihead_compute_metrics,   # train(compute_metrics=...)
     evaluate_multihead_predictions,    # score logits against encoded rows
     score_heads,                       # score span tables per head, micro and macro

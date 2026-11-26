@@ -56,10 +56,10 @@ def build_row(
     """
     Turn one labelled token window into a model-ready row.
 
-    Only a word's first subword carries its label id; continuation subwords,
-    whitespace tokens that belong to no word, the special tokens, and any token with no
-    `label` key (the context strategy's unlabelled flanks) get `IGNORE_INDEX`, so loss
-    is never computed on them.
+    Only a word's first subword carries a label id, the word's label as
+    `build_label_ids` decides it; continuation subwords, whitespace tokens that belong
+    to no word, the special tokens, and any token with no `label` key (the context
+    strategy's unlabelled flanks) get `IGNORE_INDEX`, so loss is never computed on them.
 
     `word_ids` rides alongside `token_offsets` so span reconstruction at evaluation
     time can grow a labelled position back out to its whole word — without it a
@@ -81,10 +81,23 @@ def build_label_ids(labelled_tokens: list[dict], label2id: dict) -> list[int]:
     """
     The label id of each token in a window, `IGNORE_INDEX` where no loss is computed.
 
-    Only a word's first subword carries its label; continuation subwords, tokens that
-    belong to no word and tokens with no `label` key get `IGNORE_INDEX`. Special tokens
-    are not in `labelled_tokens`, so the caller pads for them.
+    A word's label is the tag of its first token inside an entity, `O` when none is,
+    and only the word's first subword carries it; continuation subwords, tokens that
+    belong to no word and tokens with no `label` key get `IGNORE_INDEX`. Taking the
+    first subword's own tag instead would drop the `B` of an entity that starts inside
+    a word — `hipertensió arterial` annotated in `l'hipertensió arterial` — leaving the
+    word `O` and the next one an `I` with no `B` before it (D157). Special tokens are
+    not in `labelled_tokens`, so the caller pads for them.
     """
+    word_labels: dict[int, str] = {}
+
+    for token in labelled_tokens:
+        if "label" not in token or token["word_id"] is None:
+            continue
+
+        if word_labels.get(token["word_id"], "O") == "O":
+            word_labels[token["word_id"]] = token["label"]
+
     label_ids = []
     previous_word_id = None
 
@@ -95,6 +108,6 @@ def build_label_ids(labelled_tokens: list[dict], label2id: dict) -> list[int]:
         if "label" not in token or token["word_id"] is None or is_continuation:
             label_ids.append(IGNORE_INDEX)
         else:
-            label_ids.append(label2id[token["label"]])
+            label_ids.append(label2id[word_labels[token["word_id"]]])
 
     return label_ids

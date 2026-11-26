@@ -70,13 +70,15 @@ def multihead_predicted_spans(
     entity_labels: list[str],
     texts: dict[str, str] | None = None,
     include_scores: bool = False,
+    probabilities: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """
     Rebuild every head's predicted spans, as one span table.
 
-    `predictions` is `[rows, length, heads, 3]`. Each head is decoded on its own by
-    `predicted_spans`, so spans of different types may overlap, and `texts` and
-    `include_scores` work as they do there.
+    `predictions` is `[rows, length, heads, 3]`, and `probabilities`, when given, the
+    same shape. Each head is decoded on its own by `predicted_spans`, so spans of
+    different types may overlap, and `texts`, `include_scores` and `probabilities`
+    work as they do there.
     """
     if predictions.ndim != 4 or predictions.shape[2] != len(entity_labels):
         raise ValueError(
@@ -92,6 +94,7 @@ def multihead_predicted_spans(
             id2label=build_label_vocabulary(label)["id2label"],
             texts=texts,
             include_scores=include_scores,
+            probabilities=None if probabilities is None else probabilities[:, :, head, :],
         )
         for head, label in enumerate(entity_labels)
     ]

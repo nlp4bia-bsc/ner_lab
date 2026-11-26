@@ -309,6 +309,18 @@ def verify_end_to_end(checks: Checks) -> None:
 
     checks.equal("a CRF model gets the CRF Trainer", resolve_trainer_class(crf), CRFTrainer)
 
+    import torch
+
+    input_ids = torch.tensor([rows.iloc[0]["input_ids"][:6]])
+    split_word = torch.tensor([[-100, 1, -100, 2, 0, -100]])
+    with torch.no_grad():
+        split_loss = crf(input_ids=input_ids, attention_mask=torch.ones_like(input_ids), labels=split_word).loss
+
+    checks.check(
+        "a continuation subword inside an entity is off the chain, so B ## I costs no O → I penalty",
+        bool(torch.isfinite(split_loss)) and float(split_loss) < 20.0,
+    )
+
     with tempfile.TemporaryDirectory() as tmp:
         crf_result = train(
             model=crf,

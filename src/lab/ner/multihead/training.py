@@ -20,8 +20,13 @@ from lab.ner.multihead.encoding import (
     describe_multihead_encoder,
     entity_labels_from_partitions,
 )
-from lab.ner.multihead.loading import ARCHITECTURE, multihead_model_encoding
-from lab.ner.multihead.model import MultiHeadForTokenClassification
+from lab.ner.multihead.loading import (
+    MODEL_CLASSES,
+    MultiHeadArchitecture,
+    chain_settings,
+    multihead_model_encoding,
+    recorded_architecture,
+)
 from lab.ner.multihead.scoring import BEST_METRIC, build_multihead_compute_metrics
 from lab.ner.training.assessment import (
     ASSESSMENT_SUMMARY_FILENAME,
@@ -58,6 +63,8 @@ def train_multihead(
     base_model: str,
     language: str,
     entity_labels: Sequence[str] | None = None,
+    architecture: MultiHeadArchitecture = "linear",
+    constrain_transitions: bool | None = None,
     dropout: float = 0.1,
     training_arguments: TrainingArguments | Mapping[str, Any] | None = None,
     max_length: int = 256,
@@ -92,9 +99,17 @@ def train_multihead(
     and model selection defaults to `span_strict_macro_f1` unless `training_arguments`
     names another metric.
 
+    `architecture` is `"linear"`, a cross-entropy O/B/I head per type, or `"crf"`, the
+    same heads each with its own CRF chain over the window's labelled words (D160);
+    `encoding.json` records it as `multihead` or `multihead_crf`. A CRF's
+    `constrain_transitions` excludes the transitions no well-formed BIO sequence takes,
+    on when left out; the linear heads refuse it.
+
     `overlap_policy` resolves overlapping annotations within each type; different
     types are never resolved against each other.
     """
+    model_architecture = recorded_architecture(architecture)
+    model_settings = chain_settings(architecture, constrain_transitions)
     run_dir = claim_run_dir(output_dir, overwrite)
 
     split_dir = Path(split_dir).resolve()
@@ -127,7 +142,12 @@ def train_multihead(
         "data_manifest": data_manifest,
         "mode": mode,
         "folds": rotations,
-        "model": {"base_model": base_model, "architecture": ARCHITECTURE, "dropout": dropout},
+        "model": {
+            "base_model": base_model,
+            "architecture": model_architecture,
+            "dropout": dropout,
+            **model_settings,
+        },
         "encoding": describe_multihead_encoder(encoder),
         "evaluation": {"min_overlap_percentage": min_overlap_percentage},
         "training_arguments": resolved_arguments.to_dict(),
@@ -156,6 +176,8 @@ def train_multihead(
             encoded=encoded,
             training_arguments=resolved_arguments,
             base_model=base_model,
+            architecture=architecture,
+            constrain_transitions=constrain_transitions,
             dropout=dropout,
             early_stopping_patience=early_stopping_patience,
             pad_to_multiple_of=pad_to_multiple_of,
@@ -258,6 +280,8 @@ def _train_fold(
     encoded: dict[str, pd.DataFrame],
     training_arguments: TrainingArguments,
     base_model: str,
+    architecture: MultiHeadArchitecture,
+    constrain_transitions: bool | None,
     dropout: float,
     early_stopping_patience: int | None,
     pad_to_multiple_of: int | None,
@@ -275,8 +299,11 @@ def _train_fold(
 
     set_seed(training_arguments.seed)
 
-    model = MultiHeadForTokenClassification(
-        base_model=base_model, entity_labels=encoder.entity_labels, dropout=dropout
+    model = MODEL_CLASSES[recorded_architecture(architecture)](
+        base_model=base_model,
+        entity_labels=encoder.entity_labels,
+        dropout=dropout,
+        **chain_settings(architecture, constrain_transitions),
     )
     check_max_length(model, encoder.tokenizer, encoder.max_length, base_model)
 
@@ -314,5 +341,7 @@ def _train_fold(
             base_model=base_model,
             dropout=dropout,
             backbone_config=model.config,
+            architecture=architecture,
+            constrain_transitions=constrain_transitions,
         ),
     )

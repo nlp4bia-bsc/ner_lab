@@ -11,7 +11,7 @@ from _harness import Checks, run
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "lab"
 TASK_SUBPACKAGES = ("ner", "nel")
-TORCH_MODULES = ("torch", "torchcrf", "datasets", "accelerate", "ray", "optuna")
+TORCH_MODULES = ("torch", "datasets", "accelerate", "ray", "optuna")
 
 
 def imported_modules(path: Path) -> list[str]:

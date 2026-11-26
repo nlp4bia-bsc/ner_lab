@@ -134,9 +134,15 @@ build_model(base_model, label2id, id2label, architecture="linear", **architectur
 | `**architecture_kwargs` | — | Forwarded to the chosen architecture, e.g. `dropout=0.2`. |
 
 `"linear"` is the stock `AutoModelForTokenClassification` head. `"crf"` is
-`lab.ner.models.crf.CRFForTokenClassification`, which decodes by Viterbi under BIO transition
-constraints. A callable must return a model whose `forward` accepts
-`input_ids`/`attention_mask`/`labels` and returns an object with `loss` and `logits`.
+`lab.ner.models.crf.CRFForTokenClassification`: a linear-chain CRF over the window's labelled
+words — each word's first subword, the positions whose label is not `-100` — rather than over
+its tokens, so transitions link one word to the next (D154, D156). It takes `dropout` (`0.1`)
+and `constrain_transitions` (`True`, which excludes the transitions no well-formed BIO sequence
+takes: starting on `I-`, and `O → I-`). Its loss is the chain's negative log-likelihood per
+labelled word, on the scale of a linear model's cross-entropy (D158). It decodes by Viterbi,
+and decoding reads the rows' `labels` for where the chain runs, which prediction rows carry too.
+A callable must return a model whose `forward` accepts `input_ids`/`attention_mask`/`labels`
+and returns an object with `loss` and `logits`.
 
 ---
 

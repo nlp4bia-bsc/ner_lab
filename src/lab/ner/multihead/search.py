@@ -26,8 +26,12 @@ from lab.ner.hpo.trials import optional_int
 from lab.ner.hpo.variants import EncodedVariant
 from lab.ner.hpo.winner import FINAL_TRAIN_DIRNAME, winner_training_arguments
 from lab.ner.multihead.encoding import MultiHeadEncoder
-from lab.ner.multihead.loading import ARCHITECTURE
-from lab.ner.multihead.model import MultiHeadForTokenClassification
+from lab.ner.multihead.loading import (
+    MODEL_CLASSES,
+    MultiHeadArchitecture,
+    chain_settings,
+    recorded_architecture,
+)
 from lab.ner.multihead.scoring import build_multihead_compute_metrics
 from lab.ner.multihead.training import resolve_entity_labels, with_default_metric
 from lab.ner.training.runs import RUN_MANIFEST_FILENAME, claim_run_dir
@@ -39,6 +43,8 @@ def search_multihead(
     base_models: str | Sequence[str],
     language: str,
     entity_labels: Sequence[str] | None = None,
+    architecture: MultiHeadArchitecture = "linear",
+    constrain_transitions: bool | None = None,
     dropout: float = 0.1,
     search_space: Mapping[str, Any] | None = None,
     training_arguments: TrainingArguments | Mapping[str, Any] | None = None,
@@ -70,11 +76,14 @@ def search_multihead(
     seeds, top-k epochs, smoke test and reports, with every trial training a multihead
     model. `entity_labels` is resolved as `train_multihead` resolves it, and the
     objective defaults to `span_strict_macro_f1` unless `training_arguments` names
-    another metric.
+    another metric. `architecture` and `constrain_transitions` are taken as
+    `train_multihead` takes them, fixed for the sweep.
 
     `winner.yaml` is a ready-to-run `ner.train_multihead` config pointed at
     `<output_dir>/final_train`, with the head catalogue written out in full.
     """
+    model_class = MODEL_CLASSES[recorded_architecture(architecture)]
+    model_settings = chain_settings(architecture, constrain_transitions)
     sweep_start = time.monotonic()
 
     run_dir = claim_run_dir(output_dir, overwrite)
@@ -96,7 +105,7 @@ def search_multihead(
     check_variant_lengths(
         variants=setup.variants,
         build_for=partial(
-            MultiHeadForTokenClassification, entity_labels=entity_labels, dropout=dropout
+            model_class, entity_labels=entity_labels, dropout=dropout, **model_settings
         ),
         report=report,
     )
@@ -115,8 +124,9 @@ def search_multihead(
         ),
         "model": {
             "base_models": setup.base_models,
-            "architecture": ARCHITECTURE,
+            "architecture": recorded_architecture(architecture),
             "dropout": dropout,
+            **model_settings,
         },
         "encoding": {
             "entity_labels": entity_labels,
@@ -132,6 +142,8 @@ def search_multihead(
         variants=setup.variants,
         entity_labels=entity_labels,
         language=language,
+        architecture=architecture,
+        constrain_transitions=constrain_transitions,
         dropout=dropout,
         overlap_policy=overlap_policy,
         min_sentence_tokens=min_sentence_tokens,
@@ -148,6 +160,8 @@ def search_multihead(
             "base_model": variant["base_model"],
             "language": language,
             "entity_labels": entity_labels,
+            "architecture": architecture,
+            **model_settings,
             "dropout": dropout,
             "max_length": variant["max_length"],
             "strategy": strategy_name(variant["strategy"]),
@@ -194,6 +208,8 @@ def encode_multihead_variants(
     variants: dict[str, dict[str, Any]],
     entity_labels: list[str],
     language: str,
+    architecture: MultiHeadArchitecture = "linear",
+    constrain_transitions: bool | None = None,
     dropout: float = 0.1,
     overlap_policy: OverlapPolicy = "merge_same_label_then_keep_longest",
     min_sentence_tokens: int = 4,
@@ -202,9 +218,11 @@ def encode_multihead_variants(
     """
     Window the train and validation partitions once per variant, for multihead trials.
 
-    The `encode_variants` counterpart: each variant builds a multihead model over its
-    base model and scores per head with span metrics only.
+    The `encode_variants` counterpart: each variant builds a multihead model of
+    `architecture` over its base model and scores per head with span metrics only.
     """
+    model_class = MODEL_CLASSES[recorded_architecture(architecture)]
+    model_settings = chain_settings(architecture, constrain_transitions)
     tokenizers: dict[str, Any] = {}
     encoded: dict[str, EncodedVariant] = {}
 
@@ -235,10 +253,11 @@ def encode_multihead_variants(
             train_rows=encode_partition(encoder, partitions["train"]),
             validation_rows=validation_rows,
             build_model=partial(
-                MultiHeadForTokenClassification,
+                model_class,
                 base_model=base_model,
                 entity_labels=entity_labels,
                 dropout=dropout,
+                **model_settings,
             ),
             compute_metrics=build_multihead_compute_metrics(
                 rows=validation_rows,
